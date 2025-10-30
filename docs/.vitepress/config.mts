@@ -5,12 +5,13 @@ import { tabsMarkdownPlugin } from 'vitepress-plugin-tabs'
 export default defineConfig({
   base:'/',
   title: "AgentSight.io",
-  description: "A VitePress Site",
+  description: "Seamlessly track AI conversations, metrics, and deliver client-facing insights and dashboards.",
   markdown: {
     config(md) {
       md.use(tabsMarkdownPlugin)
     }
   },
+  head: [['link', { rel: 'icon', href: '../images/favicon.ico' }]],
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [

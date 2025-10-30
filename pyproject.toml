@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentsight"
-version = "0.0.14"
+version = "0.0.15"
 authors = [
   { name="Moreno Franjković", email="moreno.franjkovic@outlook.com" },
 ]
-description = "Python SDK for AgentSight: seamlessly track conversations, metrics, and deliver client-facing insights and dashboards."
+description = "Python SDK for AgentSight: seamlessly track AI conversations, metrics, and deliver client-facing insights and dashboards."
 readme = "README.md"
 requires-python = ">=3.9,<4.0"
 classifiers = [
