@@ -1,0 +1,124 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentsight"
+version = "0.0.13"
+authors = [
+  { name="Moreno Franjković", email="moreno.franjkovic@outlook.com" },
+]
+description = "Python SDK for AgentSight: seamlessly track conversations, metrics, and deliver client-facing insights and dashboards."
+readme = "README.md"
+requires-python = ">=3.9,<4.0"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+keywords = ["AI", "AI Agents", "Monitoring", "Tracking", "Analytics", "Chatbot"]
+dependencies = [
+    "requests>=2.25.0"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+    "requests-mock",
+]
+
+dev = [
+    # Testing essentials
+    "pytest>=8.0.0",
+    "pytest-cov", 
+    "pytest-mock",
+    "pytest-asyncio",
+    "requests-mock",
+    
+    # Code quality and type checking
+    "ruff",
+    "mypy",
+    "types-requests",
+    
+    # Development tools
+    "python-dotenv",
+    
+    # Debugging and utilities
+    "ipython>=8.0.0",
+]
+
+[project.urls]
+Homepage = "https://agentsight.io"
+Documentation = "https://docs.agentsight.io"
+Repository = "https://github.com/AgentSight-io/agentsight"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -p no:warnings --import-mode=importlib"
+pythonpath = ["."]
+timeout = 30
+log_cli = true
+log_cli_level = "INFO"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py37"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+]
+ignore = [
+    "E712",  # Comparison to True/False
+    "E711",  # Comparison to None
+    "E722",  # Bare except
+]
+
+exclude = [
+    ".git",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "docs",
+    "examples",
+    "tests/manual",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentsight"]
+
+[tool.hatch.build]
+exclude = [
+    "docs/*",
+    "node_modules/*",
+    "venv/*",
+    "examples/*", 
+    "tests/*",
+    ".github/*",
+    "*.gif",
+    "*.png",
+    "dist/*",
+    "build/*",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "*.pyc"
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
