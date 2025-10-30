@@ -87,7 +87,7 @@ You can only pass conversation ID in `get_or_create_conversation`. If the `conve
 
 > You can use `generate_conversation_id` function `from agentsight.helpers import generate_conversation_id`
 
-How to pass tracking data about the conversation like geographical data, source and other, visit [Tracking conversation](../tracking/track-conversation.md)
+How to pass tracking data about the conversation like geographical data, source and other, visit [Tracking conversation](../tracking/track-conversations.md)
 
 ## Tracking Data
 

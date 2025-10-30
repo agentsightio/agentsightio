@@ -70,4 +70,4 @@ AGENTSIGHT_ENVIRONMENT=development  # Options: production, development
 
 When this variable is set, the SDK automatically uses the defined environment for all tracked conversations and events.
 
-For more configuration options, see the [Environment Configuration](../setup/environment-configuration.md) page.
+For more configuration options, see the [Configuration](./configuration.md) page.
