@@ -65,7 +65,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/AgentSight-io/agentsight' }
+      { icon: 'github', link: 'https://github.com/agentsightio/agentsightio' }
     ]
   }
 })

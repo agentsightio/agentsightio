@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentsight"
-version = "0.0.13"
+version = "0.0.14"
 authors = [
   { name="Moreno Franjković", email="moreno.franjkovic@outlook.com" },
 ]
@@ -53,7 +53,7 @@ dev = [
 [project.urls]
 Homepage = "https://agentsight.io"
 Documentation = "https://docs.agentsight.io"
-Repository = "https://github.com/AgentSight-io/agentsight"
+Repository = "https://github.com/agentsightio/agentsightio"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
