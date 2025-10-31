@@ -4,6 +4,7 @@ import { tabsMarkdownPlugin } from 'vitepress-plugin-tabs'
 const siteTitle = "AgentSight.io";
 const siteDesc = "Seamlessly track AI conversations, metrics, and deliver client-facing insights and dashboards.";
 const siteUrl = "https://docs.agentsight.io";
+const ogImage = `${siteUrl}/images/opengraph-image.png`;
 
 export default defineConfig({
   base: '/',
@@ -17,6 +18,12 @@ export default defineConfig({
     ['meta', { property: 'og:url', content: siteUrl }],
     ['meta', { property: 'og:image', content: `${siteUrl}/images/opengraph-image.png` }],
     ['meta', { property: 'og:site_name', content: siteTitle }],
+    ['meta', { property: 'og:image', content: ogImage }],
+    ['meta', { property: 'og:image:secure_url', content: ogImage }],
+    ['meta', { property: 'og:image:type', content: 'image/png' }],
+    ['meta', { property: 'og:image:width', content: '1260' }],
+    ['meta', { property: 'og:image:height', content: '630' }],
+    ['meta', { property: 'og:image:alt', content: 'AgentSight Documentation Preview Image' }],
 
     // Twitter (X) Card
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
