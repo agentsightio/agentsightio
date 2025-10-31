@@ -7,6 +7,7 @@ const siteUrl = "https://docs.agentsight.io";
 
 export default defineConfig({
   base: '/',
+  title: siteTitle,
   description: siteDesc,
   head: [
     // Open Graph
@@ -14,15 +15,15 @@ export default defineConfig({
     ['meta', { property: 'og:title', content: siteTitle }],
     ['meta', { property: 'og:description', content: siteDesc }],
     ['meta', { property: 'og:url', content: siteUrl }],
-    ['meta', { property: 'og:image', content: '../images/opengraph-image.png' }],
+    ['meta', { property: 'og:image', content: `${siteUrl}/images/opengraph-image.png` }],
     ['meta', { property: 'og:site_name', content: siteTitle }],
 
     // Twitter (X) Card
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:title', content: siteTitle }],
     ['meta', { name: 'twitter:description', content: siteDesc }],
-    ['meta', { name: 'twitter:image', content: '../images/opengraph-image.png' }],
-    ['link', { rel: 'icon', href: '../images/favicon.ico' }]
+    ['meta', { name: 'twitter:image', content: `${siteUrl}/images/opengraph-image.png` }],
+    ['link', { rel: 'icon', href: '/images/favicon.ico' }]
   ],
   markdown: {
     config(md) {

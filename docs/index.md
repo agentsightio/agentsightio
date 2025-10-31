@@ -40,7 +40,7 @@ It can be used as an add-on to your existing system (e.g., just for the client p
 
 ## Dashboard
 
-![Dashboard preview](./images/dashboard.png)
+![Dashboard preview](/images/dashboard.png)
 
 The **AgentSight Dashboard** is the web interface where your clients explore their conversational data and insights.
 
