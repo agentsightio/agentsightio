@@ -47,7 +47,6 @@ def track_action(
 | `tools_used` | `Dict[str, Any]` | No | Details about the tools or functions used |
 | `response` | `str` | No | Result or output from the action |
 | `error_msg` | `str` | No | Error message if the action failed |
-| `conversation_id` | `str` | No | Unique identifier for the conversation (auto-generated if not provided) |
 | `metadata` | `Dict[str, Any]` | No | Additional contextual information |
 
 ## Complete Usage Example
@@ -65,8 +64,7 @@ tracker.track_action(
         "function": "multiply",
         "parameters": {"a": 12, "b": 5}
     },
-    response="60",
-    conversation_id="math_help_123"
+    response="60"
 )
 ```
 
@@ -104,8 +102,7 @@ tracker.track_action(
         "query_type": "SELECT",
         "filters": {"user_id": "123", "status": "active"}
     },
-    response="Found 3 active orders",
-    conversation_id="order_inquiry_456"
+    response="Found 3 active orders"
 )
 ```
 

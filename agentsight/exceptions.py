@@ -39,6 +39,13 @@ class InvalidConversationDataException(ConversationTrackingException):
     def __init__(self, message="Invalid conversation data provided"):
         super().__init__(message)
 
+class NoConversationIdException(Exception):
+    """Exception raised when conversation_id is required but not provided."""
+    
+    def __init__(self, message: str = "conversation_id is required but was not provided"):
+        self.message = message
+        super().__init__(self.message)
+
 class InvalidAnswerDataException(ConversationTrackingException):
     """Exception for invalid conversation data."""
     def __init__(self, message="Invalid answer data provided"):
@@ -79,3 +86,23 @@ class InvalidAttachmentException(Exception):
     def __init__(self, message: str = "Invalid attachment data provided"):
         self.message = message
         super().__init__(self.message)
+
+class NotFoundException(ConversationApiException):
+    """Exception raised when a resource is not found (404)."""
+    
+    def __init__(self, message: str = "Resource not found"):
+        super().__init__(message, status_code=404)
+
+
+class UnauthorizedException(ConversationApiException):
+    """Exception raised when authentication fails (401)."""
+    
+    def __init__(self, message: str = "Unauthorized - invalid or missing API key"):
+        super().__init__(message, status_code=401)
+
+
+class ForbiddenException(ConversationApiException):
+    """Exception raised when access is forbidden (403)."""
+    
+    def __init__(self, message: str = "Forbidden - not authorized to access this resource"):
+        super().__init__(message, status_code=403)

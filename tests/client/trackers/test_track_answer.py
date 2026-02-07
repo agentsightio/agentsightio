@@ -6,15 +6,15 @@ from agentsight.exceptions import (
 )
 
 class TestConversationTrackerTrackAnswer:
-    """Test cases for track_answer method."""
+    """Test cases for track_agent_message method."""
     
     @patch('agentsight.validators.validate_content_data')
-    def test_track_answer_valid_data(self, mock_validate, tracker):
+    def test_track_agent_message_valid_data(self, mock_validate, tracker):
         """Test tracking a valid answer."""
         mock_validate.return_value = True
         
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_answer("The answer is 4", "conv_123")
+        tracker.track_agent_message("The answer is 4", "conv_123")
         
         # Check that data was stored
         assert "conv_123" in tracker._tracked_data
@@ -29,9 +29,9 @@ class TestConversationTrackerTrackAnswer:
         assert item["data"]["sender"] == "agent"
 
     @patch('agentsight.validators.validate_content_data')
-    def test_track_answer_invalid_data_raises_exception(self, mock_validate, tracker):
+    def test_track_agent_message_invalid_data_raises_exception(self, mock_validate, tracker):
         """Test that invalid answer data raises InvalidAnswerDataException."""
         mock_validate.return_value = False
         
         with pytest.raises(InvalidAnswerDataException):
-            tracker.track_answer("")
+            tracker.track_agent_message("")

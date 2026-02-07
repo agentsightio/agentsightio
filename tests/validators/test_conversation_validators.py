@@ -8,10 +8,12 @@ from agentsight.validators import (
     validate_question_and_answer_data,
     validate_content_data,
     validate_action_data,
-    validate_button_data
+    validate_button_data,
+    validate_feedback_data
 )
 from agentsight.exceptions import (
     MissingConversationIdException,
+    InvalidConversationDataException,
 )
 
 class TestValidateConversationId:
@@ -467,6 +469,219 @@ class TestValidateButtonData:
         assert validate_button_data(data) is False
 
 
+class TestValidateFeedbackData:
+    """Test cases for validate_feedback_data function."""
+    
+    def test_valid_feedback_data_with_sentiment_only(self):
+        """Test valid feedback data with sentiment only."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive"
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_valid_feedback_data_with_all_sentiments(self):
+        """Test valid feedback data with all valid sentiment values."""
+        sentiments = ["positive", "neutral", "negative"]
+        
+        for sentiment in sentiments:
+            data = {
+                "conversation_id": "conv_123",
+                "sentiment": sentiment
+            }
+            assert validate_feedback_data(data) is True
+    
+    def test_valid_feedback_data_with_comment(self):
+        """Test valid feedback data with sentiment and comment."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": "Great service!"
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_valid_feedback_data_with_comment_and_metadata(self):
+        """Test valid feedback data with sentiment, comment, and metadata."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "negative",
+            "comment": "Could be better",
+            "metadata": {"source": "web", "rating": 2}
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_valid_feedback_data_with_comment_exactly_5000_chars(self):
+        """Test valid feedback data with comment exactly 5000 characters."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "neutral",
+            "comment": "a" * 5000
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_missing_conversation_id(self):
+        """Test that missing conversation_id raises exception."""
+        data = {
+            "sentiment": "positive"
+        }
+        with pytest.raises(InvalidConversationDataException, match="Missing required field: conversation_id"):
+            validate_feedback_data(data)
+    
+    def test_missing_sentiment(self):
+        """Test that missing sentiment raises exception."""
+        data = {
+            "conversation_id": "conv_123"
+        }
+        with pytest.raises(InvalidConversationDataException, match="Missing required field: sentiment"):
+            validate_feedback_data(data)
+    
+    def test_invalid_sentiment_value(self):
+        """Test that invalid sentiment value raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "invalid_sentiment"
+        }
+        with pytest.raises(InvalidConversationDataException, match="Invalid sentiment value"):
+            validate_feedback_data(data)
+    
+    def test_empty_sentiment_value(self):
+        """Test that empty sentiment value raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": ""
+        }
+        with pytest.raises(InvalidConversationDataException, match="Invalid sentiment value"):
+            validate_feedback_data(data)
+    
+    def test_none_sentiment_value(self):
+        """Test that None sentiment value raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": None
+        }
+        with pytest.raises(InvalidConversationDataException, match="Invalid sentiment value"):
+            validate_feedback_data(data)
+    
+    def test_empty_conversation_id(self):
+        """Test that empty conversation_id raises exception."""
+        data = {
+            "conversation_id": "",
+            "sentiment": "positive"
+        }
+        with pytest.raises(MissingConversationIdException):
+            validate_feedback_data(data)
+    
+    def test_whitespace_conversation_id(self):
+        """Test that whitespace-only conversation_id raises exception."""
+        data = {
+            "conversation_id": "   ",
+            "sentiment": "positive"
+        }
+        with pytest.raises(MissingConversationIdException):
+            validate_feedback_data(data)
+    
+    def test_none_conversation_id(self):
+        """Test that None conversation_id raises exception."""
+        data = {
+            "conversation_id": None,
+            "sentiment": "positive"
+        }
+        with pytest.raises(MissingConversationIdException):
+            validate_feedback_data(data)
+    
+    def test_comment_too_long(self):
+        """Test that comment exceeding 5000 characters raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": "a" * 5001
+        }
+        with pytest.raises(InvalidConversationDataException, match="Field 'comment' cannot exceed 5000 characters"):
+            validate_feedback_data(data)
+    
+    def test_non_string_comment(self):
+        """Test that non-string comment raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": 12345
+        }
+        with pytest.raises(InvalidConversationDataException, match="Field 'comment' must be a string"):
+            validate_feedback_data(data)
+    
+    def test_comment_as_list(self):
+        """Test that comment as list raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": ["not", "a", "string"]
+        }
+        with pytest.raises(InvalidConversationDataException, match="Field 'comment' must be a string"):
+            validate_feedback_data(data)
+    
+    def test_comment_as_dict(self):
+        """Test that comment as dict raises exception."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": {"not": "a string"}
+        }
+        with pytest.raises(InvalidConversationDataException, match="Field 'comment' must be a string"):
+            validate_feedback_data(data)
+    
+    def test_none_comment_allowed(self):
+        """Test that None comment is allowed (optional field)."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": None
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_missing_comment_allowed(self):
+        """Test that missing comment is allowed (optional field)."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive"
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_empty_comment_allowed(self):
+        """Test that empty comment string is allowed."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": ""
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_whitespace_comment_allowed(self):
+        """Test that whitespace-only comment is allowed."""
+        data = {
+            "conversation_id": "conv_123",
+            "sentiment": "positive",
+            "comment": "   "
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_numeric_conversation_id(self):
+        """Test that numeric conversation_id is valid."""
+        data = {
+            "conversation_id": 123,
+            "sentiment": "positive"
+        }
+        assert validate_feedback_data(data) is True
+    
+    def test_zero_conversation_id(self):
+        """Test that zero conversation_id raises exception."""
+        data = {
+            "conversation_id": 0,
+            "sentiment": "positive"
+        }
+        with pytest.raises(MissingConversationIdException):
+            validate_feedback_data(data)
+
+
 class TestValidationIntegration:
     """Integration tests for validation functions."""
     
@@ -494,3 +709,13 @@ class TestValidationIntegration:
         
         with pytest.raises(MissingConversationIdException):
             validate_button_data(data)
+    
+    def test_validate_feedback_data_raises_missing_conversation_id(self):
+        """Test that validate_feedback_data raises MissingConversationIdException when conversation_id is invalid."""
+        data = {
+            "sentiment": "positive",
+            "conversation_id": ""
+        }
+        
+        with pytest.raises(MissingConversationIdException):
+            validate_feedback_data(data)

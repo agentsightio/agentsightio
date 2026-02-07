@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
+from threading import Lock
 from agentsight.config import Config
 from io import BytesIO
 from agentsight.client import ConversationTracker
@@ -10,8 +11,10 @@ def isolated_env(monkeypatch):
     """
     A fixture that automatically runs for every test to ensure an
     isolated environment by removing specific environment variables.
+    This ensures tests don't pick up values from .env files.
     """
     # Remove any environment variables that could interfere with tests
+    # monkeypatch.delenv makes os.getenv() return None for these keys
     monkeypatch.delenv("AGENTSIGHT_TOKEN_HANDLER_TYPE", raising=False)
     monkeypatch.delenv("AGENTSIGHT_API_KEY", raising=False)
     monkeypatch.delenv("AGENTSIGHT_CONVERSATION_ID", raising=False)
@@ -127,3 +130,42 @@ def sample_attachments():
             "data": BytesIO(b"test content 2")
         }
     ]
+
+@pytest.fixture
+def reset_singleton():
+    """Fixture to reset ConversationTracker singleton before each test."""
+    # Save original state
+    original_instance = ConversationTracker._instance
+    original_lock = ConversationTracker._instance_lock
+    
+    # Reset singleton
+    ConversationTracker._instance = None
+    ConversationTracker._instance_lock = Lock()
+    
+    yield
+    
+    # Restore original state after test
+    ConversationTracker._instance = original_instance
+    ConversationTracker._instance_lock = original_lock
+
+@pytest.fixture(autouse=True)
+def reset_all_singletons(request):
+    """Fixture to reset all client singletons before each test to prevent state leakage."""
+
+    if 'no_reset' in request.keywords:
+        yield
+        return
+
+    from agentsight.client.api_client import AgentSightAPI
+    from agentsight.client.conversation_manager_client import ConversationManager
+    from agentsight.client.main_client import ConversationTracker
+    
+    # Reset all singletons BEFORE the test
+    ConversationTracker._instance = None
+    ConversationTracker._instance_lock = Lock()
+    AgentSightAPI._instance = None
+    AgentSightAPI._instance_lock = Lock()
+    ConversationManager._instance = None
+    ConversationManager._instance_lock = Lock()
+    
+    yield

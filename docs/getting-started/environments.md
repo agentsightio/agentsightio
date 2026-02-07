@@ -26,7 +26,7 @@ When data is sent through the SDK, AgentSight tags it with the specified environ
 
 To view your development data inside the dashboard, simply toggle **Development Mode**.
 
-> **Note:** Production is the default environment.
+> **Note:** Development is the default environment.
 
 ## How to Set the Environment
 
@@ -39,19 +39,17 @@ All subsequent events (messages, metrics, actions, etc.) associated with that co
 You can specify it in either the `initialize_conversation()` or `get_or_create_conversation()` method.
 
 ```python
-from agentsight import AgentSightClient
-
-client = AgentSightClient(api_key="your_api_key")
+from agentsight import conversation_tracker
 
 # Create or fetch a conversation in development mode
-conversation = client.get_or_create_conversation(
+conversation = conversation_tracker.get_or_create_conversation(
     conversation_id="test-conv-123",
     customer_id="user_001",
     environment="development"
 )
 
-# For production (default)
-prod_conversation = client.get_or_create_conversation(
+# For development (default)
+prod_conversation = conversation_tracker.get_or_create_conversation(
     conversation_id="prod-conv-456",
     customer_id="user_002"
 )

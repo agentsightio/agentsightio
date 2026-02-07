@@ -145,7 +145,7 @@ class TestConversationTrackerGetOrCreateConversation:
         conversation_id = "conv_track_after"
         
         tracker.get_or_create_conversation(conversation_id)
-        tracker.track_question("What is AI?")
+        tracker.track_human_message("What is AI?")
         
         # Should have 2 items: conversation and question
         assert len(tracker._tracked_data[conversation_id]["items"]) == 2

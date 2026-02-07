@@ -4,14 +4,14 @@ from typing import Optional, Dict, Any, Union, List, Literal
 import copy
 from threading import Lock
 
-from agentsight.enums import LogLevel, AttachmentMode, Sender, TokenHandlerType
+from agentsight.enums import LogLevel, AttachmentMode, Sender, TokenHandlerType, Sentiment
 from agentsight.config import Config
 from agentsight.exceptions import (
     NoApiKeyException,
     InvalidConversationDataException,
     NoDataToSendException,
     InvalidQuestionDataException,
-    InvalidAnswerDataException,
+    InvalidAnswerDataException
 )
 from agentsight.helpers import (
     generate_conversation_id,
@@ -29,12 +29,26 @@ from agentsight.types import AttachmentInput, TokenHandler
 from agentsight.logging import logger, configure_logging
 configure_logging()
 
+_UNSET = object()
+
 class ConversationTracker:
     """Main client class for tracking conversations with AgentSight, including automatic OpenAI token usage tracking."""
     _MAX_RETRIES = 3
     _BACKOFF_BASE = 2
     _TIMEOUT = 15
+    _instance = None
+    _instance_lock = Lock()
 
+    def __new__(cls, *args, **kwargs):
+        """Implement singleton pattern to ensure only one instance exists."""
+        if cls._instance is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    # Use object.__new__(cls) instead of super()
+                    cls._instance = object.__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -44,6 +58,10 @@ class ConversationTracker:
         config: Optional[Config] = None,
         **kwargs
     ):
+        # Prevent re-initialization
+        if self._initialized:
+            return
+            
         # Initialize config
         if config is None:
             config = Config()
@@ -72,22 +90,73 @@ class ConversationTracker:
         self._token_handler: Optional[Union[TokenHandler, Any]] = None
         self._patch_llm_clients()
 
+        self._initialized = True
         logger.info("ConversationTracker successfully initialized.")
 
-    def track_question(
+    def configure(
         self,
-        question: str,
+        api_key: Optional[str] = _UNSET,
+        conversation_id: Optional[str] = _UNSET,
+        endpoint: Optional[str] = _UNSET,
+        log_level: Optional[Union[LogLevel, str]] = _UNSET,
+        **kwargs
+    ):
+        """
+        Reconfigure the tracker after initialization.
+        
+        Args:
+            api_key: New API key (raises exception if None)
+            conversation_id: New default conversation ID
+            endpoint: New endpoint URL
+            log_level: New log level
+            **kwargs: Additional configuration parameters
+        """
+        config_updates = {}
+        
+        # Only update if explicitly provided
+        if api_key is not _UNSET:
+            if api_key is None:
+                raise NoApiKeyException("API key cannot be None")
+            config_updates['api_key'] = api_key
+        
+        if conversation_id is not _UNSET:
+            config_updates['conversation_id'] = conversation_id
+        
+        if endpoint is not _UNSET:
+            config_updates['endpoint'] = endpoint
+        
+        if log_level is not _UNSET:
+            config_updates['log_level'] = log_level
+        
+        config_updates.update(kwargs)
+        
+        # Apply configuration
+        self.config.configure(**config_updates)
+        
+        # Reinitialize HTTP client if endpoint or api_key changed
+        if api_key is not _UNSET or endpoint is not _UNSET:
+            self._http_client = HTTPClient(self.config)
+        
+        # Validate API key
+        if not self.config.api_key:
+            raise NoApiKeyException()
+        
+        logger.info("ConversationTracker reconfigured.")
+
+    def track_human_message(
+        self,
+        message: str,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Track a question (stores in memory for later sending).
+        Track a message (stores in memory for later sending).
 
         Args:
-            question (str): The question asked
+            message (str): Users message
             metadata (dict, optional): Additional metadata
         """        
         data = {
-            "content": question,
+            "content": message,
             "sender": Sender.USER.value,
             "conversation_id": self.config.conversation_id,
             "metadata": metadata or {}
@@ -99,20 +168,20 @@ class ConversationTracker:
         self._add_tracking_item('question', data)
         logger.info(f"Stored question for conversation: {self.config.conversation_id}")
 
-    def track_answer(
+    def track_agent_message(
         self,
-        answer: str,
+        message: str,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Track an answer (stores in memory for later sending).
+        Track an message (stores in memory for later sending).
 
         Args:
-            answer (str): The answer provided
+            message (str): The message provided
             metadata (dict, optional): Additional metadata
         """        
         data = {
-            "content": answer,
+            "content": message,
             "sender": Sender.AGENT.value,
             "conversation_id": self.config.conversation_id,
             "metadata": metadata or {}
@@ -283,7 +352,8 @@ class ConversationTracker:
         device: Optional[Literal["desktop", "mobile"]] = None,
         source: Optional[str] = None,
         language: Optional[str] = None,
-        environment: Literal["production", "development"] = "production",
+        name: Optional[str] = None,
+        environment: Literal["production", "development"] = "development",
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
@@ -299,6 +369,7 @@ class ConversationTracker:
             device ("desktop" | "mobile", optional): Device information.
             source (str, optional): Source of the conversation (e.g., "web", "app").
             language (str, optional): Preferred language of the conversation.
+            name (str, optional): Conversation name
             environment ("production" | "development", optional): Working environment
             metadata (dict, optional): Additional metadata about the conversation.
         """
@@ -309,6 +380,7 @@ class ConversationTracker:
             "device": device,
             "source": source,
             "language": language,
+            "name": name,
             "environment": self.config.environment or environment,
             "metadata": metadata,
             "is_used": False
@@ -382,7 +454,7 @@ class ConversationTracker:
                     if data['mode'] == AttachmentMode.BASE64.value:
                         response = self._http_client.send_payload('attachments', data)
                     else:  # FORM_DATA mode
-                        response = self._http_client.send_form_data_payload(data['attachments'], conversation_id, data['sender'], data['metadata'])
+                        response = self._http_client.send_form_data_payload(data['attachments'], conversation_id, data['sender'], data['metadata'], timestamp)
                     responses['summary']['attachments'] += 1
                 elif item_type == 'action':
                     response = self._http_client.send_payload('action', data)
@@ -423,7 +495,10 @@ class ConversationTracker:
         self
     ) -> Dict[str, Any]:
         """
-        Get all tracked data for a conversation with timestamps and order preserved.
+        Get a detailed summary of all tracked data for a conversation with order preserved.
+        
+        Returns:
+            dict: Contains 'items' (ordered list with details) and 'summary' (counts by type)
         """
         conv_id = self._get_conversation_id()
         
@@ -431,13 +506,110 @@ class ConversationTracker:
             if conv_id not in self._tracked_data:
                 return {
                     'items': [],
-                    'summary': {'questions': 0, 'answers': 0, 'attachments': 0, 'actions': 0, 'buttons': 0, 'total': 0}
+                    'summary': {
+                        'conversation': 0,
+                        'questions': 0,
+                        'answers': 0,
+                        'attachments': 0,
+                        'actions': 0,
+                        'buttons': 0,
+                        'total': 0
+                    },
+                    'conversation_id': conv_id
                 }
             
             items = copy.deepcopy(self._tracked_data[conv_id]['items'])
             
+            # Count items by type
+            summary = {
+                'conversation': 0,
+                'questions': 0,
+                'answers': 0,
+                'attachments': 0,
+                'actions': 0,
+                'buttons': 0,
+                'total': len(items)
+            }
+            
+            # Add preview information to each item for easier debugging
+            items_with_preview = []
+            for idx, item in enumerate(items):
+                item_copy = copy.deepcopy(item)
+                item_type = item['type']
+                data = item['data']
+                
+                # Count by type
+                if item_type == 'conversation':
+                    summary['conversation'] += 1
+                elif item_type == 'question':
+                    summary['questions'] += 1
+                elif item_type == 'answer':
+                    summary['answers'] += 1
+                elif item_type == 'attachments':
+                    summary['attachments'] += 1
+                elif item_type == 'action':
+                    summary['actions'] += 1
+                elif item_type == 'button':
+                    summary['buttons'] += 1
+                
+                # Add preview/summary for each item type
+                preview = {}
+                if item_type == 'conversation':
+                    preview = {
+                        'conversation_id': data.get('conversation_id'),
+                        'customer_id': data.get('customer_id'),
+                        'name': data.get('name'),
+                        'environment': data.get('environment')
+                    }
+                elif item_type == 'question':
+                    content = data.get('content', '')
+                    preview = {
+                        'content_preview': content[:100] + ('...' if len(content) > 100 else ''),
+                        'sender': data.get('sender'),
+                        'has_metadata': bool(data.get('metadata'))
+                    }
+                elif item_type == 'answer':
+                    content = data.get('content', '')
+                    preview = {
+                        'content_preview': content[:100] + ('...' if len(content) > 100 else ''),
+                        'sender': data.get('sender'),
+                        'has_metadata': bool(data.get('metadata'))
+                    }
+                elif item_type == 'attachments':
+                    attachments = data.get('attachments', [])
+                    preview = {
+                        'count': len(attachments),
+                        'mode': data.get('mode'),
+                        'sender': data.get('sender'),
+                        'files': [
+                            att.get('filename', 'unknown') 
+                            for att in attachments[:3]  # Show first 3 files
+                        ]
+                    }
+                    if len(attachments) > 3:
+                        preview['files'].append(f'... and {len(attachments) - 3} more')
+                elif item_type == 'action':
+                    preview = {
+                        'action_name': data.get('action_name'),
+                        'duration_ms': data.get('duration_ms'),
+                        'has_error': bool(data.get('error_msg')),
+                        'has_response': bool(data.get('response'))
+                    }
+                elif item_type == 'button':
+                    preview = {
+                        'label': data.get('label'),
+                        'value': data.get('value'),
+                        'event': data.get('button_event')
+                    }
+                
+                item_copy['index'] = idx
+                item_copy['preview'] = preview
+                items_with_preview.append(item_copy)
+            
             return {
-                'items': items
+                'items': items_with_preview,
+                'summary': summary,
+                'conversation_id': conv_id
             }
         
     def get_token_usage(
@@ -470,7 +642,8 @@ class ConversationTracker:
         device: Optional[Literal["desktop", "mobile"]] = None,
         source: Optional[str] = None,
         language: Optional[str] = None,
-        environment: Literal["production", "development"] = "production",
+        name: Optional[str] = None,
+        environment: Literal["production", "development"] = "development",
         metadata: Optional[Dict[str, Any]] = None
     ):
         """
@@ -486,6 +659,7 @@ class ConversationTracker:
             device ("desktop" | "mobile", optional): Device information (e.g., "mobile", "desktop")
             source (str, optional): Source of the conversation (e.g., "web", "app")
             language (str, optional): Preferred language of the conversation
+            name (str, optional): Conversation name
             environment ("production" | "development", optional): Working environment
             metadata (dict, optional): Additional metadata about the conversation
         """
@@ -496,6 +670,7 @@ class ConversationTracker:
             "device": device,
             "source": source,
             "language": language,
+            "name": name,
             "is_used": True,
             "environment": self.config.environment or environment,
             "metadata": metadata
@@ -504,6 +679,32 @@ class ConversationTracker:
         self.config.conversation_id = conversation_id
         self._add_tracking_item('conversation', data)
         logger.info(f"Stored conversation_id for get or create: {conversation_id}")
+
+    # def configure(
+    #     self,
+    #     api_key: Optional[str] = None,
+    #     conversation_id: Optional[str] = None,
+    #     endpoint: Optional[str] = None,
+    #     log_level: Optional[Union[LogLevel, str]] = None,
+    #     **kwargs
+    # ):
+    #     """Reconfigure the tracker after initialization."""
+    #     self.config.configure(
+    #         api_key=api_key,
+    #         endpoint=endpoint,
+    #         conversation_id=conversation_id,
+    #         log_level=log_level,
+    #         **kwargs
+    #     )
+        
+    #     # Reinitialize HTTP client if needed
+    #     self._http_client = HTTPClient(self.config)
+        
+    #     # Re-validate API key
+    #     if not self.config.api_key:
+    #         raise NoApiKeyException()
+        
+    #     logger.info("ConversationTracker reconfigured.")
 
     def _reset_token_counters(self):
         """Reset token counters."""
@@ -579,3 +780,5 @@ class ConversationTracker:
         if self.config.token_handler:
             if self.config.token_handler == TokenHandlerType.LLAMAINDEX.value:
                 self._token_handler = set_llamaindex_token_handler(self.config.log_level)
+
+conversation_tracker = ConversationTracker()

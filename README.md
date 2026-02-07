@@ -54,11 +54,11 @@ tracker = ConversationTracker(
 tracker.get_or_create_conversation(
     conversation_id="your_conversation_id"
 )
-tracker.track_question(
-    question="What's the weather like today?",
+tracker.track_human_message(
+    message="What's the weather like today?",
 )
-tracker.track_answer(
-    answer="It's sunny with clear skies."
+tracker.track_agent_message(
+    message="It's sunny with clear skies."
 )
 tracker.send_tracked_data()
 ```

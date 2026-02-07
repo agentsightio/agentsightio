@@ -2,194 +2,143 @@
 outline: deep
 ---
 
-# Conversation API
+# API Reference
 
-After your data has been captured by AgentSight, you can use the Conversation API to retrieve it, including conversations, messages, attachments, and actions.
+AgentSight provides a comprehensive REST API for retrieving, managing, and analyzing your AI agent conversation data. This reference is for developers using the API directly with any programming language or HTTP client.
 
-This API provides **read-only** access to your stored conversational data, allowing you to integrate insights into your own systems.
-
-All endpoints listed below use the <span class="api-method get">GET</span> method and require authentication.
+> Note: if you want to use python lib go to [AgentSightAPI](../clients/api.md)
 
 ## Authentication
 
-All requests to the Conversation API must be authenticated.  
+All requests require authentication using an **API Key**.
 
-- **API Key** - get your api key from Agentsight.io
+**Include your API key in the request header:**
 
-Include a valid key with every request.
+```http
+Authorization: Api-Key YOUR_API_KEY_HERE
+```
 
-**Possible auth errors:**
-- `401 Unauthorized` - missing or invalid credentials  
-- `403 Forbidden` - authenticated, but not authorized to access the requested agent or resource
+Get your API key from the [AgentSight Dashboard](https://app.agentsight.io/).
+
+**Authentication errors:**
+- `401 Unauthorized` - Missing or invalid API key
+- `403 Forbidden` - Valid API key but insufficient permissions
 
 ## Base URL
-`https://api.agentsight.io`
-<!-- | Environment | Base URL |
-|--------------|-----------|
-| Production | `https://api.agentsight.io` | -->
 
-## Summary of Available GET Endpoints
+```
+https://api.agentsight.io
+```
 
-| Method | Endpoint                               | Description                                    |
-| ------ | -------------------------------------- | ---------------------------------------------- |
-| `GET`  | `/api/conversations/`                  | List all conversations (paginated, filterable) |
-| `GET`  | `/api/conversations/{id}/`             | Retrieve a single conversation by ID           |
-| `GET`  | `/api/conversations/{id}/attachments/` | Retrieve attachments for a conversation        |
+<!-- ## Rate Limiting
 
-## List Conversations
+- **Rate limit:** 1000 requests per minute per API key
+- **Headers:** `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` -->
 
-<span class="api-method get">GET</span>  `/api/conversations/`
+## Conversations
 
-Retrieve a paginated list of conversations for the authenticated agent.
+### List Conversations
 
-### Description
-Consistently scopes requests to a single Agent, supporting both JWT and cookie authentication.
+<span class="api-method get">GET</span> `/api/conversations/`
 
-- For **API key**, the agent ID is taken from your credentials.
+Retrieve a paginated list of conversations with powerful filtering options.
 
-### Query Parameters
+#### Query Parameters
 
-<!-- | `customer_id__icontains` | string | Case-insensitive match for customer ID | -->
-<!-- | `is_favorite` | boolean | Return only favorite conversations | -->
-| Name | Type | Description |
-|------|------|--------------|
-| `action_name` | string | Filter by action name |
-| `conversation_id` | string | Filter by conversation ID |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default: 1) |
+| `page_size` | integer | Results per page (default: 10, max: 100) |
+| `conversation_id` | string | Exact match for conversation ID |
 | `customer_id` | string | Exact match for customer ID |
-| `customer_ip_address` | string | Filter by customer IP |
-| `device` | string | Filter by device type |
-| `has_messages` | boolean | Return only conversations with messages |
-| `language` | string | Filter by language |
+| `customer_id__icontains` | string | Case-insensitive partial match for customer ID |
+| `name` | string | Case-insensitive partial match for conversation name |
+| `language` | string | Filter by language code (e.g., "en", "es") |
+| `device` | string | Filter by device type (e.g., "desktop", "mobile") |
+| `customer_ip_address` | string | Exact match for customer IP address |
+| `is_marked` | boolean | Filter by marked/favorite status |
+| `include_deleted` | boolean | Include soft-deleted conversations (default: false) |
+| `started_at_after` | datetime | Conversations started after this timestamp (ISO 8601) |
+| `started_at_before` | datetime | Conversations started before this timestamp (ISO 8601) |
+| `has_messages` | boolean | Only conversations with messages |
 | `message_contains` | string | Search within message contents |
-| `page` | integer | Page number (pagination) |
-| `page_size` | integer | Results per page |
-| `started_at_after` | date-time | Conversations started after this timestamp |
-| `started_at_before` | date-time | Conversations started before this timestamp |
+| `action_name` | string | Filter by action name |
+| `has_feedback` | boolean | Only conversations with feedback |
+| `feedback_sentiment` | string | Filter by feedback sentiment: `positive`, `neutral`, `negative` |
+| `feedback_source` | string | Filter by feedback source: `customer`, `platform` |
+| `metadata` | string | Filter by metadata (format: `key:value,key2:value2`) |
 
-### Response
+#### Example Request
+
+```bash
+curl -X GET "https://api.agentsight.io/api/conversations/?feedback_sentiment=positive&page_size=10" \
+  -H "Authorization: Api-Key YOUR_API_KEY"
+```
+
+#### Response
 
 <details>
 <summary><code>200 OK</code></summary>
 
 ```json
 {
-  "count": 123,
+  "count": 245,
   "next": "https://api.agentsight.io/api/conversations/?page=2",
   "previous": null,
   "results": [
     {
-      "id": 1,
-      "conversation_id": "abc123",
-      "customer_id": "cust_001",
-      "language": "en",
+      "id": 42,
+      "conversation_id": "conv-abc-123",
+      "name": "Password Reset Support",
+      "customer_id": "user-456",
+      "customer_ip_address": "203.0.113.42",
       "device": "desktop",
-      "is_favorite": false,
+      "language": "en",
+      "environment": "production",
+      "is_marked": true,
+      "is_deleted": false,
       "is_used": true,
-      "started_at": "2025-10-22T10:00:00Z",
-      "ended_at": "2025-10-22T10:10:00Z",
-      "geo_location": {
-        "ip_address": "192.168.0.1",
-        "city": "New York",
-        "country": "US"
+      "started_at": "2024-01-15T10:30:00Z",
+      "ended_at": "2024-01-15T10:35:00Z",
+      "deleted_at": null,
+      "metadata": {
+        "session_id": "sess_xyz",
+        "source": "web_chat"
       },
-      "messages": []
-    }
-  ]
-}
-```
-
-</details>
-
-**Error responses:**
-
-* `401 Unauthorized`
-* `403 Forbidden`
-* `400 Bad Request` (invalid parameters)
-
-## Retrieve Conversation by ID
-
-<span class="api-method get">GET</span>  `/api/conversations/{id}/`
-
-Retrieve details for a single conversation by its unique ID.
-
-### Path Parameters
-
-| Name | Type    | Description                                 |
-| ---- | ------- | ------------------------------------------- |
-| `id` | integer | Unique integer identifying the conversation |
-
-### Response
-
-<details>
-<summary><code>200 OK</code></summary>
-
-```json
-{
-  "id": 42,
-  "conversation_id": "conv-42",
-  "customer_id": "cust_123",
-  "language": "en",
-  "device": "mobile",
-  "is_favorite": true,
-  "started_at": "2025-10-22T09:00:00Z",
-  "ended_at": "2025-10-22T09:05:00Z",
-  "geo_location": {
-    "ip_address": "203.0.113.45",
-    "city": "London",
-    "country": "UK"
-  },
-  "messages": [
-    {
-      "id": 1001,
-      "timestamp": "2025-10-22T09:01:00Z",
-      "sender": "end_user",
-      "content": "Hello, I need help.",
-      "attachments": []
-    }
-  ]
-}
-```
-
-</details>
-
-**Error responses:**
-
-* `401 Unauthorized`
-* `403 Forbidden`
-* `404 Not Found` (conversation does not exist or unauthorized)
-
-## Retrieve Conversation Attachments
-
-<span class="api-method get">GET</span>  `/api/conversations/{id}/attachments/`
-
-Retrieve attachments associated with a specific conversation.
-
-### Path Parameters
-
-| Name | Type    | Description                                 |
-| ---- | ------- | ------------------------------------------- |
-| `id` | integer | Unique integer identifying the conversation |
-
-### Response
-
-<details>
-<summary><code>200 OK</code></summary>
-
-```json
-{
-  "id": 42,
-  "conversation_id": "conv-42",
-  "messages": [
-    {
-      "id": 1001,
-      "attachments": [
+      "geo_location": {
+        "ip_address": "203.0.113.42",
+        "city": "New York",
+        "country": "US",
+        "timezone_name": "America/New_York"
+      },
+      "messages": [
         {
-          "id": 900,
-          "type": "image",
-          "file_url": "https://cdn.example.com/files/image.jpg",
-          "filename": "image.jpg",
-          "mime_type": "image/jpeg",
-          "size_bytes": 204800
+          "id": 101,
+          "timestamp": "2024-01-15T10:30:05Z",
+          "sender": "end_user",
+          "content": "I can't log in to my account",
+          "metadata": {
+            "message_id": "msg_001"
+          }
+        },
+        {
+          "id": 102,
+          "timestamp": "2024-01-15T10:30:08Z",
+          "sender": "agent",
+          "content": "I'll help you reset your password",
+          "metadata": {
+            "message_id": "msg_002",
+            "model": "gpt-4"
+          }
+        }
+      ],
+      "feedbacks": [
+        {
+          "id": 5,
+          "sentiment": "positive",
+          "source": "customer",
+          "comment": "Very helpful!",
+          "created_at": "2024-01-15T10:35:00Z"
         }
       ]
     }
@@ -199,15 +148,453 @@ Retrieve attachments associated with a specific conversation.
 
 </details>
 
-**Error responses:**
+### Get Conversation
 
-* `401 Unauthorized`
-* `403 Forbidden`
-* `404 Not Found`
+<span class="api-method get">GET</span> `/api/conversations/{id}/`
 
-## Notes
+Retrieve a single conversation with all messages, actions, attachments, and feedback.
 
-* All endpoints respect pagination (`page` / `page_size`).
-* Query filters can be combined.
-* All timestamps use **ISO 8601 UTC format**.
-* Use the provided auth schemes for consistent scoping to a single agent.
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Example Request
+
+```bash
+curl -X GET "https://api.agentsight.io/api/conversations/42/" \
+  -H "Authorization: Api-Key YOUR_API_KEY"
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 42,
+  "conversation_id": "conv-abc-123",
+  "name": "Password Reset Support",
+  "customer_id": "user-456",
+  "started_at": "2024-01-15T10:30:00Z",
+  "ended_at": "2024-01-15T10:35:00Z",
+  "messages": [
+    {
+      "id": 101,
+      "timestamp": "2024-01-15T10:30:05Z",
+      "sender": "end_user",
+      "content": "I can't log in",
+      "action_name": null,
+      "attachments": [],
+      "action_logs": [],
+      "button": null,
+      "metadata": {}
+    },
+    {
+      "id": 102,
+      "timestamp": "2024-01-15T10:30:08Z",
+      "sender": "agent",
+      "content": "Action database_lookup performed",
+      "action_name": "database_lookup",
+      "attachments": [],
+      "action_logs": [
+        {
+          "id": 50,
+          "started_at": "2024-01-15T10:30:07Z",
+          "ended_at": "2024-01-15T10:30:08Z",
+          "duration_ms": 150,
+          "tools_used": {
+            "database": "users_db",
+            "query_type": "SELECT"
+          },
+          "response": "User found",
+          "error_message": "",
+          "metadata": {}
+        }
+      ],
+      "button": null,
+      "metadata": {}
+    }
+  ],
+  "feedbacks": [],
+  "geo_location": null
+}
+```
+
+</details>
+
+**Error Responses:**
+- `404 Not Found` - Conversation doesn't exist or access denied
+
+### Get Conversation Attachments
+
+<span class="api-method get">GET</span> `/api/conversations/{id}/attachments/`
+
+Retrieve all attachments from a conversation, organized by message.
+
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Example Request
+
+```bash
+curl -X GET "https://api.agentsight.io/api/conversations/42/attachments/" \
+  -H "Authorization: Api-Key YOUR_API_KEY"
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "conversation_id": "conv-abc-123",
+  "conversation": 42,
+  "total_attachments": 3,
+  "messages": [
+    {
+      "message_id": 105,
+      "sender": "end_user",
+      "timestamp": "2024-01-15T10:31:00Z",
+      "attachments": [
+        {
+          "id": 201,
+          "type": "image",
+          "filename": "screenshot.png",
+          "mime_type": "image/png",
+          "size_bytes": 245680,
+          "file_url": "https://cdn.agentsight.io/files/screenshot.png"
+        },
+        {
+          "id": 202,
+          "type": "document",
+          "filename": "report.pdf",
+          "mime_type": "application/pdf",
+          "size_bytes": 1048576,
+          "file_url": "https://cdn.agentsight.io/files/report.pdf"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</details>
+
+### Mark Conversation
+
+<span class="api-method post">POST</span> `/api/conversations/{id}/mark/`
+
+Mark or unmark a conversation as favorite/important.
+
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `is_marked` | boolean | Yes | `true` to mark, `false` to unmark |
+
+#### Example Request
+
+```bash
+curl -X POST "https://api.agentsight.io/api/conversations/42/mark/" \
+  -H "Authorization: Api-Key YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"is_marked": true}'
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 42,
+  "conversation_id": "conv-abc-123",
+  "is_marked": true
+}
+```
+
+</details>
+
+### Rename Conversation
+
+<span class="api-method patch">PATCH</span> `/api/conversations/{id}/rename/`
+
+Update the name of a conversation.
+
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | New conversation name (max 255 characters) |
+
+#### Example Request
+
+```bash
+curl -X PATCH "https://api.agentsight.io/api/conversations/42/rename/" \
+  -H "Authorization: Api-Key YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Resolved: Password Reset"}'
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 42,
+  "conversation_id": "conv-abc-123",
+  "name": "Resolved: Password Reset"
+}
+```
+
+</details>
+
+### Update Conversation
+
+<span class="api-method patch">PATCH</span> `/api/conversations/{id}/update/`
+
+Update multiple fields of a conversation in one request.
+
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Request Body
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Conversation name (max 255 chars) |
+| `is_marked` | boolean | Mark as favorite |
+| `customer_id` | string | Customer identifier |
+| `device` | string | Device type |
+| `language` | string | Language code |
+| `metadata` | object | Custom metadata (JSON object) |
+
+**Note:** All fields are optional. Only include fields you want to update.
+
+#### Example Request
+
+```bash
+curl -X PATCH "https://api.agentsight.io/api/conversations/42/update/" \
+  -H "Authorization: Api-Key YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "VIP Customer Support",
+    "is_marked": true,
+    "metadata": {
+      "priority": "high",
+      "assigned_to": "agent_007"
+    }
+  }'
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 42,
+  "conversation_id": "conv-abc-123",
+  "name": "VIP Customer Support",
+  "is_marked": true,
+  "metadata": {
+    "priority": "high",
+    "assigned_to": "agent_007"
+  }
+}
+```
+
+</details>
+
+### Delete Conversation
+
+<span class="api-method delete">DELETE</span> `/api/conversations/{id}/delete/`
+
+Soft delete a conversation (sets `is_deleted=true`). The conversation can still be retrieved with `include_deleted=true` filter.
+
+#### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Conversation database ID |
+
+#### Example Request
+
+```bash
+curl -X DELETE "https://api.agentsight.io/api/conversations/42/delete/" \
+  -H "Authorization: Api-Key YOUR_API_KEY"
+```
+
+#### Response
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 42,
+  "conversation_id": "conv-abc-123",
+  "is_deleted": true,
+  "deleted_at": "2024-01-15T11:00:00Z"
+}
+```
+
+</details>
+
+## Feedback
+
+### Submit Feedback
+
+<span class="api-method post">POST</span> `/api/conversation-feedbacks/`
+
+Submit user feedback for a conversation.
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `conversation_id` | string | Yes* | Conversation string ID |
+| `conversation` | integer | Yes* | Conversation database ID |
+| `sentiment` | string | Yes | `positive`, `neutral`, or `negative` |
+| `comment` | string | No | User feedback comment (max 5000 chars) |
+| `metadata` | object | No | Additional metadata |
+
+**Note:** Provide either `conversation_id` (string) OR `conversation` (integer).
+
+#### Example Request
+
+```bash
+curl -X POST "https://api.agentsight.io/api/conversation-feedbacks/" \
+  -H "Authorization: Api-Key YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_id": "conv-abc-123",
+    "sentiment": "positive",
+    "comment": "Very helpful and fast response!",
+    "metadata": {
+      "rating": 5,
+      "would_recommend": true
+    }
+  }'
+```
+
+#### Response
+
+<details>
+<summary><code>201 Created</code></summary>
+
+```json
+{
+  "id": 10,
+  "conversation": 42,
+  "sentiment": "positive",
+  "source": "customer",
+  "comment": "Very helpful and fast response!",
+  "metadata": {
+    "rating": 5,
+    "would_recommend": true
+  },
+  "created_at": "2024-01-15T10:40:00Z"
+}
+```
+
+</details>
+
+**Note:** `source` is automatically set to `customer` for API key requests.
+
+## Common Response Codes
+
+| Code | Description |
+|------|-------------|
+| `200 OK` | Request successful |
+| `201 Created` | Resource created successfully |
+| `400 Bad Request` | Invalid request parameters |
+| `401 Unauthorized` | Missing or invalid API key |
+| `403 Forbidden` | Insufficient permissions |
+| `404 Not Found` | Resource not found |
+| `429 Too Many Requests` | Rate limit exceeded |
+| `500 Internal Server Error` | Server error |
+
+## Pagination
+
+All list endpoints support pagination:
+
+```json
+{
+  "count": 245,
+  "next": "https://api.agentsight.io/api/conversations/?page=3",
+  "previous": "https://api.agentsight.io/api/conversations/?page=1",
+  "results": [...]
+}
+```
+
+**Parameters:**
+- `page` - Page number (default: 1)
+- `page_size` - Results per page (default: 10, max: 100)
+
+## Filtering Examples
+
+**Positive customer feedback from last 7 days:**
+```
+GET /api/conversations/?feedback_sentiment=positive&feedback_source=customer&started_at_after=2024-01-08T00:00:00Z
+```
+
+**Conversations with specific action:**
+```
+GET /api/conversations/?action_name=database_query
+```
+
+**Search message content:**
+```
+GET /api/conversations/?message_contains=password+reset
+```
+
+**Filter by metadata:**
+```
+GET /api/conversations/?metadata=priority:high,status:resolved
+```
+
+**Marked conversations on mobile:**
+```
+GET /api/conversations/?is_marked=true&device=mobile
+```
+
+## Timestamps
+
+All timestamps use **ISO 8601 format** in UTC:
+
+```
+2024-01-15T10:30:00Z
+```
+
+<!-- ## Need Help?
+
+- **Documentation:** [https://docs.agentsight.io](https://docs.agentsight.io)
+- **Support:** support@agentsight.io
+- **Discord:** [Join our community](https://discord.gg/agentsight) -->

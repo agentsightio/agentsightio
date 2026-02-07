@@ -26,7 +26,6 @@ def track_button(
 | `button_event` | `str` | Yes | Description of what this button is used for |
 | `label` | `str` | Yes | The button label/text displayed to the user |
 | `value` | `str` | Yes | The button value |
-| `conversation_id` | `str` | No | Unique identifier for the conversation (auto-generated if not provided) |
 | `metadata` | `Dict[str, Any]` | No | Additional contextual information |
 
 ## Complete Usage Example
@@ -39,7 +38,6 @@ tracker.track_button(
     button_event="product_selection",
     label="Add to Cart",
     value="product_123",
-    conversation_id="shopping_session_456",
     metadata={
         "product_name": "Wireless Headphones",
         "price": 99.99,
@@ -56,7 +54,6 @@ tracker.track_button(
     button_event="ticket_resolution",
     label="Mark as Resolved",
     value="resolved_satisfied",
-    conversation_id="support_ticket_789",
     metadata={
         "resolution_type": "self_service",
         "satisfaction_rating": 5,
@@ -79,6 +76,35 @@ tracker.track_button(
     }
 )
 ```
+
+## Track which buttons were clicked
+
+You may want to render multiple buttons which were rendered but only one was clicked. In order to do that you need to pass
+the same `button_event` but different `label` and `value`. AgentSight automatically tracks different buttons with the same `button_event` and
+renders them inside the conversation preview in the Dashboard.
+
+### Example
+
+Track your buttons when user asks for contacting human agent:
+```python
+tracker.track_button(
+    button_event="contact_human_agent",
+    label="Copy conversation",
+    value="copy-conversation"
+)
+```
+
+```python
+tracker.track_button(
+    button_event="contact_human_agent",
+    label="Create ticket",
+    value="create-ticket"
+)
+```
+
+:::info Rendering inside conversation preview
+Only track clicked buttons, in the conversation preview, AgentSight will automatically pull all the buttons with the same `button_event`.
+:::
 
 ## Use Cases
 

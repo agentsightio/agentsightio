@@ -9,7 +9,8 @@ def prepare_form_data_payload_from_data(
     attachments: List[Dict[str, Any]],
     conversation_id: str,
     sender: Optional[Sender] = Sender.USER.value,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    timestamp: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Prepare form data payload from file data objects.
@@ -23,7 +24,7 @@ def prepare_form_data_payload_from_data(
     files = {}
     
     # Add metadata as form fields
-    files['timestamp'] = (None, get_iso_timestamp())
+    files['timestamp'] = (None, timestamp or get_iso_timestamp())
     files['conversation'] = (None, conversation_id)
     files['sender'] = (None, sender)
     files['mode'] = (None, AttachmentMode.FORM_DATA.value)

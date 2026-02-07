@@ -56,24 +56,24 @@ class TestConversationTrackerTokenUsage:
         assert tracker.config.token_handler == TokenHandlerType.LLAMAINDEX
     
     def test_token_handler_with_different_log_levels(self, valid_api_key):
-        """Test that token handler respects different log levels."""
-        # Test with DEBUG
-        tracker_debug = ConversationTracker(
+        """Test that token handler can be reconfigured with different log levels."""
+        # Initial configuration with DEBUG
+        tracker = ConversationTracker(
             api_key=valid_api_key,
             token_handler=TokenHandlerType.LLAMAINDEX,
             log_level=LogLevel.DEBUG
         )
-        assert tracker_debug.config.log_level == LogLevel.DEBUG
-        assert tracker_debug.config.token_handler == TokenHandlerType.LLAMAINDEX
+        assert tracker.config.log_level == LogLevel.DEBUG
+        assert tracker.config.token_handler == TokenHandlerType.LLAMAINDEX
         
-        # Test with INFO
-        tracker_info = ConversationTracker(
-            api_key=valid_api_key,
-            token_handler=TokenHandlerType.LLAMAINDEX,
-            log_level=LogLevel.INFO
-        )
-        assert tracker_info.config.log_level == LogLevel.INFO
-        assert tracker_info.config.token_handler == TokenHandlerType.LLAMAINDEX
+        # Reconfigure with INFO (correct way to change config)
+        tracker.configure(log_level=LogLevel.INFO)
+        assert tracker.config.log_level == LogLevel.INFO
+        assert tracker.config.token_handler == TokenHandlerType.LLAMAINDEX
+        
+        # Reconfigure with WARNING
+        tracker.configure(log_level=LogLevel.WARNING)
+        assert tracker.config.log_level == LogLevel.WARNING
     
     def test_config_normalizes_string_token_handler(self, valid_api_key):
         """Test that Config.__post_init__ normalizes string to TokenHandlerType enum."""

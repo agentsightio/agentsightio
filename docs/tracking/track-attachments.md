@@ -22,7 +22,6 @@ def track_attachments(
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `attachments` | `List[AttachmentInput]` | Yes | List of attachment objects |
-| `conversation_id` | `str` | No | Unique identifier for the conversation (auto-generated if not provided) |
 | `metadata` | `Dict[str, Any]` | No | Additional contextual information |
 | `mode` | `str \| AttachmentMode` | No | Sending mode: 'base64' (default) or 'form_data' |
 
@@ -109,7 +108,6 @@ for file_info in chatbot_files:
 # Track with full context
 response = tracker.track_attachments(
     attachments=attachments,
-    conversation_id="support_session_123",
     metadata={
         "source": "customer_upload",
         "category": "technical_support"

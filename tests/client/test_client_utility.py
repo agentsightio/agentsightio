@@ -24,8 +24,8 @@ class TestConversationTrackerSendTrackedData:
         
         # Track some data
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question")
-        tracker.track_answer("Test answer")
+        tracker.track_human_message("Test question")
+        tracker.track_agent_message("Test answer")
         
         # Send tracked data
         result = tracker.send_tracked_data()
@@ -60,7 +60,7 @@ class TestConversationTrackerSendTrackedData:
         
         # Track some data
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question")
+        tracker.track_human_message("Test question")
         
         # Send tracked data
         result = tracker.send_tracked_data()
@@ -87,8 +87,8 @@ class TestConversationTrackerSendTrackedData:
         
         # Track data in specific order
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("First question")
-        tracker.track_answer("First answer")
+        tracker.track_human_message("First question")
+        tracker.track_agent_message("First answer")
         tracker.track_action("First action")
         
         # Send tracked data
@@ -117,9 +117,9 @@ class TestConversationTrackerSendTrackedData:
         
         # Track data and token usage
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question")
+        tracker.track_human_message("Test question")
         tracker.track_token_usage(prompt_tokens=10, completion_tokens=20)
-        tracker.track_answer("Test answer")
+        tracker.track_agent_message("Test answer")
         
         # Send tracked data
         result = tracker.send_tracked_data()
@@ -143,7 +143,7 @@ class TestConversationTrackerSendTrackedData:
         
         # Track some data
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question")
+        tracker.track_human_message("Test question")
         
         responses = []
         exceptions = []
@@ -180,7 +180,7 @@ class TestConversationTrackerGetTrackedDataSummary:
         tracker = ConversationTracker(api_key=valid_api_key, conversation_id="conv_123")
         
         # Add some tracked data
-        tracker.track_question("Original question")
+        tracker.track_human_message("Original question")
         
         result = tracker.get_tracked_data_summary()
         
@@ -295,8 +295,8 @@ class TestConversationTrackerThreadSafety:
         tracker = ConversationTracker(api_key=valid_api_key, conversation_id="shared_conv")
         
         def track_data(thread_id):
-            tracker.track_question(f"Question from thread {thread_id}")
-            tracker.track_answer(f"Answer from thread {thread_id}")
+            tracker.track_human_message(f"Question from thread {thread_id}")
+            tracker.track_agent_message(f"Answer from thread {thread_id}")
         
         # Track same conversation from multiple threads
         threads = []
@@ -319,7 +319,7 @@ class TestConversationTrackerThreadSafety:
         
         def add_items(thread_id):
             for i in range(5):
-                tracker.track_question(f"Question {i} from thread {thread_id}")
+                tracker.track_human_message(f"Question {i} from thread {thread_id}")
         
         # Add items concurrently from multiple threads
         threads = []

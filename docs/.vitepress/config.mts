@@ -64,17 +64,12 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Tracking',
+        text: 'Clients',
         collapsed: false,
         items: [
-          { text: 'Track Conversation', link: '/tracking/track-conversations' },
-          { text: 'Track Usage Tokens', link: '/tracking/track-tokens' },
-          { text: 'Track Interactions', link: '/tracking/track-interaction' },
-          { text: 'Track Question', link: '/tracking/track-question' },
-          { text: 'Track Answer', link: '/tracking/track-answer' },
-          { text: 'Track Attachments', link: '/tracking/track-attachments' },
-          { text: 'Track Actions', link: '/tracking/track-actions' },
-          { text: 'Track Buttons', link: '/tracking/track-buttons' },
+          { text: 'ConversationTracker', link: '/clients/tracker' },
+          { text: 'ConversationManager', link: '/clients/manager' },
+          { text: 'AgentSightAPI', link: '/clients/api' },
         ]
       },
       {
@@ -84,10 +79,43 @@ export default defineConfig({
           { text: 'OpenAI', link: '/examples/openai/openai' },
           { text: 'Anthropic', link: '/examples/anthropic/anthropic' },
           { text: 'LlamaIndex-Fastapi', link: '/examples/llamaindex/llama-index-fastapi' },
-          { text: 'LlamaIndex-Flask', link: '/examples/llamaindex/llama-index-flask' },
           { text: 'Langchain-Fastapi', link: '/examples/langchain/langchain-fastapi' },
         ]
       },
+      {
+        text: 'Tracking',
+        collapsed: true,
+        items: [
+          { text: 'Track Conversation', link: '/tracking/track-conversations' },
+          { text: 'Track Usage Tokens', link: '/tracking/track-tokens' },
+          { text: 'Track Interactions', link: '/tracking/track-interaction' },
+          { text: 'Track Human Message', link: '/tracking/track-question' },
+          { text: 'Track Agent Message', link: '/tracking/track-answer' },
+          { text: 'Track Attachments', link: '/tracking/track-attachments' },
+          { text: 'Track Actions', link: '/tracking/track-actions' },
+          { text: 'Track Buttons', link: '/tracking/track-buttons' },
+        ]
+      },
+      {
+        text: 'Managing',
+        collapsed: true,
+        items: [
+          { text: 'Add Feedback', link: '/managing/feedback' },
+          { text: 'Rename Conversation', link: '/managing/rename' },
+          { text: 'Mark Conversation', link: '/managing/mark' },
+          { text: 'Delete Conversation', link: '/managing/delete' },
+          { text: 'Update Conversation', link: '/managing/update' },
+        ]
+      },
+      {
+        text: 'Fetching',
+        collapsed: true,
+        items: [
+          { text: 'Fetch All Conversations', link: '/fetching/conversations' },
+          { text: 'Fetch Single Conversation', link: '/fetching/conversation' },
+          { text: 'Fetch Conversation Attachments', link: '/fetching/attachments' },
+        ]
+      }
     ],
 
     search: {

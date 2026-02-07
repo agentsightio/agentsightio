@@ -150,12 +150,12 @@ async def chat(request: ChatRequest):
     )
     
     # Continue with regular tracking flow
-    tracker.track_question(request.message)
+    tracker.track_human_message(request.message)
     
     # Your AI agent logic here
     response = "This is a sample response"
     
-    tracker.track_answer(response)
+    tracker.track_agent_message(response)
     
     # Send tracking data
     result = tracker.send_tracked_data()

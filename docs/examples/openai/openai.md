@@ -40,13 +40,11 @@ OPENAI_API_KEY=your_openai_api_key
 ```python
 import os
 from openai import OpenAI
-from agentsight import ConversationTracker
+from agentsight import conversation_tracker
 from agentsight.helpers import generate_conversation_id
 from dotenv import load_dotenv
-load_dotenv()
 
-# Initialize AgentSight tracker
-tracker = ConversationTracker()
+load_dotenv()
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -58,42 +56,49 @@ user_question = "What's 127 multiplied by 8?"
 conversation_id = generate_conversation_id()
 
 # Initialize conversation
-tracker.get_or_create_conversation(
+conversation_tracker.get_or_create_conversation(
     conversation_id=conversation_id,
-    customer_id="user_123"
+    customer_id="user_123",
+    name="Math Question"
 )
 
 # Track the question
-tracker.track_question(user_question)
+conversation_tracker.track_human_message(
+    question=user_question,
+    metadata={"input_length": len(user_question)}
+)
 
 # Get response from GPT
 response = client.chat.completions.create(
     model="gpt-4",
-    messages=[{
-        "role": "user",
-        "content": user_question
-    }]
+    messages=[{"role": "user", "content": user_question}]
 )
 
 # Extract the response
 ai_response = response.choices[0].message.content
 
 # Track the answer
-tracker.track_answer(ai_response)
+conversation_tracker.track_agent_message(
+    answer=ai_response,
+    metadata={
+        "model": "gpt-4",
+        "finish_reason": response.choices[0].finish_reason
+    }
+)
 
 # Track token usage
-tracker.track_token_usage(
+conversation_tracker.track_token_usage(
     prompt_tokens=response.usage.prompt_tokens,
     completion_tokens=response.usage.completion_tokens,
     total_tokens=response.usage.total_tokens
 )
 
 # Send tracking data
-result = tracker.send_tracked_data()
+result = conversation_tracker.send_tracked_data()
 
 print(f"Question: {user_question}")
 print(f"Answer: {ai_response}")
-print(f"Tracking sent: {result}")
+print(f"✅ Tracked: {result['summary']}")
 ```
 
 ## Advanced Integration with Function Calling
@@ -103,45 +108,37 @@ import os
 import json
 import time
 from openai import OpenAI
-from agentsight import ConversationTracker
+from agentsight import conversation_tracker
 from agentsight.helpers import generate_conversation_id
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize clients
-tracker = ConversationTracker()
+# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def calculator_function(operation: str, a: float, b: float) -> float:
-    """Simple calculator function that we'll track"""
+def calculator_function(a: float, b: float) -> float:
+    """Simple calculator for addition"""
     start_time = time.time()
     
-    if operation == "add":
-        result = a + b
-    elif operation == "multiply":
-        result = a * b
-    elif operation == "subtract":
-        result = a - b
-    elif operation == "divide":
-        result = a / b if b != 0 else None
-    else:
-        result = None
-    
+    result = a + b
     end_time = time.time()
     duration = int((end_time - start_time) * 1000)
     
     # Track the function call as an action
-    tracker.track_action(
-        action_name=f"calculator_{operation}",
+    conversation_tracker.track_action(
+        action_name=f"calculator_addition",
+        started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_time)),
+        ended_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_time)),
         duration_ms=duration,
-        response=str(result) if result is not None else "Error",
-        error_msg=None if result is not None else "Division by zero" if operation == "divide" else "Invalid operation",
-        metadata={
+        tools_used={
             "function": "calculator",
-            "operation": operation,
+            "operation": addition
+        },
+        response=str(result) if result is not None else "Error",
+        metadata={
             "parameters": {"a": a, "b": b},
-            "tool_type": "calculator"
+            "result": result
         }
     )
     
@@ -152,23 +149,12 @@ calculator_tool = {
     "type": "function",
     "function": {
         "name": "calculator",
-        "description": "Perform basic mathematical operations",
+        "description": "Perform addition",
         "parameters": {
             "type": "object",
             "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": ["add", "subtract", "multiply", "divide"],
-                    "description": "The mathematical operation to perform"
-                },
-                "a": {
-                    "type": "number",
-                    "description": "First number"
-                },
-                "b": {
-                    "type": "number",
-                    "description": "Second number"
-                }
+                "a": {"type": "number", "description": "First number"},
+                "b": {"type": "number", "description": "Second number"}
             },
             "required": ["operation", "a", "b"]
         }
@@ -176,38 +162,39 @@ calculator_tool = {
 }
 
 # User input and conversation setup
-user_question = "What's 127 multiplied by 8, and then add 25 to the result?"
+user_question = "What's 24 + 3?"
 conversation_id = generate_conversation_id()
 
 # Initialize conversation
-tracker.get_or_create_conversation(
+conversation_tracker.get_or_create_conversation(
     conversation_id=conversation_id,
     customer_id="user_456",
-    device="desktop"
+    device="desktop",
+    name="Calculator Chat"
 )
 
 # Track the user question
-tracker.track_question(user_question)
+conversation_tracker.track_human_message(
+    question=user_question,
+    metadata={"requires_calculation": True}
+)
 
 # Get response from GPT with calculator tool
 response = client.chat.completions.create(
     model="gpt-4",
-    messages=[{
-        "role": "user",
-        "content": user_question
-    }],
+    messages=[{"role": "user", "content": user_question}],
     tools=[calculator_tool],
     tool_choice="auto"
 )
 
 # Track initial token usage
-tracker.track_token_usage(
+conversation_tracker.track_token_usage(
     prompt_tokens=response.usage.prompt_tokens,
     completion_tokens=response.usage.completion_tokens,
     total_tokens=response.usage.total_tokens
 )
 
-# Process the response based on tool usage
+# Process the response
 message = response.choices[0].message
 
 if message.tool_calls:
@@ -220,10 +207,8 @@ if message.tool_calls:
     # Process each tool call
     for tool_call in message.tool_calls:
         if tool_call.function.name == "calculator":
-            # Parse function arguments
+            # Parse and execute function
             function_args = json.loads(tool_call.function.arguments)
-            
-            # Execute the calculator function (this will track the action)
             result = calculator_function(
                 function_args["operation"],
                 function_args["a"],
@@ -237,34 +222,91 @@ if message.tool_calls:
                 "content": str(result)
             })
     
-    # Get final response with calculation results
+    # Get final response
     final_response = client.chat.completions.create(
         model="gpt-4",
         messages=messages
     )
     
     # Track additional token usage
-    tracker.track_token_usage(
+    conversation_tracker.track_token_usage(
         prompt_tokens=final_response.usage.prompt_tokens,
         completion_tokens=final_response.usage.completion_tokens,
         total_tokens=final_response.usage.total_tokens
     )
     
     final_answer = final_response.choices[0].message.content
-    used_tools = True
 else:
-    # No tool use needed
     final_answer = message.content
-    used_tools = False
 
 # Track the final answer
-tracker.track_answer(final_answer)
+conversation_tracker.track_agent_message(
+    answer=final_answer,
+    metadata={
+        "model": "gpt-4",
+        "used_tools": bool(message.tool_calls)
+    }
+)
 
 # Send tracking data
-result = tracker.send_tracked_data()
+result = conversation_tracker.send_tracked_data()
 
+# Display results
 print(f"Question: {user_question}")
 print(f"Answer: {final_answer}")
-print(f"Token usage: {tracker.get_token_usage()}")
-print(f"Tracking sent: {result}")
+print(f"Token usage: {conversation_tracker.get_token_usage()}")
+print(f"✅ Tracked: {result['summary']}")
+```
+
+## Key Features Tracked
+
+✅ **User Questions** - Every input is captured  
+✅ **AI Responses** - All GPT outputs are logged  
+✅ **Token Usage** - Monitor costs across conversations  
+✅ **Function Calls** - Track tool usage and performance  
+✅ **Execution Time** - Measure function call duration  
+✅ **Errors** - Capture and log failures  
+
+## Best Practices
+
+### 1. Track Metadata
+
+```python
+# Add context to every interaction
+conversation_tracker.track_agent_message(
+    answer=ai_response,
+    metadata={
+        "model": "gpt-4",
+        "temperature": 0.7,
+        "finish_reason": response.choices[0].finish_reason,
+        "response_time_ms": 850
+    }
+)
+```
+
+### 2. Handle Errors Gracefully
+
+```python
+try:
+    response = client.chat.completions.create(...)
+    conversation_tracker.track_agent_message(response.choices[0].message.content)
+except Exception as e:
+    conversation_tracker.track_action(
+        action_name="openai_api_call",
+        error_msg=str(e),
+        metadata={"failed": True}
+    )
+```
+
+### 3. Track All Tool Calls
+
+```python
+# Track every function execution
+for tool_call in message.tool_calls:
+    result = execute_function(tool_call)
+    conversation_tracker.track_action(
+        action_name=tool_call.function.name,
+        tools_used={"function": tool_call.function.name},
+        response=str(result)
+    )
 ```

@@ -2,164 +2,226 @@
 outline: deep
 ---
 
-# Get or Create Conversation Method
+# Track Conversations
 
-The `get_or_create_conversation()` method initializes or retrieves a conversation context for tracking user interactions. This method establishes the conversation scope for all subsequent tracking operations and ensures proper data organization within AgentSight.
-
-## Conversation Tracking
-
-Conversations are uniquely identified to help you maintain context across multiple interactions. Once you create a conversation with your ID, use that same ID to reference your tracking methods with that conversation.
-
-:::info Conversation ID Requirement
-The `conversation_id` parameter is required when calling `get_or_create_conversation()`. If you don't call this method at all, AgentSight will auto-generate a conversation ID for you, which could result in creating new conversations on each iteration.
-:::
+The `get_or_create_conversation()` method creates or retrieves a conversation context for tracking. This establishes the conversation scope for all subsequent tracking operations.
 
 ## Method Signature
 
 ```python
-def get_or_create_conversation(
-    self, 
+tracker.get_or_create_conversation(
     conversation_id: str,
     customer_id: Optional[str] = None,
     customer_ip_address: Optional[str] = None,
-    device: Optional[str] = None,
+    device: Optional[Literal["desktop", "mobile"]] = None,
     source: Optional[str] = None,
     language: Optional[str] = None,
-    environment: Literal["production", "development"] = "production",
+    name: Optional[str] = None,
+    environment: Literal["production", "development"] = "development",
     metadata: Optional[Dict[str, Any]] = None
-):
+)
 ```
 
 ## Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `conversation_id` | `str` | Yes | Unique identifier for the conversation |
-| `customer_id` | `str` | No | Unique identifier for the customer/user |
-| `customer_ip_address` | `str` | No | IP address of the customer for geographical tracking |
-| `device` | `str` | No | Device type or identifier (e.g., "mobile", "desktop", "tablet") |
-| `source` | `str` | No | Source platform or channel (e.g., "whatsapp", "web", "mobile_app") |
-| `language` | `str` | No | Language code for the conversation (e.g., "en-US", "es-ES") |
-| `environment` | `Literal["production", "development"]` | No | Specifies the environment in which the conversation is taking place. Defaults to `production`. |
-| `metadata` | `Dict[str, Any]` | No | Additional contextual information about the conversation |
+| `conversation_id` | string | **Yes** | Unique identifier for the conversation |
+| `customer_id` | string | No | Customer/user identifier |
+| `customer_ip_address` | string | No | Customer IP address for geo-tracking |
+| `device` | string | No | Device type: `desktop` or `mobile` |
+| `source` | string | No | Source platform (e.g., `web`, `whatsapp`, `mobile_app`) |
+| `language` | string | No | Language code (e.g., `en`, `es-ES`) |
+| `name` | string | No | Conversation name/title |
+| `environment` | string | No | `production` or `development` (default: `development`) |
+| `metadata` | dict | No | Additional custom data |
 
-## Complete Usage Example
-
-### Basic Conversation Creation
+## Basic Usage
 
 ```python
-# Initialize conversation with specific ID and customer
-conversation_id = "test_1"
-tracker.get_or_create_conversation(
-    conversation_id=conversation_id,
-    customer_id="1"
+from agentsight import conversation_tracker
+
+# Simple conversation
+conversation_tracker.get_or_create_conversation(
+    conversation_id="chat-123",
+    customer_id="user-456"
 )
 ```
 
-### Advanced Conversation Creation with Context
+## With Full Context
 
 ```python
-# Create conversation with full context information
-tracker.get_or_create_conversation(
-    conversation_id="support_ticket_12345",
-    customer_id="customer_abc",
-    customer_ip_address="192.168.1.100",
-    device="mobile",
-    source="whatsapp",
-    language="en-US",
-    metadata={
-        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X)",
-        "session_start": "2024-01-15T10:30:00Z"
-    }
-)
-```
-
-### Multi-Channel Conversation Examples
-
-```python
-# WhatsApp conversation
-tracker.get_or_create_conversation(
-    conversation_id="whatsapp_chat_789",
-    customer_id="user_456",
+conversation_tracker.get_or_create_conversation(
+    conversation_id="support-ticket-789",
+    customer_id="customer-abc",
     customer_ip_address="203.0.113.45",
     device="mobile",
     source="whatsapp",
     language="en-US",
+    name="Password Reset Support",
+    environment="production",
     metadata={
         "phone_number": "+1234567890",
-        "whatsapp_business": True
-    }
-)
-
-# Web chat conversation
-tracker.get_or_create_conversation(
-    conversation_id="web_session_101",
-    customer_id="user_789",
-    customer_ip_address="198.51.100.25",
-    device="desktop",
-    source="web",
-    language="en-US",
-    metadata={
-        "browser": "Chrome",
-        "page_url": "https://example.com/support",
-        "referrer": "https://google.com"
+        "session_start": "2024-01-15T10:30:00Z",
+        "user_tier": "premium"
     }
 )
 ```
 
-### Conversation ID Management Examples
+## Multi-Channel Examples
+
+### Web Chat
 
 ```python
-# Example 1: Using your own conversation ID
-conversation_id = "user_session_12345"
-tracker.get_or_create_conversation(
-    conversation_id=conversation_id,
-    customer_id="customer_abc",
-    device="tablet",
-    source="web"
-)
-
-# Example 2: Using generated conversation ID
-conversation_id = generate_conversation_id()
-tracker.get_or_create_conversation(
-    conversation_id=conversation_id,
-    customer_id="customer_xyz",
-    customer_ip_address="192.168.1.50",
-    source="mobile_app"
+conversation_tracker.get_or_create_conversation(
+    conversation_id="web-session-101",
+    customer_id="user-789",
+    device="desktop",
+    source="web",
+    language="en",
+    metadata={
+        "browser": "Chrome",
+        "page_url": "https://example.com/support"
+    }
 )
 ```
 
-## Conversation ID Generation
+### WhatsApp Bot
 
-You can use the built-in helper function to generate unique conversation IDs:
+```python
+conversation_tracker.get_or_create_conversation(
+    conversation_id=phone_number,  # Use phone number as ID
+    customer_id=phone_number,
+    device="mobile",
+    source="whatsapp",
+    language="en"
+)
+```
+
+### Mobile App
+
+```python
+conversation_tracker.get_or_create_conversation(
+    conversation_id=f"app-{user_id}-{session_id}",
+    customer_id=user_id,
+    device="mobile",
+    source="ios_app",
+    language="en",
+    metadata={
+        "app_version": "2.1.0",
+        "os_version": "iOS 17.2"
+    }
+)
+```
+
+### Voice Agent
 
 ```python
 from agentsight.helpers import generate_conversation_id
 
-# Generate a unique conversation ID
+# Generate unique ID for each call
 conversation_id = generate_conversation_id()
-tracker.get_or_create_conversation(
+
+conversation_tracker.get_or_create_conversation(
+    conversation_id=conversation_id,
+    customer_id=caller_id,
+    source="voice_call",
+    language="en",
+    metadata={
+        "call_duration": 0,
+        "phone_number": "+1234567890"
+    }
+)
+```
+
+## Generate Conversation ID
+
+```python
+from agentsight.helpers import generate_conversation_id
+
+# Generate unique conversation ID
+conversation_id = generate_conversation_id()
+
+conversation_tracker.get_or_create_conversation(
     conversation_id=conversation_id
 )
 ```
 
+## Store vs Create Immediately
+
+### Store in Memory (Default)
+
+```python
+# Stored in memory, sent with send_tracked_data()
+conversation_tracker.get_or_create_conversation(
+    conversation_id="support-123",
+    name="Password Reset"
+)
+
+# ... track messages, actions, etc ...
+
+# Send everything at once
+conversation_tracker.send_tracked_data()
+```
+
+### Create Immediately
+
+```python
+# Sends to API right away
+conversation_tracker.initialize_conversation(
+    conversation_id="support-123",
+    name="Password Reset"
+)
+```
+
+:::tip When to Use Each
+- **`get_or_create_conversation()`** - Store in memory, send later with batch
+- **`initialize_conversation()`** - Create immediately in database (use when you want to track if users are acctually engaging wiht your agents, e.g. using on web page or not)
+:::
+
 ## Important Notes
 
-:::info Conversation Context
-All subsequent tracking methods (`track_question`, `track_answer`, `track_action`, etc.) will be associated with the conversation established by this method.
-:::
-
-:::info Passing Additional Information
-When you pass additional information for a new conversation, we will save them but when the conversation already exists, those information will not override the existing info as those should be unique.
-:::
-
-:::tip Best Practices
-- Use meaningful conversation IDs that help you identify sessions or interactions
-- Always provide additional information from the conversation for extensive analytics
-- Call this method before any other tracking operations
-- Use consistent ID formats across your application
-:::
-
 :::warning Auto-Generated IDs
-If you don't call `get_or_create_conversation()` at all, AgentSight will auto-generate a conversation ID for you. This may result in creating new conversations on each iteration, which could fragment your analytics.
+If you don't call `get_or_create_conversation()`, AgentSight will auto-generate a conversation ID. This may create a new conversation on each iteration, fragmenting your analytics.
 :::
+
+:::info Conversation Context
+All subsequent tracking methods (`track_human_message`, `track_agent_message`, etc.) are associated with this conversation.
+:::
+
+:::tip Data Persistence
+When creating a **new** conversation, all parameters are saved. When the conversation **already exists**, the parameters won't override existing data.
+:::
+
+## Best Practices
+
+### 1. Provide Rich Context
+
+```python
+# ✅ Good - detailed context for analytics
+conversation_tracker.get_or_create_conversation(
+    conversation_id="support-123",
+    customer_id="user-456",
+    customer_ip_address="203.0.113.45",
+    device="mobile",
+    source="whatsapp",
+    language="en",
+    metadata={
+        "user_tier": "premium",
+        "previous_tickets": 2,
+        "account_age_days": 365
+    }
+)
+```
+
+### 2. Call Before Tracking
+
+```python
+# ✅ Correct order
+conversation_tracker.get_or_create_conversation(conversation_id="chat-123")
+conversation_tracker.track_human_message("Hello")
+conversation_tracker.track_agent_message("Hi!")
+
+# ❌ Wrong - no conversation context
+conversation_tracker.track_human_message("Hello")
+```

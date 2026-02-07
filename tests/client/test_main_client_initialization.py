@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from agentsight.client import ConversationTracker
 from agentsight.exceptions import NoApiKeyException, InvalidApiKeyException
+from agentsight.client import ConversationTracker
 from agentsight.config import Config
 from agentsight.enums import LogLevel, TokenHandlerType
 
@@ -173,19 +173,6 @@ class TestConversationTrackerInitialization:
             tracker = ConversationTracker(api_key=valid_api_key)
             mock_patch.assert_called_once()
     
-    def test_init_multiple_instances_independent(self, valid_api_key):
-        """Test that multiple instances are independent."""
-        tracker1 = ConversationTracker(api_key=valid_api_key, conversation_id="conv1")
-        tracker2 = ConversationTracker(api_key=valid_api_key, conversation_id="conv2")
-        
-        assert tracker1.config.conversation_id == "conv1"
-        assert tracker2.config.conversation_id == "conv2"
-        
-        # Different instances should have different tracked data
-        assert tracker1._tracked_data is not tracker2._tracked_data
-        assert tracker1._lock is not tracker2._lock
-        assert tracker1._http_client is not tracker2._http_client
-    
     def test_init_with_whitespace_api_key_raises_exception(self):
         """Test that initialization with whitespace-only API key raises exception."""
         with pytest.raises(NoApiKeyException):
@@ -289,3 +276,233 @@ class TestConversationTrackerInitialization:
         )
         
         assert tracker.config.token_handler == TokenHandlerType.LLAMAINDEX
+    
+    def test_singleton_pattern_returns_same_instance(self, valid_api_key):
+        """Test that singleton pattern returns the same instance."""
+        # Reset singleton for this test
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = __import__('threading').Lock()
+        
+        tracker1 = ConversationTracker(api_key=valid_api_key)
+        tracker2 = ConversationTracker(api_key=valid_api_key)
+        
+        # Should be the same instance
+        assert tracker1 is tracker2
+        assert id(tracker1) == id(tracker2)
+    
+    def test_singleton_reinitialization_prevented(self, valid_api_key):
+        """Test that singleton prevents re-initialization."""
+        # Reset singleton for this test
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = __import__('threading').Lock()
+        
+        tracker1 = ConversationTracker(api_key=valid_api_key, conversation_id="conv1")
+        tracker2 = ConversationTracker(api_key=valid_api_key, conversation_id="conv2")
+        
+        # Both should be the same instance
+        assert tracker1 is tracker2
+        # conversation_id from first initialization should be preserved
+        assert tracker1.config.conversation_id == "conv1"
+        assert tracker2.config.conversation_id == "conv1"
+    
+    def test_auto_initialized_instance_with_env_api_key(self, monkeypatch, valid_api_key):
+        """Test that auto-initialized conversation_tracker works with API key from env."""
+        # Reset singleton
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = __import__('threading').Lock()
+        
+        # Set API key in environment
+        monkeypatch.setenv("AGENTSIGHT_API_KEY", valid_api_key)
+        
+        # Import to trigger auto-initialization
+        from agentsight.client.main_client import conversation_tracker
+        
+        # Should be initialized successfully
+        assert conversation_tracker is not None
+        assert conversation_tracker.config.api_key == valid_api_key
+        assert conversation_tracker._initialized is True
+    
+    def test_initialization_without_api_key_raises_exception(self, monkeypatch):
+        """Test that creating tracker without API key raises exception."""
+        # Reset singleton
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = __import__('threading').Lock()
+        
+        # Ensure no API key in environment
+        monkeypatch.delenv("AGENTSIGHT_API_KEY", raising=False)
+        
+        # Creating instance should raise NoApiKeyException
+        with pytest.raises(NoApiKeyException):
+            ConversationTracker()
+
+    def test_configure_without_api_key_raises_exception(self, valid_api_key):
+        """Test that reconfiguration with None API key raises exception."""
+        tracker = ConversationTracker(api_key=valid_api_key)
+        
+        with pytest.raises(NoApiKeyException, match="API key cannot be None"):
+            tracker.configure(api_key=None)
+
+    def test_configure_updates_conversation_id(self, valid_api_key):
+        """Test that configure can update conversation_id."""
+        tracker = ConversationTracker(
+            api_key=valid_api_key,
+            conversation_id="conv-123"
+        )
+        
+        assert tracker.config.conversation_id == "conv-123"
+        
+        # Update conversation_id
+        tracker.configure(conversation_id="conv-456")
+        
+        assert tracker.config.conversation_id == "conv-456"
+        # API key should remain unchanged
+        assert tracker.config.api_key == valid_api_key
+
+    def test_configure_without_params_keeps_existing_config(self, valid_api_key):
+        """Test that configure without params doesn't change existing config."""
+        tracker = ConversationTracker(
+            api_key=valid_api_key,
+            conversation_id="conv-123",
+            endpoint="https://test.agentsight.io"
+        )
+        
+        original_api_key = tracker.config.api_key
+        original_conv_id = tracker.config.conversation_id
+        original_endpoint = tracker.config.endpoint
+        
+        # Call configure without params
+        tracker.configure()
+        
+        # All should remain the same
+        assert tracker.config.api_key == original_api_key
+        assert tracker.config.conversation_id == original_conv_id
+        assert tracker.config.endpoint == original_endpoint
+
+    def test_configure_updates_only_specified_params(self, valid_api_key):
+        """Test that configure only updates specified parameters."""
+        tracker = ConversationTracker(
+            api_key=valid_api_key,
+            conversation_id="conv-123",
+            endpoint="https://test.agentsight.io"
+        )
+        
+        # Update only conversation_id
+        tracker.configure(conversation_id="conv-new")
+        
+        assert tracker.config.conversation_id == "conv-new"
+        # Others should remain unchanged
+        assert tracker.config.api_key == valid_api_key
+        assert tracker.config.endpoint == "https://test.agentsight.io"
+
+    def test_singleton_returns_same_instance(self, valid_api_key):
+        """Test that multiple instantiations return the same singleton instance."""
+        tracker1 = ConversationTracker(api_key=valid_api_key, conversation_id="conv1")
+        tracker2 = ConversationTracker(api_key=valid_api_key, conversation_id="conv2")
+        
+        # Should be the same instance (singleton behavior)
+        assert tracker1 is tracker2
+        assert id(tracker1) == id(tracker2)
+        
+        # Should keep the first configuration (singleton ignores new params)
+        assert tracker1.config.conversation_id == "conv1"
+        assert tracker2.config.conversation_id == "conv1"
+        
+        # Should share everything (because they're the same object)
+        assert tracker1._tracked_data is tracker2._tracked_data
+        assert tracker1._lock is tracker2._lock
+        assert tracker1._http_client is tracker2._http_client
+
+    def test_singleton_uses_first_initialization_params(self, valid_api_key):
+        """Test that singleton uses parameters from first initialization only."""
+        # First initialization with conv1
+        tracker1 = ConversationTracker(api_key=valid_api_key, conversation_id="conv1")
+        
+        # Second "initialization" with conv2 - should be ignored
+        tracker2 = ConversationTracker(api_key="different_key", conversation_id="conv2")
+        
+        # Same instance
+        assert tracker1 is tracker2
+        
+        # Uses first initialization values
+        assert tracker2.config.api_key == valid_api_key
+        assert tracker2.config.conversation_id == "conv1"
+
+    def test_singleton_can_be_reconfigured_via_configure(self, valid_api_key):
+        """Test that singleton can be reconfigured using configure() method."""
+        tracker = ConversationTracker(api_key=valid_api_key, conversation_id="conv1")
+        
+        assert tracker.config.conversation_id == "conv1"
+        
+        # Reconfigure the singleton (this is the correct way to change config)
+        tracker.configure(conversation_id="conv2")
+        
+        assert tracker.config.conversation_id == "conv2"
+        
+        # Any reference to the tracker will have the updated config
+        tracker_ref = ConversationTracker()
+        assert tracker_ref is tracker
+        assert tracker_ref.config.conversation_id == "conv2"
+
+    def test_auto_initialized_instance_with_env_api_key(self, monkeypatch, valid_api_key):
+        """Test that auto-initialized tracker works with API key from env."""
+        from agentsight.client.main_client import ConversationTracker
+        from threading import Lock
+        
+        # MUST reset singleton before this test
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = Lock()
+        
+        # Set API key in environment
+        monkeypatch.setenv("AGENTSIGHT_API_KEY", valid_api_key)
+        
+        # Create instance (will read from env via Config)
+        tracker = ConversationTracker()
+        
+        # Should be initialized successfully with env API key
+        assert tracker is not None
+        assert tracker.config.api_key == valid_api_key
+        assert tracker._initialized is True
+
+    def test_module_level_tracker_is_singleton(self, valid_api_key):
+        """Test that module-level tracker instance follows singleton pattern."""
+        from agentsight.client.main_client import ConversationTracker
+        from threading import Lock
+        
+        # Reset singleton
+        ConversationTracker._instance = None
+        ConversationTracker._instance_lock = Lock()
+        
+        # Create an instance
+        tracker1 = ConversationTracker(api_key=valid_api_key)
+        
+        # Create another "instance"
+        tracker2 = ConversationTracker()
+        
+        # Should be the same
+        assert tracker1 is tracker2
+
+    def test_cannot_create_multiple_independent_instances(self, valid_api_key):
+        """Test that it's impossible to create independent instances."""
+        tracker1 = ConversationTracker(
+            api_key=valid_api_key,
+            conversation_id="conv1",
+            endpoint="https://endpoint1.com"
+        )
+        
+        tracker2 = ConversationTracker(
+            api_key="different_key",
+            conversation_id="conv2",
+            endpoint="https://endpoint2.com"
+        )
+        
+        # Must be the same instance
+        assert tracker1 is tracker2
+        
+        # Second initialization is completely ignored
+        assert tracker1.config.api_key == valid_api_key
+        assert tracker1.config.conversation_id == "conv1"
+        assert tracker1.config.endpoint == "https://endpoint1.com"
+        
+        # To change config, must use configure()
+        tracker1.configure(conversation_id="conv2")
+        assert tracker2.config.conversation_id == "conv2"

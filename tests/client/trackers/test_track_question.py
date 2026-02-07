@@ -5,12 +5,12 @@ from agentsight.exceptions import (
 
 
 class TestConversationTrackerTrackQuestion:
-    """Test cases for track_question method."""
+    """Test cases for track_human_message method."""
     
-    def test_track_question_valid_data(self, tracker):
+    def test_track_human_message_valid_data(self, tracker):
         """Test tracking a valid question."""
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("What is 2+2?")
+        tracker.track_human_message("What is 2+2?")
         
         # Check that data was stored
         assert "conv_123" in tracker._tracked_data
@@ -25,37 +25,37 @@ class TestConversationTrackerTrackQuestion:
         assert item["data"]["sender"] == "end_user"
         assert item["data"]["metadata"] == {}
     
-    def test_track_question_invalid_data_raises_exception(self, tracker):
+    def test_track_human_message_invalid_data_raises_exception(self, tracker):
         """Test that invalid question data raises InvalidQuestionDataException."""
         tracker.get_or_create_conversation("conv_123")
         with pytest.raises(InvalidQuestionDataException):
-            tracker.track_question("")
+            tracker.track_human_message("")
         
         with pytest.raises(InvalidQuestionDataException):
-            tracker.track_question("   ")
+            tracker.track_human_message("   ")
     
-    def test_track_question_with_metadata(self, tracker):
+    def test_track_human_message_with_metadata(self, tracker):
         """Test tracking question with metadata."""
         metadata = {"source": "test", "priority": "high"}
         
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question", metadata)
+        tracker.track_human_message("Test question", metadata)
         
         item = tracker._tracked_data["conv_123"]["items"][1]
         assert item["data"]["metadata"] == metadata
     
-    def test_track_question_with_none_metadata(self, tracker):
+    def test_track_human_message_with_none_metadata(self, tracker):
         """Test tracking question with None metadata."""
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question", None)
+        tracker.track_human_message("Test question", None)
         
         item = tracker._tracked_data["conv_123"]["items"][1]
         assert item["data"]["metadata"] == {}
     
-    def test_track_question_with_empty_metadata(self, tracker):
+    def test_track_human_message_with_empty_metadata(self, tracker):
         """Test tracking question with empty metadata."""
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("Test question", {})
+        tracker.track_human_message("Test question", {})
         
         item = tracker._tracked_data["conv_123"]["items"][1]
         assert item["data"]["metadata"] == {}
@@ -67,7 +67,7 @@ class TestConversationTrackerTrackQuestion:
         tracker.get_or_create_conversation("conv_123")
 
         for question in questions:
-            tracker.track_question(question)
+            tracker.track_human_message(question)
         
         # Check that all questions were stored (1 conv + 3 questions)
         assert len(tracker._tracked_data["conv_123"]["items"]) == 4
@@ -78,14 +78,14 @@ class TestConversationTrackerTrackQuestion:
             assert item["data"]["content"] == question
             assert item["type"] == "question"
     
-    def test_track_question_timestamp_progression(self, tracker):
+    def test_track_human_message_timestamp_progression(self, tracker):
         """Test that timestamps progress correctly for sequential questions."""
         import time
         
         tracker.get_or_create_conversation("conv_123")
-        tracker.track_question("First question")
+        tracker.track_human_message("First question")
         time.sleep(0.01)  # Small delay to ensure different timestamps
-        tracker.track_question("Second question")
+        tracker.track_human_message("Second question")
         
         items = tracker._tracked_data["conv_123"]["items"]
         assert len(items) == 3
@@ -101,7 +101,7 @@ class TestConversationTrackerTrackQuestion:
         assert len(timestamp1) > 0
         assert len(timestamp2) > 0
     
-    def test_track_question_with_special_characters(self, tracker):
+    def test_track_human_message_with_special_characters(self, tracker):
         """Test tracking questions with special characters."""
         special_questions = [
             "What's the meaning of life?",
@@ -114,7 +114,7 @@ class TestConversationTrackerTrackQuestion:
         
         tracker.get_or_create_conversation("conv_123")
         for i, question in enumerate(special_questions):
-            tracker.track_question(question)
+            tracker.track_human_message(question)
         
         # Check that all special characters are preserved
         for i, question in enumerate(special_questions):
@@ -122,11 +122,11 @@ class TestConversationTrackerTrackQuestion:
             item = tracker._tracked_data[conv_id]["items"][i+1]
             assert item["data"]["content"] == question
     
-    def test_track_question_validates_empty_content(self, tracker):
+    def test_track_human_message_validates_empty_content(self, tracker):
         """Test that empty content validation works correctly."""
         invalid_questions = ["", "   ", "\t", "\n", "\r\n"]
         
         tracker.get_or_create_conversation("conv_123")
         for question in invalid_questions:
             with pytest.raises(InvalidQuestionDataException):
-                tracker.track_question(question)
+                tracker.track_human_message(question)

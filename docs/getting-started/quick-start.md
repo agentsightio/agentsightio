@@ -25,148 +25,111 @@ uv add agentsight python-dotenv
 ```
 :::
 
-## Initial setup
-1. Add your API key to a .env file.
-2. Initialize the tracker in your code using the key.
+## Setup
 
-```python
-# Load API key and initialize AgentSight
-import os
-from agentsight import ConversationTracker
-from dotenv import load_dotenv
+1. Get your API key from the [AgentSight Dashboard](https://app.agentsight.io/)
+2. Add it to a `.env` file:
 
-load_dotenv()  # Load environment variables from .env file
-
-# Retrieve the API key
-api_key = os.getenv("AGENTSIGHT_API_KEY")
-
-# Initialize the conversation tracker
-tracker = ConversationTracker(api_key=api_key)
-```
-
-## Setting Your AgentSight API Key
-You need an **AgentSight API key** to send data to your AgentSight dashboard.
-Get your API key from the [AgentSight Dashboard](https://app.agentsight.io/).
-For security and convenience, we recommend setting it as an environment variable.
-
-:::tabs
-== Export to CLI
 ```bash
-export AGENTSIGHT_API_KEY="your_agentsight_api_key_here"
+AGENTSIGHT_API_KEY="your_api_key_here"
 ```
-== .env file
-```
-AGENTSIGHT_API_KEY="your_agentsight_api_key_here"
-```
-:::
 
-> Note: If you're using a `.env` file, make sure to call `load_dotenv()` before initializing ConversationTracker
+## Basic Usage
 
-This code will automatically use the API key from the `.env`:
 ```python
+from agentsight import conversation_tracker
 from dotenv import load_dotenv
+
 load_dotenv()
 
-tracker = ConversationTracker()
-```
-
-## Conversation Tracking
-Conversations are uniquely identified to help you maintain context across multiple interactions. Once you create a conversation with your ID, use that same ID to reference your tracking methods with that conversation.
-
-Here is how to specify a conversation and `conversation_id`:
-```python
-conversation_id="your_conversation_id"
-tracker.get_or_create_conversation(
-    conversation_id=conversation_id
+# 1. Create a conversation
+conversation_tracker.get_or_create_conversation(
+    conversation_id="chat-123",
+    customer_id="user-456",
+    name="Support Chat"
 )
+
+# 2. Track user message
+conversation_tracker.track_human_message("How do I reset my password?")
+
+# 3. Track AI response
+conversation_tracker.track_agent_message("Click 'Forgot Password' on the login page.")
+
+# 4. Send all tracked data
+response = conversation_tracker.send_tracked_data()
+print(f"✅ Sent {response['summary']['questions']} questions and {response['summary']['answers']} answers")
 ```
 
-:::info Conversation ID Priority
-You can only pass conversation ID in `get_or_create_conversation`. If the `conversation_id` is not set, we will create one automatically for you which could result in creating new conversation in each iteration.
+That's it! Your conversation is now tracked in AgentSight.
+
+:::info Conversation tracking
+Conversations are uniquely identified to help you maintain context across multiple interactions. Once you create a conversation with your ID, use that same ID to reference your tracking methods with that conversation.
 :::
 
-> You can use `generate_conversation_id` function `from agentsight.helpers import generate_conversation_id`
+## What Can You Track?
 
-How to pass tracking data about the conversation like geographical data, source and other, visit [Tracking conversation](../tracking/track-conversations.md)
+- **Messages** - User questions and AI responses
+- **Actions** - Tool usage, database queries, API calls
+- **Attachments** - Files, images, documents
+- **Buttons** - User interactions and clicks
+- **Tokens** - LLM token usage for cost tracking
 
-## Tracking Data
+## Three SDK Clients
 
-### Track Question
-Capture only the user's question without an immediate answer.
+AgentSight provides three clients for different needs:
 
-```python
-tracker.track_question("How does machine learning work?")
-```
+| Client | Purpose | Import |
+|--------|---------|--------|
+| **ConversationTracker** | Track conversations in real-time | `from agentsight import conversation_tracker` |
+| **ConversationManager** | Manage conversations (rename, feedback, delete...) | `from agentsight import conversation_manager` |
+| **AgentSightAPI** | Fetch and query conversation data | `from agentsight import agentsight_api` |
 
-> Read more [Track Question](../tracking/track-question.md)
+All clients are automatically initialized and ready to use.
 
-### Track Answer
-Log an AI response independently of a question.
-```python
-tracker.track_answer("Machine learning involves training algorithms...")
-```
-
-> Read more [Track Answer](../tracking/track-answer.md)
-
-### Track Token Usage
-Track usage tokens for your workflows.
+## Example: Complete Conversation
 
 ```python
-tracker.track_token_usage(
-    prompt_tokens=100,
-    completion_tokens=25,
-    total_tokens=125
+from agentsight import conversation_tracker
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Create conversation
+conversation_tracker.get_or_create_conversation(
+    conversation_id="support-123",
+    name="Password Reset"
 )
-```
 
-> Read more [Track Token Usage](../tracking/track-tokens.md)
+# User asks
+conversation_tracker.track_human_message("I can't log in")
 
-### Track Action
-Record specific actions or tool usage during an interaction.
-
-```python
-tracker.track_action(
-    action_name="data_retrieval",
-    duration_ms=250,
-    tools_used={"database": "PostgreSQL"},
-    response="Data successfully retrieved"
+# AI performs action
+conversation_tracker.track_action(
+    action_name="check_database",
+    duration_ms=150,
+    response="User found"
 )
-```
 
-> Read more [Track Action](../tracking/track-actions.md)
+# AI responds
+conversation_tracker.track_agent_message("I found your account. Let me help reset your password.")
 
-### Track Button
-Log user interface interactions and button clicks.
-
-```python
-tracker.track_button(
-    button_event="user_selection",
-    label="Confirm Order",
-    value="order_id_123"
+# Track token usage
+conversation_tracker.track_token_usage(
+    prompt_tokens=45,
+    completion_tokens=32,
+    total_tokens=77
 )
-```
 
-> Read more [Track Button](../tracking/track-buttons.md)
-
-### Track Attachments
-Send file attachments separately or with other tracking methods.
-
-```python
-tracker.track_attachments(
-    attachments=[{
-        'filename': 'report.pdf',
-        'content': base64_encoded_content,
-        'mime_type': 'application/pdf'
-    }],
-    mode='base64' # default
+# User clicks button
+conversation_tracker.track_button(
+    button_event="password_reset",
+    label="Send Reset Email",
+    value="confirmed"
 )
+
+# Send everything
+conversation_tracker.send_tracked_data()
 ```
-
-Attachment Modes:
-- **Base64:** Encode files directly in payload
-- **Form Data:** Send files as multipart form data
-
-> Read more [Track Attachment](../tracking/track-attachments.md)
 
 ## Next Steps
 Now that you’ve set up the basics, let’s continue with looking into Core Concepts

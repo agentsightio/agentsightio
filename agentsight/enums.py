@@ -42,9 +42,10 @@ class AttachmentMode(Enum):
     BASE64 = "base64"
     FORM_DATA = "form_data"
 
-class Sender(Enum):
+class Sender(str, Enum):
     USER = "end_user"
     AGENT = "agent"
+    SYSTEM = "system"
 
 class Environment(Enum):
     PRODUCTION = "production"
@@ -73,3 +74,9 @@ class TokenHandlerType(Enum):
         except ValueError:
             valid = ", ".join([v.value for v in cls])
             raise ValueError(f"Invalid token handler type '{value}'. Expected one of: {valid}")
+        
+class Sentiment(str, Enum):
+    """Sentiment values for conversation feedback."""
+    POSITIVE = "positive"
+    NEUTRAL = "neutral"
+    NEGATIVE = "negative"

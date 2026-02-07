@@ -2,15 +2,15 @@
 outline: deep
 ---
 
-# Track Answer Method
+# Track Agent Message Method
 
-The `track_answer()` method allows you to log individual AI responses when you want to track an answer separately from its corresponding question, or in scenarios with complex, multi-step interactions.
+The `track_agent_message()` method allows you to log individual AI responses when you want to track an answer separately from its corresponding question, or in scenarios with complex, multi-step interactions.
 
 ## Method Signature
 
 ```python
-def track_answer(
-    answer: str,
+def track_agent_message(
+    message: str,
     conversation_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -20,16 +20,14 @@ def track_answer(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `answer` | `str` | Yes | The AI agent's response |
-| `conversation_id` | `str` | No | Unique identifier for the conversation (auto-generated if not provided) |
+| `message` | `str` | Yes | The AI agent's response |
 | `metadata` | `Dict[str, Any]` | No | Additional contextual information |
 
 ### Complete Usage Example
 
 ```python
-tracker.track_answer(
-    answer="Based on your requirements, I suggest using our Enterprise solution.",
-    conversation_id="sales_consultation_789",
+tracker.track_agent_message(
+    message="Based on your requirements, I suggest using our Enterprise solution.",
     metadata={
         "consultation_stage": "recommendation",
         "product_category": "enterprise_software",
