@@ -45,22 +45,18 @@ AgentSight complements observability platforms. It’s not built for tracing or 
 ## Quick start
 Get up and running with just a few lines of code to track complete conversations:
 ```python
-from agentsight import ConversationTracker
+from agentsight import conversation_tracker
 
-# Initialize tracker
-tracker = ConversationTracker(
-    api_key="your_api_key_here"
-)
-tracker.get_or_create_conversation(
+conversation_tracker.get_or_create_conversation(
     conversation_id="your_conversation_id"
 )
-tracker.track_human_message(
+conversation_tracker.track_human_message(
     message="What's the weather like today?",
 )
-tracker.track_agent_message(
+conversation_tracker.track_agent_message(
     message="It's sunny with clear skies."
 )
-tracker.send_tracked_data()
+conversation_tracker.send_tracked_data()
 ```
 
 ## Learn More
