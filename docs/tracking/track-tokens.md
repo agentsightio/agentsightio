@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Track Token Usage Method
 
 The `track_token_usage()` method allows you to monitor and record token consumption for your AI agent's interactions. This provides visibility into the computational costs associated with LLM calls and embeddings, helping you optimize performance and manage usage costs.

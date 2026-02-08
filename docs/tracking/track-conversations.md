@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Track Conversations
 
 The `get_or_create_conversation()` method creates or retrieves a conversation context for tracking. This establishes the conversation scope for all subsequent tracking operations.

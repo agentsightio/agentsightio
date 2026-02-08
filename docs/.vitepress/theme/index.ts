@@ -4,6 +4,7 @@ import type { Theme } from 'vitepress'
 import DefaultTheme from 'vitepress/theme'
 import './style.css'
 import { enhanceAppWithTabs } from 'vitepress-plugin-tabs/client'
+import CopyMarkdownButton from './components/CopyMarkdownButton.vue'
 
 export default {
   extends: DefaultTheme,
@@ -13,6 +14,9 @@ export default {
     })
   },
   enhanceApp({ app, router, siteData }) {
-    enhanceAppWithTabs(app)
+    enhanceAppWithTabs(app),
+    app.component('CopyMarkdownButton', CopyMarkdownButton)
   }
 } satisfies Theme
+
+

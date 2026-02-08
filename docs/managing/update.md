@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Update Conversation
 
 The `update_conversation()` method allows you to update multiple fields of a conversation in a single request. This is more efficient than calling individual methods when you need to change several properties at once.

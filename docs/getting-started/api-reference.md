@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # API Reference
 
 AgentSight provides a comprehensive REST API for retrieving, managing, and analyzing your AI agent conversation data. This reference is for developers using the API directly with any programming language or HTTP client.

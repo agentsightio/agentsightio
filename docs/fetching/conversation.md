@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Fetch Conversation
 
 The `fetch_conversation()` method allows you to retrieve a single conversation with all its messages, actions, attachments, and feedback. This provides a complete detailed view of a specific conversation.

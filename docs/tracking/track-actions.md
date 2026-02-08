@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Track Action Method
 
 The `track_action()` method allows you to log specific functions, tools, or operations that your AI agent uses directly in the process of generating an answer. This tracks the "work" your agent performs during answer generation, such as function calls, tool usage, or computational steps.

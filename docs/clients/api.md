@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # AgentSightAPI
 
 The `AgentSightAPI` is your tool for fetching and querying conversation data from AgentSight. Use it to retrieve conversations, apply filters, search messages.
@@ -81,7 +83,7 @@ conversations = agentsight_api.fetch_conversations(
 )
 ```
 
-> 📖 **[Learn more: Fetch Conversations →](../fetching/fetch-conversations.md)**
+> 📖 **[Learn more: Fetch Conversations →](../fetching/conversations.md)**
 
 ### Fetch Single Conversation
 
@@ -93,7 +95,7 @@ conversation = agentsight_api.fetch_conversation("conv-123")
 conversation = agentsight_api.fetch_conversation(42)
 ```
 
-> 📖 **[Learn more: Fetch Conversation →](../fetching/fetch-conversation.md)**
+> 📖 **[Learn more: Fetch Conversation →](../fetching/conversation.md)**
 
 ### Fetch Conversation Attachments
 
@@ -106,4 +108,4 @@ for message in attachments['messages']:
         print(f"File: {att['filename']}")
 ```
 
-> 📖 **[Learn more: Fetch Attachments →](../fetching/fetch-attachments.md)**
+> 📖 **[Learn more: Fetch Attachments →](../fetching/attachments.md)**

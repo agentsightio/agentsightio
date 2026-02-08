@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Fetch Conversation Attachments
 
 The `fetch_conversation_attachments()` method allows you to retrieve all attachments from a conversation, organized by message. This provides a focused view of all files, images, and documents shared during a conversation.

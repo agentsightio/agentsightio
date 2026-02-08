@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Fetch Conversations
 
 The `fetch_conversations()` method allows you to retrieve a paginated list of conversations with powerful filtering options. Use it to build dashboards, query specific conversations, or export data.

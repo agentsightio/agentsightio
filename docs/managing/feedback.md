@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Submit Feedback
 
 The `submit_feedback()` method allows you to submit end-user feedback for a conversation. This feedback is automatically tagged as coming from customers and is used in analytics to measure user satisfaction.

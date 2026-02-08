@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # FastAPI Integration with LangChain
 
 AgentSight's in-memory architecture is perfect for FastAPI applications using LangChain. Track conversations instantly during request processing, then send data in background tasks to avoid impacting response times.

@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Dashboard Metrics Overview
 
 Your AgentSight dashboard provides real-time insights into user engagement, behavior, and agent performance.  

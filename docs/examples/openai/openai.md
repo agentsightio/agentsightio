@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # OpenAI Integration Example
 
 AgentSight provides seamless integration with OpenAI's GPT models, allowing you to track conversations, function calls, and performance metrics automatically.

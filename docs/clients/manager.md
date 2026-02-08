@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # ConversationManager
 
 The `ConversationManager` is your tool for managing and updating existing conversations. Use it to rename conversations, add user feedback, mark favorites, update metadata, and delete conversations.

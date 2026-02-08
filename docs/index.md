@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Introduction
 
 **AgentSight** is a conversation tracking, analytics, and **database platform** built to provide your **clients** with access to their conversational AI data, including **dashboards, transcripts, and analytics overviews**.

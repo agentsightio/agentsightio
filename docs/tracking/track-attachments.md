@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Track Attachments Method
 
 The `track_attachments()` method allows you to log file attachments separately from your conversations. This is ideal for handling large files, multiple attachments, or when you need specialized file handling options.

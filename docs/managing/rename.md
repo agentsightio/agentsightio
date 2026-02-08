@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Rename Conversation
 
 The `rename_conversation()` method allows you to update the name of an existing conversation. Use descriptive names to organize conversations and make them easier to find in your analytics dashboard.

@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # ConversationTracker
 
 The `ConversationTracker` is your primary tool for tracking AI agent conversations in real-time. It stores all events in memory with precise timestamps, then sends them in chronological order when you're ready.
@@ -90,7 +92,7 @@ conversation_tracker.track_human_message(
 )
 ```
 
-> 📖 **[Learn more: Track User Messages →](../tracking/track-human-message.md)**
+> 📖 **[Learn more: Track User Messages →](../tracking/track-question.md)**
 
 ### Track Agent Responses
 
@@ -101,7 +103,7 @@ conversation_tracker.track_agent_message(
 )
 ```
 
-> 📖 **[Learn more: Track Agent Responses →](../tracking/track-agent-message.md)**
+> 📖 **[Learn more: Track Agent Responses →](../tracking/track-answer.md)**
 
 ### Track Actions
 
@@ -266,10 +268,3 @@ def handle_session(queries):
 ✅ **Rich Metadata** - Add context to any tracked event  
 ✅ **Token Tracking** - Monitor LLM usage and costs  
 ✅ **Multi-Conversation** - Handle multiple conversations simultaneously  
-
-## Related Documentation
-
-- **[ConversationManager](./conversation-manager.md)** - Manage existing conversations
-- **[AgentSightAPI](./agentsight-api.md)** - Fetch and query conversation data
-- **[Tracking Methods](../tracking/)** - Detailed tracking guides
-- **[Best Practices](../best-practices/)** - Production tips

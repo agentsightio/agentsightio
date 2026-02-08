@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentsight"
-version = "0.0.29"
+version = "0.0.43"
 authors = [
   { name="Moreno Franjković", email="moreno.franjkovic@outlook.com" },
 ]

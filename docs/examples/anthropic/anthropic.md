@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Anthropic Integration Example
 
 AgentSight provides seamless integration with Anthropic's Claude models, allowing you to track conversations, tool usage, and performance metrics automatically.

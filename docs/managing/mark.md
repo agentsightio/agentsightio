@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Mark Conversation
 
 The `mark_conversation()` method allows you to mark or unmark a conversation as favorite/important. Use this to highlight conversations.

@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Core Concepts
 
 Understanding AgentSight's architecture will help you effectively track and analyze your AI agent conversations.
@@ -252,12 +254,3 @@ The AgentSight dashboard provides real-time visibility into your AI agent's perf
 - 🏷️ **White-Labeling** - Branded dashboard for each client
 
 <!-- For full usage details, see the [Dashboard User Guide](/dashboard). -->
-
-## Next Steps
-
-Now that you understand the core concepts:
-
-- **[Tracking Guide](../tracking/)** - Learn all tracking methods
-- **[Managing Conversations](../managing/)** - Rename, feedback, delete
-- **[Fetching Data](../fetching/)** - Query and analyze conversations
-- **[Best Practices](../best-practices/)** - Production tips

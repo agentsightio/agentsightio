@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Delete Conversation
 
 The `delete_conversation()` method allows you to **SOFT** delete a conversation. Soft deletion sets `is_deleted=True` and adds a `deleted_at` timestamp, but the conversation remains in the database and can be retrieved if needed.

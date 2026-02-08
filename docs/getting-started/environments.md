@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Manage Environments
 
 Testing before going live is crucial and the same applies to your AI.

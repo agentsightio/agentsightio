@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Track Interaction
 
 The interaction tracking feature allows you to monitor whether users are actually engaging with your AI agents, not just visiting pages where they're available. This provides valuable insights into user behavior and engagement rates.

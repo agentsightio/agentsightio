@@ -109,16 +109,6 @@ class ConversationManager:
     def _resolve_conversation_pk(self, conversation_id: Union[int, str]) -> int:
         """
         Convert conversation_id (string or int) to database pk (int).
-        
-        Args:
-            conversation_id: Either string conversation_id or integer database pk
-            
-        Returns:
-            Integer database pk
-            
-        Raises:
-            ValueError: If conversation_id is invalid
-            APIException: If conversation not found
         """
         if isinstance(conversation_id, int):
             # Already a pk, return as-is

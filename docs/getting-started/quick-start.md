@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Quickstart
 Get started with AgentSight in seconds. With just a few lines of code, you can start monitoring your AI agent's conversations, questions, answers, and more. No setup or infrastructure required.
 

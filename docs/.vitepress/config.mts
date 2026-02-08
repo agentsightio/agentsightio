@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitepress'
 import { tabsMarkdownPlugin } from 'vitepress-plugin-tabs'
+import fs from 'fs'
+import path from 'path'
 
 const siteTitle = "AgentSight.io";
 const siteDesc = "Seamlessly track AI conversations, metrics, and deliver client-facing insights and dashboards.";
@@ -10,6 +12,19 @@ export default defineConfig({
   base: '/',
   title: siteTitle,
   description: siteDesc,
+  async transformPageData(pageData) {
+    if (!pageData.relativePath) return
+  
+    const filePath = path.join(process.cwd(), pageData.relativePath)
+  
+    const extended = pageData as typeof pageData & { raw?: string }
+  
+    try {
+      extended.raw = fs.readFileSync(filePath, 'utf-8')
+    } catch (err) {
+      console.warn('[copy-md] Could not read markdown file:', filePath)
+    }
+  },
   head: [
     // Open Graph
     ['meta', { property: 'og:type', content: 'website' }],

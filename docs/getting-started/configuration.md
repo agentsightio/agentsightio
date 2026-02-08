@@ -2,6 +2,8 @@
 outline: deep
 ---
 
+<CopyMarkdownButton />
+
 # Environment Configuration
 
 Set up AgentSight effortlessly with environment variables. Just add your API key to get started!

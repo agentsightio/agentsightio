@@ -146,14 +146,18 @@ class ConversationTracker:
     def track_human_message(
         self,
         message: str,
+        attachments: Optional[List[AttachmentInput]] = None,
+        attachment_mode: Union[str, AttachmentMode] = AttachmentMode.BASE64.value,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Track a message (stores in memory for later sending).
+        Track a user message (stores in memory for later sending).
 
         Args:
-            message (str): Users message
-            metadata (dict, optional): Additional metadata
+            message (str): User's message
+            attachments (List[AttachmentInput], optional): Files to attach to this message
+            attachment_mode (str|AttachmentMode, optional): 'base64' (default) or 'form_data'
+            metadata (dict, optional): Additional metadata for the message
         """        
         data = {
             "content": message,
@@ -165,20 +169,47 @@ class ConversationTracker:
         if not validate_content_data(data):
             raise InvalidQuestionDataException("Invalid question data provided.")
 
+        # Process attachments if provided
+        if attachments:
+            # Convert string mode to enum
+            if isinstance(attachment_mode, str):
+                mode_map = {
+                    'base64': AttachmentMode.BASE64,
+                    'form_data': AttachmentMode.FORM_DATA,
+                    'form-data': AttachmentMode.FORM_DATA
+                }
+                if attachment_mode.lower() not in mode_map:
+                    raise ValueError(f"Invalid mode: {attachment_mode}. Must be 'base64' or 'form_data'")
+                attachment_mode = mode_map[attachment_mode.lower()]
+            
+            # Validate and process attachments
+            processed_attachments = validate_and_process_attachments_flexible(attachments, attachment_mode)
+            
+            # Store attachments with the message data
+            data['attachments'] = processed_attachments
+            data['attachment_mode'] = attachment_mode.value
+            
+            logger.info(f"Stored question with {len(processed_attachments)} attachment(s) for conversation: {self.config.conversation_id}")
+        else:
+            logger.info(f"Stored question for conversation: {self.config.conversation_id}")
+
         self._add_tracking_item('question', data)
-        logger.info(f"Stored question for conversation: {self.config.conversation_id}")
 
     def track_agent_message(
         self,
         message: str,
+        attachments: Optional[List[AttachmentInput]] = None,
+        attachment_mode: Union[str, AttachmentMode] = AttachmentMode.BASE64.value,
         metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Track an message (stores in memory for later sending).
+        Track an agent message (stores in memory for later sending).
 
         Args:
-            message (str): The message provided
-            metadata (dict, optional): Additional metadata
+            message (str): Agent's message
+            attachments (List[AttachmentInput], optional): Files to attach to this message
+            attachment_mode (str|AttachmentMode, optional): 'base64' (default) or 'form_data'
+            metadata (dict, optional): Additional metadata for the message
         """        
         data = {
             "content": message,
@@ -190,8 +221,31 @@ class ConversationTracker:
         if not validate_content_data(data):
             raise InvalidAnswerDataException("Invalid answer data provided.")
 
+        # Process attachments if provided
+        if attachments:
+            # Convert string mode to enum
+            if isinstance(attachment_mode, str):
+                mode_map = {
+                    'base64': AttachmentMode.BASE64,
+                    'form_data': AttachmentMode.FORM_DATA,
+                    'form-data': AttachmentMode.FORM_DATA
+                }
+                if attachment_mode.lower() not in mode_map:
+                    raise ValueError(f"Invalid mode: {attachment_mode}. Must be 'base64' or 'form_data'")
+                attachment_mode = mode_map[attachment_mode.lower()]
+            
+            # Validate and process attachments
+            processed_attachments = validate_and_process_attachments_flexible(attachments, attachment_mode)
+            
+            # Store attachments with the message data
+            data['attachments'] = processed_attachments
+            data['attachment_mode'] = attachment_mode.value
+            
+            logger.info(f"Stored answer with {len(processed_attachments)} attachment(s) for conversation: {self.config.conversation_id}")
+        else:
+            logger.info(f"Stored answer for conversation: {self.config.conversation_id}")
+
         self._add_tracking_item('answer', data)
-        logger.info(f"Stored answer for conversation: {self.config.conversation_id}")
 
     def track_attachments(
         self,
@@ -411,7 +465,6 @@ class ConversationTracker:
             
             if self._token_handler is not None:
                 self._add_token_usage(conv_id)
-                # here we need to reset the token counter
             
             items_to_send = copy.deepcopy(self._tracked_data[conv_id]['items'])
             
@@ -437,6 +490,8 @@ class ConversationTracker:
             data = item['data']
             data['timestamp'] = timestamp
 
+            conversation_id_str = data.get('conversation_id')
+
             if item_type != 'conversation':
                 data['conversation'] = conversation_id
 
@@ -444,21 +499,64 @@ class ConversationTracker:
                 if item_type == 'conversation':
                     response = self._http_client.send_payload('conversation', data)
                     conversation_id = response['id']
+                    
                 elif item_type == 'question':
+                    attachments = data.pop('attachments', None)
+                    attachment_mode = data.pop('attachment_mode', None)
+
                     response = self._http_client.send_payload('question', data)
+                    message_id = response.get('id')
+                    
+                    if attachments and message_id:
+                        self._send_message_attachments(
+                            attachments=attachments,
+                            message_id=message_id,
+                            sender=data['sender'],
+                            mode=attachment_mode,
+                            conversation_id=conversation_id,
+                            metadata=data.get('metadata', {}),
+                            conversation_id_str=conversation_id_str
+                        )
+                    
                     responses['summary']['questions'] += 1
+                    
                 elif item_type == 'answer':
+                    attachments = data.pop('attachments', None)
+                    attachment_mode = data.pop('attachment_mode', None)
+
                     response = self._http_client.send_payload('answer', data)
+                    message_id = response.get('id')
+                    
+                    # If there are attachments, send them linked to this message
+                    if attachments and message_id:
+                        self._send_message_attachments(
+                            attachments=attachments,
+                            message_id=message_id,
+                            sender=data['sender'],
+                            mode=attachment_mode,
+                            conversation_id=conversation_id,
+                            metadata=data.get('metadata', {})
+                        )
+                    
                     responses['summary']['answers'] += 1
+                    
                 elif item_type == 'attachments':
                     if data['mode'] == AttachmentMode.BASE64.value:
                         response = self._http_client.send_payload('attachments', data)
                     else:  # FORM_DATA mode
-                        response = self._http_client.send_form_data_payload(data['attachments'], conversation_id, data['sender'], data['metadata'], timestamp)
+                        response = self._http_client.send_form_data_payload(
+                            data['attachments'], 
+                            conversation_id, 
+                            data['sender'], 
+                            data['metadata'],
+                            timestamp
+                        )
                     responses['summary']['attachments'] += 1
+                    
                 elif item_type == 'action':
                     response = self._http_client.send_payload('action', data)
                     responses['summary']['actions'] += 1
+                    
                 elif item_type == 'button':
                     response = self._http_client.send_payload('button', data)
                     responses['summary']['buttons'] += 1
@@ -490,6 +588,47 @@ class ConversationTracker:
 
         logger.info(f"Completed sending tracked data. Summary: {responses['summary']}")
         return responses
+
+    def _send_message_attachments(
+        self,
+        attachments: List[Dict[str, Any]],
+        message_id: int,
+        sender: str,
+        mode: str,
+        conversation_id: int,
+        metadata: Optional[Dict[str, Any]] = None,
+        conversation_id_str: Optional[str] = None
+    ) -> None:
+        """
+        Helper method to send attachments linked to a specific message.
+        """
+        try:
+            if mode == AttachmentMode.BASE64.value:
+                payload = {
+                    "attachments": attachments,
+                    "message": message_id,
+                    "conversation": str(conversation_id),
+                    "conversation_id": str(conversation_id_str),
+                    "sender": sender,
+                    "metadata": metadata or {}
+                }
+                self._http_client.send_payload('attachments', payload)
+                
+            else:  # FORM_DATA mode
+                # Send as form data with message_id
+                self._http_client.send_form_data_payload_with_message(
+                    attachments=attachments,
+                    message_id=message_id,
+                    conversation_id=str(conversation_id),
+                    sender=sender,
+                    metadata=metadata or {}
+                )
+            
+            logger.debug(f"Successfully sent {len(attachments)} attachment(s) for message {message_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send attachments for message {message_id}: {e}")
+            # Don't raise - message was already sent successfully
 
     def get_tracked_data_summary(
         self
