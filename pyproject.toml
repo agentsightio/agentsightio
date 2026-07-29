@@ -18,7 +18,12 @@ classifiers = [
 license = "MIT"
 keywords = ["AI", "AI Agents", "Monitoring", "Tracking", "Analytics", "Chatbot"]
 dependencies = [
-    "requests>=2.25.0"
+    "requests>=2.25.0",
+    # The 1.0 SDK is built on OpenTelemetry. The SDK package (not just the API)
+    # is required because AgentSight supplies its own TracerProvider, span
+    # processors and exporter. No OTLP exporter and no Collector — spans go to
+    # the AgentSight REST API directly.
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +33,13 @@ test = [
     "pytest-mock",
     "pytest-asyncio",
     "requests-mock",
+    # Provider integrations are tested against a mock transport rather than the
+    # network, which needs the provider SDK present to exercise its real
+    # streaming decoder. Tests skip cleanly when one is absent.
+    "httpx",
+    "openai",
+    "langchain-core",
+    "llama-index-core",
 ]
 
 dev = [

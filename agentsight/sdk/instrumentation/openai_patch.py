@@ -1,0 +1,594 @@
+"""Token capture for the ``openai`` SDK.
+
+The patch goes on the resource *classes*, not on a client instance, because one
+class patch covers every route to the same method: ``client.chat``,
+``client.beta.chat`` (literally the same class object), the module-level
+``openai.chat`` proxy, and ``AzureOpenAI``, which subclasses ``OpenAI`` and
+reuses its resources. Patching them by name instead would stack two wrappers on
+one method and double every token count.
+
+``.parse()`` is patched separately and deliberately. It does not route through
+``create`` — it posts to ``/chat/completions`` itself with a ``post_parser``
+attached — so a patch on ``create`` alone would miss every structured-output
+call, which in an agent codebase is often the majority of them. ``.stream()``
+needs no patch: it builds its request through ``create``.
+"""
+
+import functools
+import inspect
+import weakref
+from typing import Any, Callable, NamedTuple, Optional, Tuple
+
+from agentsight.sdk.instrumentation.base import (
+    already_patched,
+    capturing,
+    from_openai,
+    mark_patched,
+    now_ns,
+    record_llm_call,
+)
+from agentsight.sdk.semconv import LLMAttributes
+
+#: Set by ``with_raw_response`` / ``with_streaming_response`` before they call
+#: the very same ``create`` we patched.
+_RAW_RESPONSE_HEADER = "X-Stainless-Raw-Response"
+
+#: Whether we are still able to take back the chunk we ask for. Asking for the
+#: usage chunk and then failing to swallow it is the one failure in this file
+#: that can break a user's loop, so the answer is settled from the stream
+#: classes at install time — before any request — and cleared again if a live
+#: stream still surprises us. When it is false, streamed calls report zero
+#: tokens, which is the correct thing to lose.
+_INJECTION_SAFE = True
+
+
+# ---------------------------------------------------------------------------
+# Where the usage lives, per endpoint family
+# ---------------------------------------------------------------------------
+
+
+def _chunk_usage(item: Any) -> Optional[Tuple[Any, Optional[str]]]:
+    """Chat and legacy completions report on the chunk itself.
+
+    Keyed on ``usage is not None`` rather than on empty ``choices``: an
+    empty-choices chunk with no usage is representable, and ``n > 1`` does not
+    change the shape.
+    """
+    usage = getattr(item, "usage", None)
+    if usage is None:
+        return None
+    return usage, getattr(item, "model", None)
+
+
+def _event_usage(item: Any) -> Optional[Tuple[Any, Optional[str]]]:
+    """Responses streams carry usage on the terminal event's response object.
+
+    ``response.completed``, ``response.incomplete`` and ``response.failed`` all
+    carry one; every earlier event carries a response with ``usage`` unset, so
+    matching on the usage rather than on the event type covers all three
+    without a list that goes stale when a fourth is added.
+    """
+    response = getattr(item, "response", None)
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    return usage, getattr(response, "model", None)
+
+
+class _Surface(NamedTuple):
+    """What differs between the endpoint families. Everything else is shared."""
+
+    operation: str
+    extract: Callable[[Any], Optional[Tuple[Any, Optional[str]]]]
+    #: Whether ``stream_options={"include_usage": True}`` exists here. The
+    #: Responses API has no such knob — usage rides the terminal event and
+    #: arrives whether or not anyone asked for it.
+    injectable: bool
+
+
+_CHAT = _Surface("chat", _chunk_usage, True)
+_TEXT = _Surface("text_completion", _chunk_usage, True)
+_RESPONSES = _Surface("chat", _event_usage, False)
+
+
+# ---------------------------------------------------------------------------
+# Emitting
+# ---------------------------------------------------------------------------
+
+
+def _record_usage(
+    usage: Any,
+    model: Optional[str],
+    operation: str,
+    start_time_ns: int,
+    end_time_ns: int,
+    streaming: bool,
+    logger: Any,
+) -> None:
+    """Emit one ``llm`` span. Never raises into the caller."""
+    try:
+        record_llm_call(
+            **from_openai(usage, model),
+            operation=operation,
+            start_time_ns=start_time_ns,
+            end_time_ns=end_time_ns,
+            extra={LLMAttributes.STREAMING: True} if streaming else None,
+        )
+    except Exception:
+        logger.debug("agentsight: openai span failed", exc_info=True)
+
+
+def _record_embeddings(
+    result: Any,
+    model: Optional[str],
+    start_time_ns: int,
+    end_time_ns: int,
+    logger: Any,
+) -> None:
+    """Embedding tokens are their own billable line with their own price.
+
+    Deliberately not routed through ``from_openai()``: that would file
+    ``prompt_tokens`` as chat input and price them at chat rates.
+    """
+    try:
+        usage = getattr(result, "usage", None)
+        record_llm_call(
+            "openai",
+            getattr(result, "model", None) or model,
+            embedding_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            operation="embeddings",
+            start_time_ns=start_time_ns,
+            end_time_ns=end_time_ns,
+        )
+    except Exception:
+        logger.debug("agentsight: openai embeddings span failed", exc_info=True)
+
+
+class _StreamRecorder:
+    """Holds a streamed call open until the stream ends, however it ends.
+
+    The span cannot be emitted when ``create`` returns: at that point nothing
+    has been generated yet, and a span covering only the HTTP handshake answers
+    none of the questions duration is there to answer.
+    """
+
+    def __init__(
+        self,
+        surface: _Surface,
+        model: Optional[str],
+        start_time_ns: int,
+        logger: Any,
+    ):
+        self._surface = surface
+        self._model = model
+        self._start_time_ns = start_time_ns
+        self._logger = logger
+        self._usage: Any = None
+        self._finished = False
+
+    def capture(self, item: Any) -> bool:
+        """Read the usage off ``item``. True when it carried nothing else.
+
+        Only a chunk with no ``choices`` is ours to drop. Azure, vLLM, LiteLLM
+        and the other OpenAI-compatible servers attach usage to the last
+        *content* chunk instead of appending a usage-only one, and some send it
+        on every chunk; swallowing those deletes the user's answer, which is a
+        far worse failure than missing tokens.
+        """
+        try:
+            found = self._surface.extract(item)
+            if found is None:
+                return False
+            # The report is the whole-request total, not a delta: the last one
+            # seen replaces the previous, it never accumulates.
+            self._usage, model = found
+            if model:
+                self._model = model
+            return not getattr(item, "choices", None)
+        except Exception:
+            self._logger.debug("agentsight: openai usage read failed", exc_info=True)
+            return False
+
+    def finish(self) -> None:
+        # A stream can reach its end more than once — exhausted, then closed,
+        # then collected — and a second span here would double the tokens.
+        if self._finished:
+            return
+        self._finished = True
+        _record_usage(
+            self._usage,
+            self._model,
+            self._surface.operation,
+            self._start_time_ns,
+            now_ns(),
+            True,
+            self._logger,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+
+def _inject_usage_option(kwargs: dict) -> bool:
+    """Ask for the usage the caller forgot to ask for. Returns whether we did.
+
+    A streamed call reports no usage at all unless
+    ``stream_options={"include_usage": True}`` is set, so without this a
+    streaming agent has no token counts and no costs. But the option is not
+    free: the provider then appends a final chunk with ``usage`` set and
+    ``choices == []``, and the loop everyone writes —
+    ``for chunk in stream: print(chunk.choices[0].delta.content)`` — raises
+    IndexError on it.
+
+    So the injection is only half of the bargain. Whoever injects must also
+    swallow that chunk on the way out, which is what ``swallow`` does in
+    :func:`_watch_stream`. When the caller set the option themselves the whole
+    stream passes through untouched and we simply read the usage as it goes by.
+
+    ``NOT_GIVEN`` is falsy, so both ``stream`` and ``stream_options`` can be
+    tested for truth directly.
+    """
+    if not _INJECTION_SAFE or not kwargs.get("stream"):
+        return False
+    if kwargs.get("stream_options"):
+        return False
+    kwargs["stream_options"] = {"include_usage": True}
+    return True
+
+
+def _iterator_of(stream: Any, logger: Any) -> Any:
+    """The single choke point every way of consuming a stream funnels through.
+
+    ``Stream.__next__`` and ``Stream.__iter__`` both read ``_iterator``, as do
+    ``AsyncStream.__anext__`` and ``__aiter__``, so replacing it instruments
+    every consumption style at once while leaving the object's identity, its
+    type, ``.response``, ``.close()`` and its context-manager behaviour exactly
+    as the user found them.
+
+    A proxy object was the alternative and it is not safe here: the SDK's own
+    ``.stream()`` helpers reach past the public surface into
+    ``raw_stream.response`` and iterate the raw object directly, and user code
+    is entitled to ``isinstance(chunk_source, Stream)``. A proxy would have to
+    impersonate the entire class and would still fail that check.
+
+    ``None`` when the attribute is gone — a future release could rename it, and
+    finding that out must cost telemetry, not the user's program.
+    """
+    global _INJECTION_SAFE
+
+    source = getattr(stream, "_iterator", None)
+    if source is None:
+        _INJECTION_SAFE = False
+        logger.debug("agentsight: openai stream internals changed; not instrumented")
+    return source
+
+
+def _watch_stream(
+    stream: Any, recorder: _StreamRecorder, swallow: bool, logger: Any
+) -> None:
+    source = _iterator_of(stream, logger)
+    if source is None:
+        recorder.finish()
+        return
+
+    def instrumented():
+        try:
+            for item in source:
+                if recorder.capture(item) and swallow:
+                    continue
+                yield item
+        finally:
+            # Runs on exhaustion, on an exception, and on close() — recording
+            # whatever usage was seen beats recording nothing.
+            recorder.finish()
+
+    iterator = instrumented()
+    stream._iterator = iterator
+    _end_on_close(stream, iterator.close, logger)
+
+
+def _watch_async_stream(
+    stream: Any, recorder: _StreamRecorder, swallow: bool, logger: Any
+) -> None:
+    source = _iterator_of(stream, logger)
+    if source is None:
+        recorder.finish()
+        return
+
+    async def instrumented():
+        try:
+            async for item in source:
+                if recorder.capture(item) and swallow:
+                    continue
+                yield item
+        finally:
+            recorder.finish()
+
+    iterator = instrumented()
+    stream._iterator = iterator
+    _end_on_close_async(stream, iterator.aclose, logger)
+
+
+def _end_on_close(stream: Any, close_iterator: Callable, logger: Any) -> None:
+    """Make ``close()`` the deterministic end of a half-read stream.
+
+    Abandoning a stream leaves the wrapper generator suspended, and nothing runs
+    its ``finally`` until the collector gets to it. Sync generators are usually
+    reclaimed by refcount straight away, but ``async`` ones are finalized by a
+    task the loop schedules — typically while it is already shutting down, with
+    the conversation contextvar long gone — so the tokens are simply lost. An
+    instance attribute rather than a class patch: this is scoped to the streams
+    we instrumented, and leaves ``isinstance``, ``.response`` and everything
+    else on the class alone.
+
+    The stream is held weakly and the original taken off the *class* rather
+    than the instance, so the replacement does not close over the stream's own
+    bound method. That would put the stream in a reference cycle, and a stream
+    dropped rather than closed would then wait for the cyclic collector — the
+    delay this function exists to remove.
+    """
+    original = getattr(type(stream), "close", None)
+    if original is None:
+        return
+    ref = weakref.ref(stream)
+
+    def close(*args, **kwargs):
+        try:
+            close_iterator()
+        except Exception:
+            logger.debug("agentsight: openai stream close failed", exc_info=True)
+        return original(ref(), *args, **kwargs)
+
+    stream.close = close
+
+
+def _end_on_close_async(stream: Any, close_iterator: Callable, logger: Any) -> None:
+    original = getattr(type(stream), "close", None)
+    # Awaiting a close that is not a coroutine would raise inside the user's
+    # ``async with`` exit. Losing the deterministic end is the cheaper failure.
+    if not inspect.iscoroutinefunction(original):
+        return
+    ref = weakref.ref(stream)
+
+    async def close(*args, **kwargs):
+        try:
+            await close_iterator()
+        except Exception:
+            logger.debug("agentsight: openai stream close failed", exc_info=True)
+        return await original(ref(), *args, **kwargs)
+
+    stream.close = close
+
+
+# ---------------------------------------------------------------------------
+# Wrappers
+# ---------------------------------------------------------------------------
+
+
+def _passthrough(kwargs: dict) -> bool:
+    """``with_raw_response`` and ``with_streaming_response`` go through the
+    patched ``create`` but hand back an ``APIResponse`` whose body the user has
+    not read yet. Reading it here would consume it, and injecting
+    ``stream_options`` into a call whose stream we never get to see would leak
+    the usage chunk into the user's loop. Leave these alone entirely.
+    """
+    return _RAW_RESPONSE_HEADER in (kwargs.get("extra_headers") or {})
+
+
+def _requested_model(kwargs: dict) -> Optional[str]:
+    """``model`` is optional on the Responses API — a call using a stored
+    ``prompt=`` omits it, leaving ``NOT_GIVEN`` behind."""
+    model = kwargs.get("model")
+    return model if isinstance(model, str) else None
+
+
+def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any):
+    @functools.wraps(original)
+    def create(self, *args, **kwargs):
+        try:
+            watching = capturing() and not _passthrough(kwargs)
+            injected = watching and surface.injectable and _inject_usage_option(kwargs)
+        except Exception:
+            logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
+            watching = injected = False
+
+        if not watching:
+            return original(self, *args, **kwargs)
+
+        start_time_ns = now_ns()
+        result = original(self, *args, **kwargs)
+        end_time_ns = now_ns()
+
+        try:
+            model = _requested_model(kwargs)
+            if isinstance(result, stream_type):
+                recorder = _StreamRecorder(surface, model, start_time_ns, logger)
+                _watch_stream(result, recorder, injected, logger)
+            else:
+                _record_usage(
+                    getattr(result, "usage", None),
+                    getattr(result, "model", None) or model,
+                    surface.operation,
+                    start_time_ns,
+                    end_time_ns,
+                    False,
+                    logger,
+                )
+        except Exception:
+            logger.debug("agentsight: openai capture failed", exc_info=True)
+        return result
+
+    return create
+
+
+def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logger: Any):
+    # A real coroutine function, not a wrapper returning one:
+    # ``AsyncCompletions.stream()`` is a plain ``def`` that calls ``create()``
+    # eagerly and awaits the coroutine later, so the body — and with it
+    # start_time_ns — has to run at await time.
+    @functools.wraps(original)
+    async def create(self, *args, **kwargs):
+        try:
+            watching = capturing() and not _passthrough(kwargs)
+            injected = watching and surface.injectable and _inject_usage_option(kwargs)
+        except Exception:
+            logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
+            watching = injected = False
+
+        if not watching:
+            return await original(self, *args, **kwargs)
+
+        start_time_ns = now_ns()
+        result = await original(self, *args, **kwargs)
+        end_time_ns = now_ns()
+
+        try:
+            model = _requested_model(kwargs)
+            if isinstance(result, stream_type):
+                recorder = _StreamRecorder(surface, model, start_time_ns, logger)
+                _watch_async_stream(result, recorder, injected, logger)
+            else:
+                _record_usage(
+                    getattr(result, "usage", None),
+                    getattr(result, "model", None) or model,
+                    surface.operation,
+                    start_time_ns,
+                    end_time_ns,
+                    False,
+                    logger,
+                )
+        except Exception:
+            logger.debug("agentsight: openai capture failed", exc_info=True)
+        return result
+
+    return create
+
+
+def _wrap_embeddings(original: Callable, logger: Any):
+    @functools.wraps(original)
+    def create(self, *args, **kwargs):
+        try:
+            watching = capturing() and not _passthrough(kwargs)
+        except Exception:
+            logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
+            watching = False
+
+        if not watching:
+            return original(self, *args, **kwargs)
+
+        start_time_ns = now_ns()
+        result = original(self, *args, **kwargs)
+        _record_embeddings(
+            result, _requested_model(kwargs), start_time_ns, now_ns(), logger
+        )
+        return result
+
+    return create
+
+
+def _wrap_async_embeddings(original: Callable, logger: Any):
+    @functools.wraps(original)
+    async def create(self, *args, **kwargs):
+        try:
+            watching = capturing() and not _passthrough(kwargs)
+        except Exception:
+            logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
+            watching = False
+
+        if not watching:
+            return await original(self, *args, **kwargs)
+
+        start_time_ns = now_ns()
+        result = await original(self, *args, **kwargs)
+        _record_embeddings(
+            result, _requested_model(kwargs), start_time_ns, now_ns(), logger
+        )
+        return result
+
+    return create
+
+
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+
+
+def _injection_is_safe(sync_stream: Any, async_stream: Any) -> bool:
+    """Whether this openai release still lets us take back what we ask for.
+
+    Both stream classes read every item through ``_iterator``, which is the
+    attribute :func:`_iterator_of` replaces. If a release stops doing that there
+    is nothing to replace, so the usage chunk we asked for would arrive in the
+    user's loop and ``chunk.choices[0]`` would raise IndexError. Answering that
+    from the class costs nothing and answers it *before* the first request;
+    answering it from the first live stream costs someone a broken loop.
+
+    A method with no ``__code__`` — reimplemented in C, wrapped by a decorator
+    we do not recognise — is trusted rather than assumed broken, because the
+    cost of a false negative here is every streamed token in the process.
+    """
+    for owner, method in ((sync_stream, "__next__"), (async_stream, "__anext__")):
+        code = getattr(getattr(owner, method, None), "__code__", None)
+        if code is not None and "_iterator" not in code.co_names:
+            return False
+    return True
+
+
+def _patch(owner: Any, name: str, build: Callable[[Callable], Callable]) -> None:
+    original = getattr(owner, name, None)
+    if original is None or already_patched(original):
+        return
+    setattr(owner, name, mark_patched(build(original), original))
+
+
+def install_openai(logger: Any) -> None:
+    """Patch every OpenAI surface that reports token usage.
+
+    Raises when ``openai`` is not installed; the registry logs that and moves
+    on to the next target.
+    """
+    global _INJECTION_SAFE
+
+    from openai import AsyncStream, Stream
+    from openai.resources.chat.completions import AsyncCompletions, Completions
+    from openai.resources.embeddings import AsyncEmbeddings, Embeddings
+
+    # Same name, different class: legacy text completions, not chat.
+    from openai.resources.completions import AsyncCompletions as AsyncTextCompletions
+    from openai.resources.completions import Completions as TextCompletions
+
+    _INJECTION_SAFE = _injection_is_safe(Stream, AsyncStream)
+    if not _INJECTION_SAFE:
+        logger.debug("agentsight: openai stream internals changed; not instrumented")
+
+    def patch_sync(owner, name, surface):
+        _patch(owner, name, lambda fn: _wrap_create(fn, surface, Stream, logger))
+
+    def patch_async(owner, name, surface):
+        _patch(
+            owner, name, lambda fn: _wrap_async_create(fn, surface, AsyncStream, logger)
+        )
+
+    patch_sync(Completions, "create", _CHAT)
+    patch_sync(Completions, "parse", _CHAT)
+    patch_async(AsyncCompletions, "create", _CHAT)
+    patch_async(AsyncCompletions, "parse", _CHAT)
+
+    patch_sync(TextCompletions, "create", _TEXT)
+    patch_async(AsyncTextCompletions, "create", _TEXT)
+
+    _patch(Embeddings, "create", lambda fn: _wrap_embeddings(fn, logger))
+    _patch(AsyncEmbeddings, "create", lambda fn: _wrap_async_embeddings(fn, logger))
+
+    try:
+        from openai.resources.responses import AsyncResponses, Responses
+    except ImportError:
+        # Predates the Responses API. Everything above still applies.
+        return
+
+    patch_sync(Responses, "create", _RESPONSES)
+    patch_sync(Responses, "parse", _RESPONSES)
+    patch_async(AsyncResponses, "create", _RESPONSES)
+    patch_async(AsyncResponses, "parse", _RESPONSES)
