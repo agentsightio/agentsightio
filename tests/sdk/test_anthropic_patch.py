@@ -573,7 +573,10 @@ def test_stream_that_raises_still_records(fake_anthropic, spans):
         with pytest.raises(RuntimeError, match="connection reset"):
             list(stream)
 
-    assert tokens(llm_spans(spans)[0])["output"] == 5
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["output"] == 5
+    assert llm.attributes[LLMAttributes.ERROR] == "connection reset"
+    assert llm.status.status_code.name == "ERROR"
 
 
 def test_stream_internals_renamed(fake_anthropic, spans):
@@ -668,7 +671,7 @@ def test_arguments_pass_through_untouched(fake_anthropic, spans):
     assert client.calls == [call]
 
 
-def test_exceptions_propagate(fake_anthropic, spans):
+def test_exceptions_propagate_and_are_recorded(fake_anthropic, spans):
     install_anthropic(LOGGER)
     client = fake_anthropic.Messages()
     client.reply = ValueError("bad request")
@@ -677,7 +680,10 @@ def test_exceptions_propagate(fake_anthropic, spans):
         with pytest.raises(ValueError, match="bad request"):
             client.create(model="claude-sonnet-5", max_tokens=1, messages=[])
 
-    assert llm_spans(spans) == []
+    (llm,) = llm_spans(spans)
+    assert LLMAttributes.ERROR in llm.attributes
+    assert llm.status.status_code.name == "ERROR"
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "claude-sonnet-5"
 
 
 @pytest.mark.parametrize(

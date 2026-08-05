@@ -16,10 +16,11 @@ from typing import Any, List, Optional, Sequence, Union
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from agentsight.sdk import watchdog
 from agentsight.sdk.exporter import AgentSightSpanExporter, SDK_NAME, SDK_VERSION
+from agentsight.sdk.file_exporter import FileSpanExporter
 from agentsight.sdk.processors import TurnBufferingProcessor
 
 logger = logging.getLogger("agentsight")
@@ -38,7 +39,10 @@ class _State:
         self.lock = threading.Lock()
         self.enabled = False
         self.provider: Optional[TracerProvider] = None
-        self.exporter: Optional[AgentSightSpanExporter] = None
+        #: Typed to the OTel interface, not our concrete class: the exporter
+        #: is the transport seam, and nothing outside it may depend on which
+        #: transport is behind it (design §13, transport question).
+        self.exporter: Optional[SpanExporter] = None
         self.tracer = None
         self.environment: Optional[str] = None
         self.turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS
@@ -55,7 +59,7 @@ def get_tracer():
     return _state.tracer
 
 
-def get_exporter() -> Optional[AgentSightSpanExporter]:
+def get_exporter() -> Optional[SpanExporter]:
     return _state.exporter
 
 
@@ -63,6 +67,13 @@ def get_turn_timeout_ms() -> int:
     """How long a turn may stay open after its lifetime was handed to
     ``turn.wrap()`` before it is closed as incomplete. 0 disables the deadline."""
     return _state.turn_timeout_ms
+
+
+def default_environment() -> Optional[str]:
+    """The deployment-wide environment from ``init(environment=...)`` or
+    ``AGENTSIGHT_ENVIRONMENT``. Conversations that don't name their own
+    environment inherit it; one that does always wins."""
+    return _state.environment
 
 
 def init(
@@ -74,12 +85,24 @@ def init(
     export_interval_ms: int = 1000,
     max_queue_size: int = 2048,
     turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS,
+    span_exporter: Optional[SpanExporter] = None,
 ) -> bool:
     """Start the SDK. Returns whether tracking is active.
 
     Never raises. A missing or malformed key logs an error and leaves the SDK
     disabled, at which point every scope and decorator is a pass-through and
     the application behaves exactly as if AgentSight were not installed.
+
+    ``span_exporter`` swaps the transport: any OTel ``SpanExporter`` slots in
+    behind the same buffering and batching. With one supplied, the API key is
+    not required — it exists only to authenticate the default transport.
+
+    Setting ``AGENTSIGHT_FILE_EXPORTER`` to a directory does the same thing
+    without a code change: spans are written there as the JSON the ingest
+    endpoint would have received, and nothing is sent over the network. It is a
+    development aid for seeing what an integration emits. An explicit
+    ``span_exporter`` still wins, because code is a clearer statement of intent
+    than an environment left over in a shell.
     """
     with _state.lock:
         if _state.enabled:
@@ -90,17 +113,21 @@ def init(
         resolved_endpoint = (
             endpoint or os.getenv("AGENTSIGHT_API_ENDPOINT") or DEFAULT_ENDPOINT
         )
+        file_destination = os.getenv("AGENTSIGHT_FILE_EXPORTER")
 
-        if not resolved_key:
-            logger.error(
-                "AgentSight disabled: no API key. Pass api_key= or set "
-                "AGENTSIGHT_API_KEY."
-            )
-            return False
+        # Only the HTTP transport has anything to authenticate, so only the
+        # HTTP transport requires a key.
+        if span_exporter is None and not file_destination:
+            if not resolved_key:
+                logger.error(
+                    "AgentSight disabled: no API key. Pass api_key= or set "
+                    "AGENTSIGHT_API_KEY."
+                )
+                return False
 
-        if not API_KEY_PATTERN.match(resolved_key):
-            logger.error("AgentSight disabled: API key is malformed.")
-            return False
+            if not API_KEY_PATTERN.match(resolved_key):
+                logger.error("AgentSight disabled: API key is malformed.")
+                return False
 
         try:
             resource = Resource.create(
@@ -111,10 +138,34 @@ def init(
                 }
             )
             provider = TracerProvider(resource=resource)
-            exporter = AgentSightSpanExporter(resolved_endpoint, resolved_key, logger)
 
-            # Order matters: buffering sits ABOVE batching, so a discarded turn
-            # never reaches the export queue at all.
+            exporter: SpanExporter
+            destination: str
+            if span_exporter is not None:
+                exporter = span_exporter
+                destination = type(span_exporter).__name__
+            elif file_destination:
+                exporter = FileSpanExporter(file_destination, logger)
+                destination = exporter.directory
+                # Loud, because replacing the transport out from under someone
+                # who thinks they are shipping data is the failure this guards
+                # against — a stale variable in a shell must not look like a
+                # working integration.
+                logger.info(
+                    "AgentSight: AGENTSIGHT_FILE_EXPORTER is set, so spans are "
+                    "being written to %s and are NOT sent to the ingest "
+                    "endpoint.",
+                    destination,
+                )
+            else:
+                exporter = AgentSightSpanExporter(
+                    resolved_endpoint, resolved_key, logger
+                )
+                destination = resolved_endpoint
+
+            # Order matters: buffering sits ABOVE batching, so a turn and its
+            # children enter the export queue together and land in the same
+            # payload — which is what lets ingest treat the family atomically.
             provider.add_span_processor(
                 TurnBufferingProcessor(
                     BatchSpanProcessor(
@@ -140,7 +191,7 @@ def init(
     if auto_instrument:
         _install_instrumentation(auto_instrument)
 
-    logger.info("AgentSight initialized (endpoint=%s)", resolved_endpoint)
+    logger.info("AgentSight initialized (exporting to %s)", destination)
     return True
 
 
@@ -169,6 +220,11 @@ def flush(timeout_ms: int = 10_000) -> bool:
 
     Needed wherever the process may be frozen or killed before the background
     timer fires — serverless handlers and short scripts.
+
+    Delivers everything whose turn has ended. Spans inside a turn that is
+    still open are deliberately *not* delivered: they wait for their turn so
+    the family lands in one payload, and the open turn span itself cannot be
+    exported until it ends. End the turn (or let it end), then flush.
     """
     if not _state.enabled or _state.provider is None:
         return False
@@ -180,7 +236,25 @@ def flush(timeout_ms: int = 10_000) -> bool:
 
 
 def shutdown() -> None:
-    """Flush and tear down. Registered with ``atexit`` by :func:`init`."""
+    """Flush and tear down. Registered with ``atexit`` by :func:`init`.
+
+    The order here is load-bearing:
+
+    1. ``watchdog.shutdown()`` fires every pending deadline, so each open
+       *deferred* turn ends now, marked incomplete with reason ``shutdown``.
+       Ending it hands its buffered children plus the turn span to the batch
+       queue — which must still be alive, hence watchdog first.
+    2. ``provider.shutdown()`` then releases any orphaned children of turns
+       that could not be ended (a plain ``with`` block open in a live
+       thread) and force-flushes the queue.
+
+    Flip the order and every turn in flight at exit is silently lost: the
+    spans would end after the pipeline below them is gone.
+
+    Only covers orderly exits. ``atexit`` does not run on SIGTERM — how
+    containers stop — or SIGKILL; installing signal handlers from a library
+    would fight the host application, so that is deliberately its job.
+    """
     with _state.lock:
         if not _state.enabled:
             return

@@ -62,15 +62,24 @@ def _record(
     end_time_ns: int,
     streaming: bool,
     logger: Any,
+    error: Optional[BaseException] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
+        extra: Dict[str, Any] = {}
+        if streaming:
+            extra[LLMAttributes.STREAMING] = True
+            if usage is None:
+                # Stream closed without a usage event: the 0/0 counts are
+                # unknowns, not zeros — mark it so ingest can tell.
+                extra[LLMAttributes.USAGE_REPORTED] = False
         record_llm_call(
             **from_anthropic(usage, model),
             operation="chat",
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
-            extra={LLMAttributes.STREAMING: True} if streaming else None,
+            extra=extra or None,
+            error=error,
         )
     except Exception:
         logger.debug("agentsight: anthropic span failed", exc_info=True)
@@ -98,6 +107,7 @@ class _StreamRecorder:
         self._logger = logger
         self._usage: Dict[str, int] = {}
         self._finished = False
+        self._error: Optional[BaseException] = None
 
     def capture(self, event: Any) -> None:
         try:
@@ -122,6 +132,12 @@ class _StreamRecorder:
             if value is not None:
                 self._usage[counter] = value
 
+    def fail(self, error: BaseException) -> None:
+        """Remember why the stream died, so the span says so. Consumer
+        disconnects (``GeneratorExit``) never land here — the call itself did
+        not fail, someone just stopped listening."""
+        self._error = error
+
     def finish(self) -> None:
         # A stream can reach its end more than once — closed by the user, closed
         # again by the manager's ``__exit__``, then collected — and a second
@@ -130,7 +146,13 @@ class _StreamRecorder:
             return
         self._finished = True
         _record(
-            self._usage, self._model, self._start_time_ns, now_ns(), True, self._logger
+            self._usage,
+            self._model,
+            self._start_time_ns,
+            now_ns(),
+            True,
+            self._logger,
+            error=self._error,
         )
 
 
@@ -231,10 +253,16 @@ def _watch_stream(stream: Any, recorder: _StreamRecorder, logger: Any) -> Any:
             for event in source:
                 recorder.capture(event)
                 yield event
+        except GeneratorExit:
+            raise
+        except BaseException as exc:
+            recorder.fail(exc)
+            raise
         finally:
             # Runs on exhaustion, on an exception, and on the close() that
             # abandoning the stream triggers — recording what was seen beats
-            # recording nothing.
+            # recording nothing, and a stream that died raising goes out
+            # marked as the failure it was.
             recorder.finish()
 
     iterator = instrumented()
@@ -254,6 +282,11 @@ def _watch_async_stream(stream: Any, recorder: _StreamRecorder, logger: Any) -> 
             async for event in source:
                 recorder.capture(event)
                 yield event
+        except GeneratorExit:
+            raise
+        except BaseException as exc:
+            recorder.fail(exc)
+            raise
         finally:
             recorder.finish()
 
@@ -326,7 +359,16 @@ def _wrap_create(original: Callable, logger: Any):
             return original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = original(self, *args, **kwargs)
+        try:
+            result = original(self, *args, **kwargs)
+        except BaseException as exc:
+            # The failure channel: a call that raised is a call that happened.
+            # Recorded with zero tokens and the error, then re-raised.
+            _record(
+                None, _requested_model(kwargs), start_time_ns, now_ns(),
+                False, logger, error=exc,
+            )
+            raise
         end_time_ns = now_ns()
 
         try:
@@ -345,7 +387,14 @@ def _wrap_async_create(original: Callable, logger: Any):
             return await original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = await original(self, *args, **kwargs)
+        try:
+            result = await original(self, *args, **kwargs)
+        except BaseException as exc:
+            _record(
+                None, _requested_model(kwargs), start_time_ns, now_ns(),
+                False, logger, error=exc,
+            )
+            raise
         end_time_ns = now_ns()
 
         try:
@@ -359,12 +408,35 @@ def _wrap_async_create(original: Callable, logger: Any):
     return create
 
 
+def _wrap_stream_method(original: Callable, logger: Any):
+    """Stash the requested model on the manager ``.stream()`` returns.
+
+    The manager holds the request privately, so by ``__enter__`` the kwargs
+    are out of reach — but a stream that dies before ``message_start`` has no
+    other model name, and the accounting row it becomes would say NULL where
+    the caller plainly wrote one. ``.stream()`` is the last moment the name
+    is visible; the attribute carries it across.
+    """
+
+    @functools.wraps(original)
+    def stream(self, *args, **kwargs):
+        manager = original(self, *args, **kwargs)
+        try:
+            manager._agentsight_requested_model = _requested_model(kwargs)
+        except Exception:
+            logger.debug("agentsight: could not stash requested model", exc_info=True)
+        return manager
+
+    return stream
+
+
 def _wrap_manager_enter(original: Callable, logger: Any):
     """``.stream()`` builds the request but does not send it; ``__enter__`` does.
 
     So this is both the honest start of the call and the first moment the
     ``MessageStream`` — and the raw stream underneath it — exists. The model
-    comes from ``message_start``, which is the resolved id anyway.
+    starts as the requested id stashed by ``_wrap_stream_method`` and is
+    replaced by the resolved id from ``message_start`` when one arrives.
 
     The close hook goes on the ``MessageStream`` as well as on the raw stream
     beneath it, because ``__exit__`` closes the wrapper and the wrapper releases
@@ -378,12 +450,19 @@ def _wrap_manager_enter(original: Callable, logger: Any):
         if not _watching(logger):
             return original(self)
 
+        model = getattr(self, "_agentsight_requested_model", None)
         start_time_ns = now_ns()
-        stream = original(self)
+        try:
+            stream = original(self)
+        except BaseException as exc:
+            # The request fires in __enter__, so this is where a failed
+            # .stream() call surfaces.
+            _record(None, model, start_time_ns, now_ns(), True, logger, error=exc)
+            raise
         try:
             iterator = _watch_stream(
                 getattr(stream, "_raw_stream", None),
-                _StreamRecorder(None, start_time_ns, logger),
+                _StreamRecorder(model, start_time_ns, logger),
                 logger,
             )
             if iterator is not None:
@@ -401,12 +480,17 @@ def _wrap_async_manager_enter(original: Callable, logger: Any):
         if not _watching(logger):
             return await original(self)
 
+        model = getattr(self, "_agentsight_requested_model", None)
         start_time_ns = now_ns()
-        stream = await original(self)
+        try:
+            stream = await original(self)
+        except BaseException as exc:
+            _record(None, model, start_time_ns, now_ns(), True, logger, error=exc)
+            raise
         try:
             iterator = _watch_async_stream(
                 getattr(stream, "_raw_stream", None),
-                _StreamRecorder(None, start_time_ns, logger),
+                _StreamRecorder(model, start_time_ns, logger),
                 logger,
             )
             if iterator is not None:
@@ -448,6 +532,10 @@ def install_anthropic(logger: Any) -> None:
         for name in ("create", "parse"):
             _patch(sync_cls, name, lambda fn: _wrap_create(fn, logger))
             _patch(async_cls, name, lambda fn: _wrap_async_create(fn, logger))
+        # ``stream`` returns a manager synchronously on both surfaces; the
+        # wrapper only stashes the requested model for the manager's enter.
+        _patch(sync_cls, "stream", lambda fn: _wrap_stream_method(fn, logger))
+        _patch(async_cls, "stream", lambda fn: _wrap_stream_method(fn, logger))
 
     def patch_managers(sync_cls, async_cls):
         _patch(sync_cls, "__enter__", lambda fn: _wrap_manager_enter(fn, logger))

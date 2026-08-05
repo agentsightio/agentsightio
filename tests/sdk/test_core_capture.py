@@ -125,6 +125,55 @@ def test_a_message_outside_a_turn_gets_one_of_its_own(spans):
     assert messages(turn) == [("agent", "Still there?")]
 
 
+@pytest.mark.parametrize("open_turn", [
+    lambda: ags.turn("ask"),
+    lambda: ags.turn(name="ask"),
+])
+def test_a_turn_can_be_named_positionally_or_by_keyword(spans, open_turn):
+    """``turn("ask")`` binds to the decorator's ``func`` parameter, so without
+    an explicit string check it fails the callable test and the name is
+    discarded in silence — leaving every turn in production named "turn"."""
+    with ags.conversation("c-named"):
+        with open_turn():
+            ags.user_message("hello")
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert turn.name == "ask"
+    assert turn.attributes[SpanAttributes.ENTITY_NAME] == "ask"
+
+
+def test_a_deferred_turn_takes_messages_on_its_scope(spans):
+    """A turn kept open past its block is no longer the active one, so the
+    module-level call would file the reply under a turn of its own — which is
+    silently wrong data, the one thing worse than none."""
+    with ags.conversation("c-deferred"):
+        with ags.turn("websocket") as deferred:
+            ags.user_message("ping")
+            deferred.keep_open()
+
+        deferred.agent_message("pong")
+        deferred.end(complete=True)
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert messages(turn) == [("end_user", "ping"), ("agent", "pong")]
+
+
+def test_the_module_level_call_would_have_orphaned_it(spans):
+    """The failure the method above exists to prevent, pinned so it stays the
+    documented difference rather than something that quietly changes."""
+    with ags.conversation("c-orphan"):
+        with ags.turn("websocket") as deferred:
+            ags.user_message("ping")
+            deferred.keep_open()
+
+        ags.agent_message("pong")
+        deferred.end(complete=True)
+
+    turns = by_kind(spans, SpanKind.TURN)
+    assert len(turns) == 2
+    assert [messages(t) for t in turns] == [[("agent", "pong")], [("end_user", "ping")]]
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -347,7 +396,14 @@ def test_enabled_false_disables_a_single_conversation(spans):
     assert spans.get_finished_spans() == ()
 
 
-def test_an_unfinished_turn_takes_its_children_with_it(spans):
+def test_an_unfinished_turn_arrives_marked_with_its_children(spans):
+    """A crashed turn is exported as the failure it was, family intact.
+
+    Buffering still matters here — not to retract anything, but so the turn
+    and the tool span it explains land in the same payload and ingest can
+    keep the whole half-exchange out of the transcript atomically.
+    """
+
     @ags.tool
     def lookup():
         return "found"
@@ -359,10 +415,25 @@ def test_an_unfinished_turn_takes_its_children_with_it(spans):
                 lookup()
                 raise RuntimeError("agent crashed mid-turn")
 
-    assert spans.get_finished_spans() == (), (
-        "a child span ends before its parent, so buffering is the only way "
-        "'not sent' can mean anything"
+    kinds = sorted(
+        (s.attributes or {}).get(SpanAttributes.KIND)
+        for s in spans.get_finished_spans()
     )
+    assert kinds == [SpanKind.TOOL, SpanKind.TURN]
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ERROR
+    )
+    assert turn.status.status_code.name == "ERROR"
+    assert any(e.name == "exception" for e in turn.events), (
+        "the crash itself must be on the span"
+    )
+    # The messages ride along — archived for lead recovery, kept out of the
+    # transcript by the complete=false marker downstream.
+    assert messages(turn) == [("end_user", "this turn is going to blow up")]
 
 
 def test_a_completed_turn_after_a_failed_one_still_exports(spans):
@@ -373,8 +444,10 @@ def test_a_completed_turn_after_a_failed_one_still_exports(spans):
         with ags.turn():
             ags.user_message("second one works")
 
-    (turn,) = by_kind(spans, SpanKind.TURN)
-    assert messages(turn) == [("end_user", "second one works")]
+    failed, worked = by_kind(spans, SpanKind.TURN)
+    assert failed.attributes[TurnAttributes.COMPLETE] is False
+    assert worked.attributes[TurnAttributes.COMPLETE] is True
+    assert messages(worked) == [("end_user", "second one works")]
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +509,48 @@ def test_payload_groups_by_conversation_and_orders_spans(spans):
         )
 
 
+def test_open_conversation_is_an_ordinary_span(spans):
+    """The visit phase rides the span pipeline like everything else.
+
+    It used to bypass it — a hand-built payload POSTed through the concrete
+    exporter's private method, the one call nothing OTLP-shaped could ever
+    satisfy. Now it is a ``conversation`` span: the kind carries the "widget
+    loaded, nobody typed" semantics, and ingest derives engagement from the
+    span kinds present instead of reading a side-channel flag.
+    """
+    ags.open_conversation("c-visit", device="mobile", source="web")
+
+    (visit,) = spans.get_finished_spans()
+    assert visit.attributes[SpanAttributes.KIND] == SpanKind.CONVERSATION
+    assert visit.attributes[ConversationAttributes.ID] == "c-visit"
+
+    payload = build_payload(spans.get_finished_spans())
+    (block,) = payload["conversations"]
+    assert block["conversation_id"] == "c-visit"
+    assert block["device"] == "mobile"
+    assert block["source"] == "web"
+    assert [s["kind"] for s in block["spans"]] == [SpanKind.CONVERSATION]
+
+
+def test_record_llm_call_error_keeps_billed_tokens(spans):
+    """A stream that died halfway still spent its tokens — both facts go out."""
+    with ags.conversation("c-billed-failure"):
+        record_llm_call(
+            system="openai",
+            model="gpt-4o",
+            input_tokens=10,
+            output_tokens=3,
+            error=RuntimeError("connection reset mid-stream"),
+        )
+
+    (llm,) = by_kind(spans, SpanKind.LLM)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 10
+    assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 3
+    assert llm.attributes[LLMAttributes.ERROR] == "connection reset mid-stream"
+    assert llm.status.status_code.name == "ERROR"
+    assert any(e.name == "exception" for e in llm.events)
+
+
 def test_every_span_is_serialized_whole(spans):
     """Decision 9: nothing is thrown away from this point on."""
     with ags.conversation("c-archive"):
@@ -466,6 +581,29 @@ def test_init_with_a_bad_key_disables_rather_than_raises(monkeypatch):
 
     assert ags.init(api_key="not-a-key") is False
     assert ags.is_enabled() is False
+
+
+def test_init_accepts_a_custom_exporter_without_a_key(monkeypatch):
+    """The transport seam: any OTel SpanExporter slots in behind the same
+    buffering and batching, and the API key — which exists only to
+    authenticate the default transport — stops being required with one."""
+    monkeypatch.delenv("AGENTSIGHT_API_KEY", raising=False)
+    monkeypatch.setattr(core._state, "enabled", False)
+
+    exporter = InMemorySpanExporter()
+    assert ags.init(span_exporter=exporter, auto_instrument=False) is True
+    try:
+        with ags.conversation("c-custom-transport"):
+            with ags.turn():
+                ags.user_message("through a custom transport")
+        ags.flush()
+        kinds = [
+            (s.attributes or {}).get(SpanAttributes.KIND)
+            for s in exporter.get_finished_spans()
+        ]
+        assert SpanKind.TURN in kinds
+    finally:
+        ags.shutdown()
 
 
 def test_everything_is_a_pass_through_when_disabled():
@@ -501,3 +639,85 @@ def test_a_broken_tracer_cannot_break_the_users_agent(spans, monkeypatch):
         with ags.turn():
             assert lookup() == "still works"
             ags.user_message("and this does not raise")
+
+
+def test_a_cancelled_call_is_not_an_error(spans):
+    """CancelledError is the async caller walking away — the same event
+    GeneratorExit is for sync streams. Recording it as an error would make an
+    error-rate metric measure user behaviour instead of provider health. The
+    tokens billed before the cancel still count."""
+    import asyncio
+
+    with ags.conversation("c-cancelled"):
+        record_llm_call(
+            system="openai",
+            model="gpt-4o",
+            input_tokens=10,
+            output_tokens=2,
+            error=asyncio.CancelledError(),
+        )
+
+    (llm,) = by_kind(spans, SpanKind.LLM)
+    assert LLMAttributes.ERROR not in llm.attributes
+    assert llm.status.status_code.name != "ERROR"
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 10
+
+
+def test_a_bare_exception_never_yields_a_falsy_error_marker(spans):
+    """str(RuntimeError()) is "" — an ERROR span whose marker is falsy would
+    slip past any truthiness filter downstream."""
+    with ags.conversation("c-bare"):
+        record_llm_call(system="openai", model="gpt-4o", error=RuntimeError())
+
+    (llm,) = by_kind(spans, SpanKind.LLM)
+    assert llm.attributes[LLMAttributes.ERROR] == "RuntimeError"
+    assert llm.status.status_code.name == "ERROR"
+
+
+def test_init_environment_is_inherited_by_conversations(spans, monkeypatch):
+    """init(environment=...) is the deployment-wide default; a conversation
+    that names its own environment overrides it."""
+    monkeypatch.setattr(core._state, "environment", "staging")
+
+    with ags.conversation("c-inherit"):
+        with ags.turn():
+            ags.user_message("hi")
+    with ags.conversation("c-explicit", environment="production"):
+        with ags.turn():
+            ags.user_message("hi")
+
+    payload = build_payload(spans.get_finished_spans())
+    by_id = {c["conversation_id"]: c for c in payload["conversations"]}
+    assert by_id["c-inherit"]["environment"] == "staging"
+    assert by_id["c-explicit"]["environment"] == "production"
+
+
+def test_export_failure_warnings_are_rate_limited():
+    """Design §10: a down backend warns once a minute, not once a second."""
+
+    class CountingLogger:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, message, *args):
+            self.warnings.append(message % args if args else message)
+
+        def debug(self, *args, **kwargs):
+            pass
+
+        def error(self, *args, **kwargs):
+            pass
+
+    from agentsight.sdk.exporter import AgentSightSpanExporter
+
+    logger = CountingLogger()
+    exporter = AgentSightSpanExporter("http://127.0.0.1:9", "ags_key", logger)
+
+    for _ in range(5):
+        exporter._warn_dropped("batch dropped")
+    assert len(logger.warnings) == 1, "four drops inside the window stay quiet"
+
+    exporter._last_drop_warning = 0.0  # step past the window
+    exporter._warn_dropped("batch dropped")
+    assert len(logger.warnings) == 2
+    assert "4 earlier drop(s) suppressed" in logger.warnings[1]

@@ -124,7 +124,6 @@ class AgentSightAPI:
         metadata: Optional[str] = None,
         has_feedback: Optional[bool] = None,
         feedback_sentiment: Optional[Literal['positive', 'neutral', 'negative']] = None,
-        feedback_source: Optional[Literal['customer', 'platform']] = None,
         **extra_params
     ) -> Dict[str, Any]:
         """
@@ -149,7 +148,6 @@ class AgentSightAPI:
             metadata: Filter by metadata (format: "key:value,key2:value2")
             has_feedback: Filter by feedback existence (True/False)
             feedback_sentiment: Filter by feedback sentiment ('positive', 'neutral', 'negative')
-            feedback_source: Filter by feedback source ('customer', 'platform')
             **extra_params: Additional query parameters
             
         Returns:
@@ -200,15 +198,7 @@ class AgentSightAPI:
                     f"feedback_sentiment must be one of {valid_sentiments}, got '{feedback_sentiment}'"
                 )
             params['feedback_sentiment'] = feedback_sentiment
-        if feedback_source is not None:
-            # Validate source
-            valid_sources = ['customer', 'platform']
-            if feedback_source not in valid_sources:
-                raise ValueError(
-                    f"feedback_source must be one of {valid_sources}, got '{feedback_source}'"
-                )
-            params['feedback_source'] = feedback_source
-        
+
         # Add any extra parameters
         params.update(extra_params)
 

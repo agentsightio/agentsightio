@@ -595,7 +595,12 @@ def test_a_stream_yields_the_same_chunks_installed_or_not(spans):
     assert inside == outside == ["he", "hello"]
 
 
-def test_a_provider_error_is_raised_unchanged(spans):
+def test_a_provider_error_is_raised_unchanged_and_recorded(spans):
+    """The exception reaches the caller untouched — and leaves an error span.
+
+    A raised call used to vanish (only its pending entry was cleaned up);
+    now the failure channel records it, so an error-rate metric can exist.
+    """
     llm = FakeLLM(fails=True)
 
     with ags.conversation("c-error"):
@@ -603,7 +608,9 @@ def test_a_provider_error_is_raised_unchanged(spans):
             with pytest.raises(RuntimeError, match="provider down"):
                 llm.chat(HI)
 
-    assert llm_spans(spans) == []
+    (llm_span,) = llm_spans(spans)
+    assert LLMAttributes.ERROR in llm_span.attributes
+    assert llm_span.status.status_code.name == "ERROR"
 
 
 def test_a_tool_error_is_raised_unchanged(spans):
@@ -616,6 +623,12 @@ def test_a_tool_error_is_raised_unchanged(spans):
 
     (tool_span,) = tool_spans(spans)
     assert tool_span.attributes[ToolAttributes.ERROR] == "tool blew up"
+
+    # The handler closes the span with an explicit end time; the exception
+    # event must be dated inside the span, not at the moment of bookkeeping.
+    (event,) = tool_span.events
+    assert event.name == "exception"
+    assert tool_span.start_time <= event.timestamp <= tool_span.end_time
 
 
 def test_a_tool_that_reports_its_failure_is_an_error_span(spans):

@@ -17,7 +17,7 @@ needs no patch: it builds its request through ``create``.
 import functools
 import inspect
 import weakref
-from typing import Any, Callable, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, NamedTuple, Optional, Tuple
 
 from agentsight.sdk.instrumentation.base import (
     already_patched,
@@ -104,15 +104,25 @@ def _record_usage(
     end_time_ns: int,
     streaming: bool,
     logger: Any,
+    error: Optional[BaseException] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
+        extra: Dict[str, Any] = {}
+        if streaming:
+            extra[LLMAttributes.STREAMING] = True
+            if usage is None:
+                # The stream closed and the provider never said what it
+                # billed. The 0/0 counts on this span are unknowns, not
+                # zeros — mark it so ingest can tell the difference.
+                extra[LLMAttributes.USAGE_REPORTED] = False
         record_llm_call(
             **from_openai(usage, model),
             operation=operation,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
-            extra={LLMAttributes.STREAMING: True} if streaming else None,
+            extra=extra or None,
+            error=error,
         )
     except Exception:
         logger.debug("agentsight: openai span failed", exc_info=True)
@@ -124,6 +134,7 @@ def _record_embeddings(
     start_time_ns: int,
     end_time_ns: int,
     logger: Any,
+    error: Optional[BaseException] = None,
 ) -> None:
     """Embedding tokens are their own billable line with their own price.
 
@@ -139,6 +150,7 @@ def _record_embeddings(
             operation="embeddings",
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
+            error=error,
         )
     except Exception:
         logger.debug("agentsight: openai embeddings span failed", exc_info=True)
@@ -165,6 +177,7 @@ class _StreamRecorder:
         self._logger = logger
         self._usage: Any = None
         self._finished = False
+        self._error: Optional[BaseException] = None
 
     def capture(self, item: Any) -> bool:
         """Read the usage off ``item``. True when it carried nothing else.
@@ -189,6 +202,15 @@ class _StreamRecorder:
             self._logger.debug("agentsight: openai usage read failed", exc_info=True)
             return False
 
+    def fail(self, error: BaseException) -> None:
+        """Remember why the stream died, so the span says so.
+
+        Only provider/transport failures land here — a consumer walking away
+        (``GeneratorExit``) is not the call failing, and marking disconnects
+        as errors would pollute an error-rate metric with user behaviour.
+        """
+        self._error = error
+
     def finish(self) -> None:
         # A stream can reach its end more than once — exhausted, then closed,
         # then collected — and a second span here would double the tokens.
@@ -203,6 +225,7 @@ class _StreamRecorder:
             now_ns(),
             True,
             self._logger,
+            error=self._error,
         )
 
 
@@ -279,9 +302,16 @@ def _watch_stream(
                 if recorder.capture(item) and swallow:
                     continue
                 yield item
+        except GeneratorExit:
+            # The consumer walked away; the call itself did not fail.
+            raise
+        except BaseException as exc:
+            recorder.fail(exc)
+            raise
         finally:
             # Runs on exhaustion, on an exception, and on close() — recording
-            # whatever usage was seen beats recording nothing.
+            # whatever usage was seen beats recording nothing, and a stream
+            # that died raising goes out marked as the failure it was.
             recorder.finish()
 
     iterator = instrumented()
@@ -303,6 +333,11 @@ def _watch_async_stream(
                 if recorder.capture(item) and swallow:
                     continue
                 yield item
+        except GeneratorExit:
+            raise
+        except BaseException as exc:
+            recorder.fail(exc)
+            raise
         finally:
             recorder.finish()
 
@@ -367,14 +402,54 @@ def _end_on_close_async(stream: Any, close_iterator: Callable, logger: Any) -> N
 # ---------------------------------------------------------------------------
 
 
-def _passthrough(kwargs: dict) -> bool:
-    """``with_raw_response`` and ``with_streaming_response`` go through the
-    patched ``create`` but hand back an ``APIResponse`` whose body the user has
-    not read yet. Reading it here would consume it, and injecting
-    ``stream_options`` into a call whose stream we never get to see would leak
-    the usage chunk into the user's loop. Leave these alone entirely.
+def _raw_marker(kwargs: dict) -> Optional[str]:
+    """``"true"`` for ``with_raw_response``, ``"stream"`` for
+    ``with_streaming_response``, ``None`` for an ordinary call.
+
+    The provider sets the same header for both wrappers and distinguishes them
+    by value, which matters here because the two are not equally safe to look
+    at (see :func:`_deferred_body`).
     """
-    return _RAW_RESPONSE_HEADER in (kwargs.get("extra_headers") or {})
+    return (kwargs.get("extra_headers") or {}).get(_RAW_RESPONSE_HEADER)
+
+
+def _deferred_body(kwargs: dict) -> bool:
+    """Whether the response body is one we must not touch.
+
+    ``with_streaming_response`` hands back a response the user has not read
+    yet, and injecting ``stream_options`` into a stream we never get to see
+    would leak the usage chunk into their loop. Those we leave alone entirely.
+
+    ``with_raw_response`` on a non-streaming call is *not* that case: by the
+    time we see the result the body is already in memory, and ``parse()``
+    caches, so reading it changes nothing the caller can observe. Treating it
+    as untouchable was silent and expensive — ``langchain-openai`` routes
+    every chat call through ``with_raw_response``, and the LangChain handler
+    stands down on LLM spans for a provider this patch is supposed to cover,
+    so the default configuration recorded neither. No span, no tokens, no
+    cost, no error: exactly the invisible loss the failure channel exists to
+    prevent.
+    """
+    marker = _raw_marker(kwargs)
+    if marker is None:
+        return False
+    return marker == "stream" or bool(kwargs.get("stream"))
+
+
+def _unwrap_raw(result: Any, kwargs: dict, logger: Any) -> Any:
+    """The parsed body behind a ``with_raw_response`` result.
+
+    ``parse()`` memoises, so the caller's own ``parse()`` returns the identical
+    object afterwards — this is a read, not a consumption. Anything unexpected
+    leaves the result untouched and costs only the usage numbers.
+    """
+    if _raw_marker(kwargs) != "true":
+        return result
+    try:
+        return result.parse()
+    except Exception:
+        logger.debug("agentsight: could not read raw response body", exc_info=True)
+        return result
 
 
 def _requested_model(kwargs: dict) -> Optional[str]:
@@ -388,7 +463,7 @@ def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any
     @functools.wraps(original)
     def create(self, *args, **kwargs):
         try:
-            watching = capturing() and not _passthrough(kwargs)
+            watching = capturing() and not _deferred_body(kwargs)
             injected = watching and surface.injectable and _inject_usage_option(kwargs)
         except Exception:
             logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
@@ -398,7 +473,23 @@ def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any
             return original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = original(self, *args, **kwargs)
+        try:
+            result = original(self, *args, **kwargs)
+        except BaseException as exc:
+            # The failure channel: a call that raised is a call that happened.
+            # Recorded with zero tokens and the error, then re-raised — the
+            # span must never eat the user's exception.
+            _record_usage(
+                None,
+                _requested_model(kwargs),
+                surface.operation,
+                start_time_ns,
+                now_ns(),
+                False,
+                logger,
+                error=exc,
+            )
+            raise
         end_time_ns = now_ns()
 
         try:
@@ -407,9 +498,10 @@ def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any
                 recorder = _StreamRecorder(surface, model, start_time_ns, logger)
                 _watch_stream(result, recorder, injected, logger)
             else:
+                body = _unwrap_raw(result, kwargs, logger)
                 _record_usage(
-                    getattr(result, "usage", None),
-                    getattr(result, "model", None) or model,
+                    getattr(body, "usage", None),
+                    getattr(body, "model", None) or model,
                     surface.operation,
                     start_time_ns,
                     end_time_ns,
@@ -431,7 +523,7 @@ def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logge
     @functools.wraps(original)
     async def create(self, *args, **kwargs):
         try:
-            watching = capturing() and not _passthrough(kwargs)
+            watching = capturing() and not _deferred_body(kwargs)
             injected = watching and surface.injectable and _inject_usage_option(kwargs)
         except Exception:
             logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
@@ -441,7 +533,20 @@ def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logge
             return await original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = await original(self, *args, **kwargs)
+        try:
+            result = await original(self, *args, **kwargs)
+        except BaseException as exc:
+            _record_usage(
+                None,
+                _requested_model(kwargs),
+                surface.operation,
+                start_time_ns,
+                now_ns(),
+                False,
+                logger,
+                error=exc,
+            )
+            raise
         end_time_ns = now_ns()
 
         try:
@@ -450,9 +555,10 @@ def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logge
                 recorder = _StreamRecorder(surface, model, start_time_ns, logger)
                 _watch_async_stream(result, recorder, injected, logger)
             else:
+                body = _unwrap_raw(result, kwargs, logger)
                 _record_usage(
-                    getattr(result, "usage", None),
-                    getattr(result, "model", None) or model,
+                    getattr(body, "usage", None),
+                    getattr(body, "model", None) or model,
                     surface.operation,
                     start_time_ns,
                     end_time_ns,
@@ -470,7 +576,7 @@ def _wrap_embeddings(original: Callable, logger: Any):
     @functools.wraps(original)
     def create(self, *args, **kwargs):
         try:
-            watching = capturing() and not _passthrough(kwargs)
+            watching = capturing() and not _deferred_body(kwargs)
         except Exception:
             logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
             watching = False
@@ -479,9 +585,17 @@ def _wrap_embeddings(original: Callable, logger: Any):
             return original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = original(self, *args, **kwargs)
+        try:
+            result = original(self, *args, **kwargs)
+        except BaseException as exc:
+            _record_embeddings(
+                None, _requested_model(kwargs), start_time_ns, now_ns(), logger,
+                error=exc,
+            )
+            raise
         _record_embeddings(
-            result, _requested_model(kwargs), start_time_ns, now_ns(), logger
+            _unwrap_raw(result, kwargs, logger),
+            _requested_model(kwargs), start_time_ns, now_ns(), logger,
         )
         return result
 
@@ -492,7 +606,7 @@ def _wrap_async_embeddings(original: Callable, logger: Any):
     @functools.wraps(original)
     async def create(self, *args, **kwargs):
         try:
-            watching = capturing() and not _passthrough(kwargs)
+            watching = capturing() and not _deferred_body(kwargs)
         except Exception:
             logger.debug("agentsight: openai pre-call capture failed", exc_info=True)
             watching = False
@@ -501,9 +615,17 @@ def _wrap_async_embeddings(original: Callable, logger: Any):
             return await original(self, *args, **kwargs)
 
         start_time_ns = now_ns()
-        result = await original(self, *args, **kwargs)
+        try:
+            result = await original(self, *args, **kwargs)
+        except BaseException as exc:
+            _record_embeddings(
+                None, _requested_model(kwargs), start_time_ns, now_ns(), logger,
+                error=exc,
+            )
+            raise
         _record_embeddings(
-            result, _requested_model(kwargs), start_time_ns, now_ns(), logger
+            _unwrap_raw(result, kwargs, logger),
+            _requested_model(kwargs), start_time_ns, now_ns(), logger,
         )
         return result
 

@@ -159,6 +159,13 @@ class AgentSightSpanExporter(SpanExporter):
     #: waiting here costs the user nothing — and retrying a struggling backend
     #: three times without pausing is how a brief wobble becomes an outage.
     _BACKOFF = (0.5, 2.0)
+    #: Seconds between dropped-batch warnings. A down backend at a 1s flush
+    #: interval would otherwise emit one warning per second for as long as
+    #: the outage lasts — a log flood that says the same thing every time
+    #: (design §10 promises this is rate-limited). Dropped batches between
+    #: warnings are counted and reported in the next one, so nothing is lost
+    #: from the record, only from the noise.
+    _WARN_INTERVAL = 60.0
 
     def __init__(self, endpoint: str, api_key: str, logger):
         self._url = f"{endpoint.rstrip('/')}/api/ingest/"
@@ -173,6 +180,8 @@ class AgentSightSpanExporter(SpanExporter):
         )
         #: Last response body, for tests and the PoC. Not part of the API.
         self.last_response: Optional[Dict[str, Any]] = None
+        self._last_drop_warning = 0.0
+        self._drops_since_warning = 0
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         try:
@@ -185,6 +194,7 @@ class AgentSightSpanExporter(SpanExporter):
             return SpanExportResult.FAILURE
 
     def _post(self, payload: Dict[str, Any]) -> SpanExportResult:
+        last_failure = "unknown"
         for attempt in range(self._MAX_RETRIES):
             try:
                 response = self._session.post(
@@ -200,31 +210,57 @@ class AgentSightSpanExporter(SpanExporter):
                 if 400 <= response.status_code < 500:
                     # Client error: retrying cannot help, and a stuck batch
                     # would block every later batch behind it.
-                    self._logger.error(
-                        "ingest rejected batch (%s): %s",
-                        response.status_code,
-                        response.text[:500],
+                    self._warn_dropped(
+                        "ingest rejected batch (%s): %s"
+                        % (response.status_code, response.text[:500])
                     )
                     return SpanExportResult.FAILURE
 
-                self._logger.warning(
+                self._logger.debug(
                     "ingest error %s (attempt %d/%d)",
                     response.status_code,
                     attempt + 1,
                     self._MAX_RETRIES,
                 )
+                last_failure = "ingest error %s" % response.status_code
             except requests.RequestException as exc:
-                self._logger.warning(
+                self._logger.debug(
                     "ingest network error (attempt %d/%d): %s",
                     attempt + 1,
                     self._MAX_RETRIES,
                     exc,
                 )
+                last_failure = "network error: %s" % exc
 
             if attempt < len(self._BACKOFF):
                 time.sleep(self._BACKOFF[attempt])
 
+        self._warn_dropped("batch dropped after %d attempts, last failure: %s"
+                           % (self._MAX_RETRIES, last_failure))
         return SpanExportResult.FAILURE
+
+    def _warn_dropped(self, message: str) -> None:
+        """One warning per _WARN_INTERVAL, with a count of what it swallowed.
+
+        Per-attempt detail stays available at DEBUG level; this is the
+        operator-facing signal, and an operator needs to know the backend is
+        unreachable once a minute, not once a second.
+        """
+        self._drops_since_warning += 1
+        now = time.monotonic()
+        if now - self._last_drop_warning < self._WARN_INTERVAL:
+            return
+        suppressed = self._drops_since_warning - 1
+        self._last_drop_warning = now
+        self._drops_since_warning = 0
+        if suppressed:
+            self._logger.warning(
+                "%s (%d earlier drop(s) suppressed since last warning)",
+                message,
+                suppressed,
+            )
+        else:
+            self._logger.warning("%s", message)
 
     def shutdown(self) -> None:
         try:

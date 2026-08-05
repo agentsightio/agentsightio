@@ -432,19 +432,31 @@ class AgentSightCallbackHandler(BaseCallbackHandler):
 
     @_guarded
     def on_llm_error(self, error, *, run_id, parent_run_id=None, **kwargs) -> None:
-        # Where an abandoned stream lands: core catches BaseException, so even
-        # the GeneratorExit from a half-consumed .stream() arrives here, with
-        # the chunks that did make it under `response`. Those tokens were
-        # billed, so they are recorded.
+        # Two different things land here and they are not the same signal:
         #
-        # A call that failed before producing anything is a different story.
-        # `record_llm_call` has no failure channel, so an empty span here is
-        # indistinguishable from a real zero-token response and inflates the
-        # call count by one per retry. The provider patches emit nothing when a
-        # call raises; neither does this.
-        self._close_llm_run(run_id, kwargs.get("response"), only_if_billed=True)
+        # * A GeneratorExit from a half-consumed .stream() — the consumer
+        #   walked away; the call itself did not fail. Recorded only if
+        #   tokens were billed (they were really spent), never as an error:
+        #   disconnects in an error-rate metric would be noise.
+        # * A real exception — the call failed. Always recorded, through
+        #   record_llm_call's failure channel, tokens or none: a call that
+        #   raised is a call that happened, and hiding it either inflates
+        #   the success rate or (for retries) undercounts real attempts.
+        failure = None if isinstance(error, GeneratorExit) else error
+        self._close_llm_run(
+            run_id,
+            kwargs.get("response"),
+            only_if_billed=failure is None,
+            error=failure,
+        )
 
-    def _close_llm_run(self, run_id, response, only_if_billed: bool = False) -> None:
+    def _close_llm_run(
+        self,
+        run_id,
+        response,
+        only_if_billed: bool = False,
+        error: Optional[BaseException] = None,
+    ) -> None:
         run = self._forget(self._llm_runs, run_id)
         if run is None:
             return
@@ -458,6 +470,7 @@ class AgentSightCallbackHandler(BaseCallbackHandler):
             start_time_ns=run.start_time_ns,
             end_time_ns=now_ns(),
             extra={LLMAttributes.STREAMING: True} if run.streaming else None,
+            error=error,
             **tokens,
         )
 

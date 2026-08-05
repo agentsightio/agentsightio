@@ -417,7 +417,12 @@ def test_the_disabled_sdk_changes_neither_the_wire_nor_the_chunks(client, api):
     assert "stream_options" not in api.bodies()[0]
 
 
-def test_a_provider_error_is_raised_unchanged(spans, client, api):
+def test_a_provider_error_is_raised_unchanged_and_recorded(spans, client, api):
+    """The exception reaches the caller untouched — and the span says why.
+
+    A raised call used to leave no trace at all, which made it look like it
+    never happened; now it is the error it was, with zero tokens.
+    """
     api.reply = error_reply(500)
 
     with ags.conversation("c-error"):
@@ -427,7 +432,17 @@ def test_a_provider_error_is_raised_unchanged(spans, client, api):
                     model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
                 )
 
-    assert llm_spans(spans) == []
+    (llm,) = llm_spans(spans)
+    assert LLMAttributes.ERROR in llm.attributes
+    assert llm.status.status_code.name == "ERROR"
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 0
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "gpt-4o"
+
+    # The span is emitted after the call, so an undated exception event would
+    # be stamped a few ms past end_time — an event outside its own span.
+    (event,) = llm.events
+    assert event.name == "exception"
+    assert llm.start_time <= event.timestamp <= llm.end_time
 
 
 def test_a_stream_keeps_its_type_and_context_manager(spans, client, api):
@@ -448,7 +463,13 @@ def test_a_stream_keeps_its_type_and_context_manager(spans, client, api):
     assert len(llm_spans(spans)) == 1
 
 
-def test_with_raw_response_is_not_touched(spans, client, api):
+def test_with_raw_response_is_recorded_and_still_usable(spans, client, api):
+    """A non-streaming raw response is already in memory by the time we see
+    it, so reading it costs the caller nothing — and skipping it costs a lot:
+    `langchain-openai` routes every chat call through `with_raw_response`, and
+    the LangChain handler stands down for providers this patch covers, so
+    treating it as untouchable recorded neither. No span, no tokens, no error.
+    """
     api.reply = json_reply(chat_completion())
 
     with ags.conversation("c-raw"):
@@ -457,12 +478,56 @@ def test_with_raw_response_is_not_touched(spans, client, api):
                 model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
             )
             assert raw.http_response.status_code == 200
+            # Still fully usable afterwards: parse() memoises, so ours and
+            # theirs are the same object rather than two reads of one body.
+            assert raw.parse().usage.prompt_tokens == 100
+            assert raw.parse() is raw.parse()
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
+    assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 40
+    # Injection is for streams; a non-streaming call must not acquire options
+    # it never asked for.
+    assert "stream_options" not in api.bodies()[0]
+
+
+@pytest.mark.asyncio
+async def test_an_async_raw_response_is_recorded_too(spans, aclient, api):
+    api.reply = json_reply(chat_completion())
+
+    with ags.conversation("c-raw-async"):
+        with ags.turn():
+            raw = await aclient.chat.completions.with_raw_response.create(
+                model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
+            )
             assert raw.parse().usage.prompt_tokens == 100
 
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
+
+
+def test_a_raw_response_wrapping_a_stream_is_still_left_alone(spans, client, api):
+    """`stream=True` through `with_raw_response` hands back a body nobody has
+    read. Touching it would consume the caller's stream."""
+    api.reply = stream_reply(chat_chunk("a"), chat_chunk("b"))
+
+    with ags.conversation("c-raw-streaming"):
+        with ags.turn():
+            raw = client.chat.completions.with_raw_response.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+            chunks = list(raw.parse())
+
+    assert [c.choices[0].delta.content for c in chunks] == ["a", "b"]
+    assert llm_spans(spans) == []
     assert "stream_options" not in api.bodies()[0]
 
 
 def test_streaming_response_helper_still_streams(spans, client, api):
+    """`with_streaming_response` is the deferred case proper — marked
+    "stream" by the provider rather than "true", and never inspected."""
     api.reply = stream_reply(chat_chunk("a"), chat_chunk("b"))
 
     with ags.conversation("c-raw-stream"):
@@ -475,6 +540,7 @@ def test_streaming_response_helper_still_streams(spans, client, api):
                 chunks = list(response.parse())
 
     assert [c.choices[0].delta.content for c in chunks] == ["a", "b"]
+    assert llm_spans(spans) == []
     assert "stream_options" not in api.bodies()[0]
 
 
@@ -1096,3 +1162,26 @@ def test_an_explicit_include_usage_false_is_obeyed(spans, client, api):
     assert api.bodies()[0]["stream_options"] == {"include_usage": False}
     (llm,) = llm_spans(spans)
     assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 0
+    # The 0/0 counts here are unknowns, not zeros — the marker is what lets
+    # ingest tell this span from one that legitimately billed nothing.
+    assert llm.attributes[LLMAttributes.USAGE_REPORTED] is False
+
+
+def test_a_stream_that_reports_usage_carries_no_unknown_marker(spans, client, api):
+    api.reply = stream_reply(
+        chat_chunk("a"),
+        chat_chunk(usage={"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}),
+    )
+
+    with ags.conversation("c-usage"):
+        with ags.turn():
+            stream = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+            user_loop(stream)
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 3
+    assert LLMAttributes.USAGE_REPORTED not in llm.attributes

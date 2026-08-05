@@ -134,35 +134,34 @@ def conversation(conversation_id: Optional[str] = None, **kwargs: Any) -> Conver
 
 
 def open_conversation(conversation_id: str, **kwargs: Any) -> None:
-    """The visit phase — records the conversation with ``is_used=False``.
+    """The visit phase — records that the conversation exists before any
+    interaction does. The first turn is what marks it engaged, which is what
+    separates "widget loaded" from "user engaged" for Unique Interaction.
 
-    Sent immediately rather than batched, because the point of this call is to
-    exist before any interaction does. The first turn then upserts the same
-    row to ``is_used=True``, which is what separates "widget loaded" from
-    "user engaged" for the Unique Interaction metric.
+    An ordinary span of kind ``conversation``, so it rides the same pipeline
+    as everything else and needs nothing from the transport but span
+    delivery. (It used to bypass the pipeline and POST a hand-built payload
+    straight through the exporter — a coupling to one concrete transport
+    that made every alternative exporter impossible.) The cost of the move
+    is immediacy: it now arrives within an export interval rather than
+    instantly, which for a widget-loaded event changes nothing.
     """
-    from agentsight.sdk.core import get_exporter, is_enabled
+    from agentsight.sdk.core import get_tracer, is_enabled
 
     if not is_enabled():
         return
-
-    exporter = get_exporter()
-    if exporter is None:
+    tracer = get_tracer()
+    if tracer is None:
         return
 
     scope = ConversationScope(conversation_id, **kwargs)
-    block: Dict[str, Any] = {"conversation_id": scope.conversation_id, "spans": []}
-    from agentsight.sdk.semconv import ConversationAttributes
-
-    for kwarg, attribute in ConversationAttributes.BY_KWARG.items():
-        if attribute in scope.attributes:
-            block[kwarg] = scope.attributes[attribute]
-    if ConversationAttributes.METADATA in scope.attributes:
-        block["metadata"] = scope.attributes[ConversationAttributes.METADATA]
-    block["is_used"] = False
+    attributes = dict(scope.attributes)
+    attributes[SpanAttributes.KIND] = SpanKind.CONVERSATION
+    attributes[SpanAttributes.ENTITY_NAME] = "conversation_opened"
 
     try:
-        exporter._post({"sdk": {"name": "agentsight-python"}, "conversations": [block]})
+        span = tracer.start_span("conversation_opened", attributes=attributes)
+        span.end()
     except Exception as exc:  # pragma: no cover
         logger.debug("open_conversation failed: %s", exc)
 

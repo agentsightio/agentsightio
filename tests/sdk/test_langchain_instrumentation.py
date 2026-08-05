@@ -448,7 +448,7 @@ def test_a_streamed_call_is_flagged_and_sums_its_chunks(spans):
 
     with ags.conversation("c-stream"):
         with ags.turn():
-            assert [c.content for c in model.stream("hi")] == ["a", "b"]
+            assert [c.content for c in model.stream("hi") if c.content] == ["a", "b"]
 
     (llm,) = llm_spans(spans)
     assert llm.attributes[LLMAttributes.STREAMING] is True
@@ -566,7 +566,7 @@ def test_a_broken_recorder_cannot_break_a_stream(spans, monkeypatch):
 
     with ags.conversation("c-broken-stream"):
         with ags.turn():
-            assert [c.content for c in model.stream("hi")] == ["a", "b"]
+            assert [c.content for c in model.stream("hi") if c.content] == ["a", "b"]
 
 
 def test_a_broken_tool_span_cannot_break_a_tool(spans, monkeypatch):
@@ -625,16 +625,22 @@ def test_an_abandoned_stream_records_the_tokens_it_was_billed_and_nothing_more(
     assert clean_handler._llm_runs == {}
 
 
-def test_a_failed_call_that_billed_nothing_records_no_span(spans, clean_handler):
-    """A provider error is not an LLM call. The OpenAI and Anthropic patches
-    emit nothing here, and a 0-token span carries no error marker to tell it
-    apart from a real one."""
+def test_a_failed_call_is_recorded_as_an_error_span(spans, clean_handler):
+    """A raised call is a call that happened, and the span now says so.
+
+    The error marker is what distinguishes it from a legitimate zero-token
+    response — without it this span could not exist, which is why failures
+    used to be dropped here.
+    """
     with ags.conversation("c-failed"):
         with ags.turn():
             with pytest.raises(RuntimeError):
                 FakeChat(boom=RuntimeError("provider down")).invoke("hi")
 
-    assert llm_spans(spans) == []
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.ERROR] == "provider down"
+    assert llm.status.status_code.name == "ERROR"
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 0
     assert clean_handler._llm_runs == {}
 
 
@@ -653,6 +659,9 @@ def test_a_stream_that_dies_mid_flight_keeps_the_tokens_it_produced(
 
     (llm,) = llm_spans(spans)
     assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 10
+    # Billed AND failed — the failure channel carries both facts.
+    assert llm.attributes[LLMAttributes.ERROR] == "connection reset"
+    assert llm.status.status_code.name == "ERROR"
     assert clean_handler._llm_runs == {}
 
 
@@ -717,7 +726,7 @@ def test_a_disabled_conversation_records_nothing(spans):
 def test_a_stream_outside_a_conversation_is_untouched(spans):
     model = FakeChat(chunks=[chunk("a"), chunk("b")])
 
-    assert [c.content for c in model.stream("hi")] == ["a", "b"]
+    assert [c.content for c in model.stream("hi") if c.content] == ["a", "b"]
     assert spans.get_finished_spans() == ()
 
 
@@ -814,7 +823,7 @@ async def test_an_async_stream_is_recorded_once(spans):
 
     with ags.conversation("c-astream"):
         with ags.turn():
-            seen = [c.content async for c in model.astream("hi")]
+            seen = [c.content async for c in model.astream("hi") if c.content]
 
     assert seen == ["a"]
     (llm,) = llm_spans(spans)
@@ -835,3 +844,51 @@ def test_a_user_started_thread_still_produces_spans(spans):
     thread.join()
 
     assert len(tool_spans(spans)) == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. The two integrations together
+# ---------------------------------------------------------------------------
+
+
+def test_langchain_over_openai_is_counted_exactly_once(spans, monkeypatch):
+    """The regression that made the default configuration record nothing.
+
+    `langchain-openai` calls `chat.completions.with_raw_response.create`, which
+    the OpenAI patch used to skip on the grounds that the body was unread. It
+    is not — for a non-streaming call it is already in memory. Meanwhile the
+    handler stands down on LLM spans for a provider the patch covers, so the
+    combination every LangChain deployment runs produced no llm span at all:
+    no tokens, no cost, and no error to say so.
+
+    The other half matters just as much: exactly one span, not two.
+    """
+    httpx = pytest.importorskip("httpx")
+    pytest.importorskip("openai")
+    ChatOpenAI = pytest.importorskip("langchain_openai").ChatOpenAI
+    # Through the registry, not the installers directly: the stand-down rule
+    # reads `installed_targets()`, so bypassing it would test a configuration
+    # nobody runs — and would double-count, which is the other failure.
+    instrumentation.install("openai", logger)
+    instrumentation.install("langchain", logger)
+
+    body = {
+        "id": "c1", "object": "chat.completion", "created": 1, "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "finish_reason": "stop",
+                     "message": {"role": "assistant", "content": "hi"}}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    }
+    model = ChatOpenAI(
+        model="gpt-4o-mini", api_key="sk-test",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))
+        ),
+    )
+
+    with ags.conversation("c-lc-openai"):
+        with ags.turn():
+            assert model.invoke("hi").content == "hi"
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 11
+    assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 7

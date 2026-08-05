@@ -95,6 +95,16 @@ class ConversationScope:
         for kwarg, value in supplied.items():
             if value is not None:
                 attributes[ConversationAttributes.BY_KWARG[kwarg]] = value
+        if environment is None:
+            # The deployment-wide default from init(environment=...) /
+            # AGENTSIGHT_ENVIRONMENT. Per-conversation always wins — a
+            # staging conversation inside a production process is the
+            # caller's statement, not ours to override.
+            from agentsight.sdk.core import default_environment
+
+            fallback = default_environment()
+            if fallback:
+                attributes[ConversationAttributes.BY_KWARG["environment"]] = fallback
         if metadata:
             attributes[ConversationAttributes.METADATA] = to_json(metadata)
 
@@ -161,8 +171,10 @@ class TurnScope:
     LLM spans that happen inside, so "how much of the wait was tools" is
     answerable without new instrumentation.
 
-    A turn that does not finish is discarded (design §4.3), which is why
-    completion is tracked explicitly rather than inferred from the span ending.
+    A turn that does not finish is still exported — marked incomplete, with
+    the reason — so ingest can keep it out of the transcript while the token
+    spend stays recoverable (design §4.3). Completion is therefore tracked
+    explicitly rather than inferred from the span ending.
     """
 
     def __init__(self, name: Optional[str] = None):
@@ -216,11 +228,16 @@ class TurnScope:
             self.span = None
         return self
 
-    def finish(self, complete: bool = True) -> None:
-        """End the span. ``complete=False`` means the turn is discarded.
+    def finish(self, complete: bool = True, *, reason: Optional[str] = None) -> None:
+        """End the span. ``complete=False`` marks the turn incomplete: it is
+        exported anyway, and ingest archives it without projecting it into the
+        transcript. ``reason`` says why (one of ``TurnAttributes.REASON_*``);
+        when omitted on an incomplete turn it defaults to ``abandoned``, since
+        every path that has an exception in hand passes ``error`` explicitly.
 
         Idempotent by design: a deferred turn can be raced by its iterator
-        finishing and its watchdog firing, and whichever gets here first wins.
+        finishing and its watchdog firing, and whichever gets here first wins —
+        including the reason, which is written only by the winner.
         """
         self._cancel_watchdog()
         with self._lock:
@@ -235,6 +252,11 @@ class TurnScope:
         self._complete = complete
         try:
             self.span.set_attribute(TurnAttributes.COMPLETE, complete)
+            if not complete:
+                self.span.set_attribute(
+                    TurnAttributes.INCOMPLETE_REASON,
+                    reason or TurnAttributes.REASON_ABANDONED,
+                )
             self.span.set_status(Status(StatusCode.OK if complete else StatusCode.ERROR))
             self.span.end()
         except Exception as exc:  # pragma: no cover - never reach user code
@@ -248,12 +270,24 @@ class TurnScope:
         Needed because an application that detects its own client disconnect
         (``if await request.is_disconnected(): break``) then returns *normally* —
         from the SDK's side that is indistinguishable from success.
+
+        No attribute is written here: only finish()'s winner may touch the
+        span. A pre-write outside that lock could stamp ``complete=false``
+        onto a turn another thread just finished as OK, producing the
+        contradiction "incomplete, status OK, no reason" on the wire.
         """
         self._complete = False
-        if self.span is not None and not self._ended:
-            self.span.set_attribute(TurnAttributes.COMPLETE, False)
         self._deferred = False
-        self.finish(complete=False)
+        self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+
+    def _record_failure(self, exc: BaseException) -> None:
+        """Attach the exception to the span, if there is one to attach to."""
+        if self.span is None or exc is None:
+            return
+        try:
+            self.span.record_exception(exc)
+        except Exception:
+            pass
 
     def _cancel_watchdog(self) -> None:
         if self._watchdog is None:
@@ -306,6 +340,26 @@ class TurnScope:
         except Exception as exc:  # pragma: no cover
             _log().debug("failed to add message event: %s", exc)
 
+    def user_message(
+        self, content: Any, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Attach a user message to *this* turn, wherever it is called from.
+
+        The module-level :func:`agentsight.user_message` targets whichever turn
+        is active on the current context, and opens one of its own when there
+        is none. That is right almost always and wrong in exactly one place: a
+        turn deferred by :meth:`keep_open` outlives its block, so the later
+        callback that finishes it is no longer inside it, and the module-level
+        call would quietly file the message under a turn of its own.
+        """
+        self.add_message(MessageAttributes.SENDER_USER, content, metadata)
+
+    def agent_message(
+        self, content: Any, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Attach an agent message to *this* turn. See :meth:`user_message`."""
+        self.add_message(MessageAttributes.SENDER_AGENT, content, metadata)
+
     # -- lifetime binding ---------------------------------------------------
 
     def keep_open(self) -> "TurnScope":
@@ -320,9 +374,9 @@ class TurnScope:
         self._arm_watchdog()
         return self
 
-    def end(self, complete: bool = True) -> None:
+    def end(self, complete: bool = True, *, reason: Optional[str] = None) -> None:
         """End a turn that was deferred by :meth:`keep_open` or :meth:`wrap`."""
-        self.finish(complete=complete)
+        self.finish(complete=complete, reason=reason)
 
     def wrap(self, obj):
         """Bind this turn's lifetime to ``obj`` instead of to a block.
@@ -369,7 +423,9 @@ class TurnScope:
         return obj
 
     def _arm_watchdog(self) -> None:
-        """A deferred turn that is never ended would never be sent at all."""
+        """A deferred turn that never ends can never be exported — OTel only
+        exports ended spans — and its buffered children stay pinned in memory.
+        The deadline bounds both."""
         if self.span is None or self._watchdog is not None:
             return
         from agentsight.sdk import watchdog
@@ -379,15 +435,22 @@ class TurnScope:
         if timeout and timeout > 0:
             self._watchdog = watchdog.arm(timeout / 1000.0, self._expire)
 
-    def _expire(self) -> None:
+    def _expire(self, deadline_expired: bool = True) -> None:
+        """Watchdog callback. ``deadline_expired`` is False when the watchdog
+        is being drained at process shutdown — the turn did not out-stay its
+        deadline, the process is leaving, and the two deserve different
+        reasons on the wire and different log levels here."""
         if self._ended:
             return
-        _log().warning(
-            "turn %s exceeded its deadline without ending; recording it as "
-            "incomplete. Something wrapped by turn.wrap() was never drained.",
-            self.turn_id,
-        )
-        self.finish(complete=False)
+        if deadline_expired:
+            _log().warning(
+                "turn %s exceeded its deadline without ending; recording it as "
+                "incomplete. Something wrapped by turn.wrap() was never drained.",
+                self.turn_id,
+            )
+            self.finish(complete=False, reason=TurnAttributes.REASON_DEADLINE)
+        else:
+            self.finish(complete=False, reason=TurnAttributes.REASON_SHUTDOWN)
 
     # A wrapped iterator resumes in whoever is *consuming* it — a different
     # task, sometimes a different thread — and generators do not carry the
@@ -441,11 +504,14 @@ class TurnScope:
                     yield item
             except GeneratorExit:
                 # The consumer walked away — a client disconnect, usually.
-                # A partial answer is not an exchange, so it is discarded.
-                self.finish(complete=False)
+                # A partial answer is not an exchange; the turn goes out
+                # marked abandoned so the transcript stays clean while the
+                # tokens it burned stay on the books.
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
                 raise
-            except BaseException:
-                self.finish(complete=False)
+            except BaseException as exc:
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
                 raise
             else:
                 self.finish(complete=True)
@@ -465,11 +531,17 @@ class TurnScope:
                     finally:
                         self._exit_step(tokens)
                     yield item
-            except GeneratorExit:
-                self.finish(complete=False)
+            except (GeneratorExit, asyncio.CancelledError):
+                # GeneratorExit is a sync consumer walking away;
+                # CancelledError is the same event in async clothing — the
+                # task draining this stream was cancelled. Neither is the
+                # turn *failing*, and _wrap_future already maps a cancelled
+                # future to abandoned; iteration must agree with it.
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
                 raise
-            except BaseException:
-                self.finish(complete=False)
+            except BaseException as exc:
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
                 raise
             else:
                 self.finish(complete=True)
@@ -495,12 +567,16 @@ class TurnScope:
                     error = completed.exception()
                 except Exception as exc:
                     error = exc
-            if error is not None and self.span is not None:
-                try:
-                    self.span.record_exception(error)
-                except Exception:
-                    pass
-            self.finish(complete=not cancelled and error is None)
+            if error is not None:
+                self._record_failure(error)
+            # Cancelled and errored are different signals: a cancelled task is
+            # the caller walking away, an exception is the work blowing up.
+            if cancelled:
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+            elif error is not None:
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+            else:
+                self.finish(complete=True)
 
         try:
             future.add_done_callback(done)
@@ -514,9 +590,10 @@ class TurnScope:
             tokens = self._enter_step()
             try:
                 result = await awaitable
-            except BaseException:
+            except BaseException as exc:
                 self._exit_step(tokens)
-                self.finish(complete=False)
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
                 raise
             self._exit_step(tokens)
             self.finish(complete=True)
@@ -535,12 +612,11 @@ class TurnScope:
             # block still gives up being the ambient turn on its way out.
             self._detach_context()
             return False
-        if exc_type is not None and self.span is not None:
-            try:
-                self.span.record_exception(exc_val)
-            except Exception:
-                pass
-        self.finish(complete=exc_type is None)
+        if exc_type is not None:
+            self._record_failure(exc_val)
+            self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+        else:
+            self.finish(complete=True)
         return False
 
     async def __aenter__(self) -> "TurnScope":
@@ -607,7 +683,7 @@ def turn(
 
     Three call shapes, all supported::
 
-        with agentsight.turn():           ...   # context manager
+        with agentsight.turn("ask"):      ...   # context manager
         @agentsight.turn                        # bare decorator
         @agentsight.turn(id_from="sid")         # configured decorator
 
@@ -618,6 +694,13 @@ def turn(
     before it reached a variable (an image description, a templated prompt),
     so inferring it would put the wrong text into a client-facing transcript.
     """
+    # ``turn("ask")`` is the obvious way to name a turn and reads as if it
+    # already worked. Without this it binds to ``func``, fails the callable
+    # test, and the name is discarded in silence — every span named "turn".
+    if isinstance(func, str):
+        name = name or func
+        func = None
+
     spec = _TurnSpec(name, id_from, infer, conversation_kwargs)
     if func is not None and callable(func):
         return _decorate_turn(func, spec)  # bare @turn
@@ -702,12 +785,8 @@ def _decorate_turn(func: Callable, spec: _TurnSpec) -> Callable:
             scope.add_message(MessageAttributes.SENDER_AGENT, result)
 
     def fail(scope: TurnScope, exc: BaseException) -> None:
-        if scope.span is not None:
-            try:
-                scope.span.record_exception(exc)
-            except Exception:
-                pass
-        scope.finish(complete=False)
+        scope._record_failure(exc)
+        scope.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
 
     if asyncio.iscoroutinefunction(func):
 

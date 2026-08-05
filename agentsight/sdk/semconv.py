@@ -24,6 +24,12 @@ class SpanKind:
     LLM = "llm"
     BUTTON = "button"
     ATTACHMENT = "attachment"
+    #: The visit phase — the conversation exists but nobody has engaged yet.
+    #: Ingest upserts the row *without* marking it used; any other span kind
+    #: in the conversation implies engagement and flips it. Carries the same
+    #: semantics the old side-channel ``is_used=False`` payload did, but as a
+    #: span, so it needs nothing from the transport but span delivery.
+    CONVERSATION = "conversation"
 
 
 class ConversationAttributes:
@@ -66,9 +72,15 @@ class SpanAttributes:
 class TurnAttributes:
     """One exchange.
 
-    ``COMPLETE`` is the discard switch: a turn abandoned mid-stream, or one
-    that raised, is archived but never projected into the transcript. See
-    design §4.3.
+    ``COMPLETE`` is the projection switch: every turn is exported, but a turn
+    abandoned mid-stream, or one that raised, is archived and never projected
+    into the transcript. The half-exchange guarantee is enforced at ingest,
+    not by withholding the data — the token spend on a failed turn was real,
+    and dropping the span would make it unrecoverable. See design §4.3.
+
+    ``INCOMPLETE_REASON`` says *why*, because an unhandled exception and a
+    user closing the tab are different product signals. Set only when
+    ``COMPLETE`` is false, from the closed ``REASON_*`` set below.
 
     ``ID`` tags every span produced inside a turn so TurnBufferingProcessor
     can group them without walking a parent chain it cannot see — a
@@ -80,6 +92,21 @@ class TurnAttributes:
 
     ID = "agentsight.turn.id"
     COMPLETE = "agentsight.turn.complete"
+    INCOMPLETE_REASON = "agentsight.turn.incomplete_reason"
+
+    #: The turn raised — an unhandled exception, a wrapped iterator or
+    #: awaitable that blew up, a future that errored.
+    REASON_ERROR = "error"
+    #: The consumer walked away — client disconnect mid-stream, an explicit
+    #: ``abandon_turn()``, a cancelled task.
+    REASON_ABANDONED = "abandoned"
+    #: Nothing ever ended the turn and the watchdog closed it at
+    #: ``turn_timeout_ms``. Something wrapped by ``turn.wrap()`` was held
+    #: but never drained.
+    REASON_DEADLINE = "deadline"
+    #: The process exited while the turn was still open; it was closed on the
+    #: way out so the work done up to that point is not lost.
+    REASON_SHUTDOWN = "shutdown"
 
 
 class MessageAttributes:
@@ -158,6 +185,22 @@ class LLMAttributes:
     #: report usage through completely different mechanisms, so when a token
     #: count looks wrong this is the first thing worth knowing.
     STREAMING = "agentsight.llm.streaming"
+
+    #: The call failed. Mirrors ``agentsight.tool.error``. Present only on
+    #: failure, which is what makes a failed call distinguishable from one
+    #: that legitimately reported zero tokens — without it, an error-rate
+    #: metric cannot exist and a raised call either vanishes or masquerades
+    #: as success. Tokens billed before the failure ride along: a streamed
+    #: call that died halfway still spent them.
+    ERROR = "agentsight.llm.error"
+
+    #: ``False`` when a streamed call closed without the provider ever
+    #: reporting usage (caller passed ``include_usage: False``, or the server
+    #: ignored the option). Present only in that case. The duration on such a
+    #: span is real; the 0/0 token counts are *unknowns*, not zeros — ingest
+    #: must not read them as "the model returned nothing", and no rollup may
+    #: treat their absence of tokens as free (design §13, question 4).
+    USAGE_REPORTED = "agentsight.llm.usage_reported"
 
     #: Billable input, *excluding* anything served from or written to cache.
     INPUT_TOKENS = "gen_ai.usage.input_tokens"

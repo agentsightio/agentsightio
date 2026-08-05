@@ -11,6 +11,7 @@ start and the end in two separate callbacks — hence the explicit
 :func:`start_tool_span` / :func:`end_tool_span` pair.
 """
 
+import asyncio
 import time
 from typing import Any, Dict, Optional
 
@@ -108,6 +109,7 @@ def record_llm_call(
     start_time_ns: Optional[int] = None,
     end_time_ns: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
 ) -> None:
     """Emit an ``llm`` span. The single entry point every integration uses.
 
@@ -118,11 +120,30 @@ def record_llm_call(
     than being an instant. Without them "how much of the turn was the LLM" —
     the question §4.2 of the design promises is answerable for free — has no
     answer, because every LLM span would have zero duration.
+
+    ``error`` is the failure channel (design §13, question 5 — closed): a
+    call that raised is recorded as an ERROR span rather than dropped or
+    disguised as success, which is what makes an error-rate metric possible
+    and a failed call distinguishable from one that never happened. Pass any
+    tokens that were billed before the failure — a stream that died halfway
+    still spent them.
+
+    Disconnects are normalized away *here*, at the one choke point every
+    integration shares, rather than at each of the eight-and-counting call
+    sites: ``GeneratorExit`` (a sync consumer walking away) and
+    ``asyncio.CancelledError`` (the async form of the same thing) are not
+    the call failing — someone stopped listening. Recording them as errors
+    would make an error-rate metric measure user behaviour instead of
+    provider health. The span still goes out with whatever tokens were
+    billed; it just carries no error marker.
     """
     from agentsight.sdk.core import get_tracer
 
     if not capturing():
         return
+
+    if error is not None and isinstance(error, (GeneratorExit, asyncio.CancelledError)):
+        error = None
 
     attributes = dict(ags_context.conversation_attributes())
     attributes.update(
@@ -138,6 +159,11 @@ def record_llm_call(
         attributes[LLMAttributes.REQUEST_MODEL] = model
     if operation:
         attributes[LLMAttributes.OPERATION] = operation
+    if error is not None:
+        # `str(exc)` is empty for bare exceptions; an ERROR span whose marker
+        # is falsy would slip past any truthiness filter downstream, so fall
+        # back to the class name — always non-empty, always meaningful.
+        attributes[LLMAttributes.ERROR] = to_text(error) or type(error).__name__
 
     # Only set what actually occurred — a zero here is indistinguishable from
     # "this provider doesn't report it", and the archive should preserve that
@@ -174,6 +200,17 @@ def record_llm_call(
         span = tracer.start_span(
             model or system, attributes=attributes, start_time=start_time_ns
         )
+        if error is not None:
+            try:
+                # The span is emitted after the fact, so "now" is already past
+                # the measured end — dating the event there would put the
+                # exception after the call it ended.
+                span.record_exception(error, timestamp=end_time_ns)
+            except Exception:
+                pass
+            span.set_status(
+                Status(StatusCode.ERROR, str(error) or type(error).__name__)
+            )
         span.end(end_time=end_time_ns)
     except Exception:
         # Called from inside a patched provider method, so raising here would
@@ -236,7 +273,9 @@ def end_tool_span(
         if error is not None:
             span.set_attribute(ToolAttributes.ERROR, to_text(error))
             try:
-                span.record_exception(error)
+                # ``None`` falls through to "now", which is right for a span
+                # being closed live; an explicit end keeps the event inside it.
+                span.record_exception(error, timestamp=end_time_ns)
             except Exception:
                 pass
             span.set_status(Status(StatusCode.ERROR, str(error)))

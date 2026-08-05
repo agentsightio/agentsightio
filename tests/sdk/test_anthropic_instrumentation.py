@@ -733,7 +733,7 @@ def test_an_exception_from_close_still_propagates(anthropic_module, spans):
             stream.close()
 
 
-def test_exceptions_propagate_unchanged(anthropic_module, spans):
+def test_exceptions_propagate_unchanged_and_are_recorded(anthropic_module, spans):
     install_anthropic(LOGGER)
     client = anthropic_module.Messages()
     client.reply = ValueError("bad request")
@@ -742,7 +742,10 @@ def test_exceptions_propagate_unchanged(anthropic_module, spans):
         with pytest.raises(ValueError, match="bad request"):
             client.create(**call())
 
-    assert llm_spans(spans) == []
+    (llm,) = llm_spans(spans)
+    assert LLMAttributes.ERROR in llm.attributes
+    assert llm.status.status_code.name == "ERROR"
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 0
 
 
 def test_mid_stream_exception_propagates_and_still_records(anthropic_module, spans):
@@ -762,7 +765,73 @@ def test_mid_stream_exception_propagates_and_still_records(anthropic_module, spa
         with pytest.raises(RuntimeError, match="connection reset"):
             list(stream)
 
-    assert tokens(llm_spans(spans)[0])["output"] == 5
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["output"] == 5
+    # Both facts on one span: the tokens billed before the failure, and the
+    # failure itself.
+    assert llm.attributes[LLMAttributes.ERROR] == "connection reset"
+    assert llm.status.status_code.name == "ERROR"
+
+
+def test_a_stream_dead_before_message_start_still_names_the_model(
+    anthropic_module, spans
+):
+    """The manager path's failure span used to carry no model at all.
+
+    The kwargs are gone by ``__enter__`` — the manager holds the request
+    privately — and ``message_start``, the usual source, never arrives on a
+    stream that dies first. The accounting row built from this span keys on
+    the model, so ``.stream()`` stashes the requested id for exactly this
+    case. A stream that *does* deliver ``message_start`` still reports the
+    resolved id (the half-read tests above pin that precedence).
+    """
+    install_anthropic(LOGGER)
+    boom = RuntimeError("died on connect")
+
+    def events():
+        raise boom
+        yield  # pragma: no cover
+
+    client = anthropic_module.Messages()
+    client.reply = lambda: anthropic_module.Stream(events())
+
+    with ags.conversation("c"):
+        with pytest.raises(RuntimeError, match="died on connect"):
+            with client.stream(**call()) as stream:
+                list(stream)
+
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["model"] == "claude-sonnet-5"
+    assert llm.attributes[LLMAttributes.ERROR] == "died on connect"
+    assert llm.status.status_code.name == "ERROR"
+
+
+def test_an_async_stream_dead_before_message_start_still_names_the_model(
+    anthropic_module, spans
+):
+    install_anthropic(LOGGER)
+    boom = RuntimeError("died on connect")
+
+    def events():
+        raise boom
+        yield  # pragma: no cover
+
+    client = anthropic_module.AsyncMessages()
+    # The fake AsyncStream iterates its events synchronously, so a sync
+    # generator that raises on first pull models the dead connection.
+    client.reply = lambda: anthropic_module.AsyncStream(events())
+
+    async def go():
+        with ags.conversation("c"):
+            with pytest.raises(RuntimeError, match="died on connect"):
+                async with client.stream(**call()) as stream:
+                    async for _ in stream:
+                        pass
+
+    asyncio.run(go())
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["model"] == "claude-sonnet-5"
+    assert llm.attributes[LLMAttributes.ERROR] == "died on connect"
 
 
 # ---------------------------------------------------------------------------

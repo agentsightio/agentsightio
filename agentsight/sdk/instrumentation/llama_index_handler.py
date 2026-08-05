@@ -165,13 +165,15 @@ class _PendingCall(NamedTuple):
 
     The End event carries neither model nor provider, and its ``timestamp`` is a
     naive wall-clock ``datetime.now()``, so the start time has to be taken and
-    kept here.
+    kept here. ``operation`` rides along for the calls that never get an End
+    event at all — a failed call is recorded from this struct alone.
     """
 
     start_time_ns: int
     model: Optional[str]
     system: Optional[str]
     streaming: bool
+    operation: str = "chat"
 
 
 class _PendingCalls:
@@ -239,7 +241,7 @@ class _PendingCalls:
         return False
 
 
-def _begin_llm_call(pending: _PendingCalls, event: Any) -> None:
+def _begin_llm_call(pending: _PendingCalls, event: Any, operation: str) -> None:
     if pending.enclosed(event.span_id):
         return
 
@@ -252,6 +254,7 @@ def _begin_llm_call(pending: _PendingCalls, event: Any) -> None:
             system=_system_from_class_name(model_dict.get("class_name")),
             # The qualname says it: chat vs stream_chat vs astream_chat.
             streaming="stream" in _method_of(event.span_id),
+            operation=operation,
         ),
     )
 
@@ -300,6 +303,37 @@ def _end_llm_call(pending: _PendingCalls, event: Any, operation: str) -> None:
     )
 
 
+def _fail_llm_call(
+    pending: _PendingCalls, span_id: Optional[str], error: Optional[BaseException]
+) -> None:
+    """The failure channel for calls that end without an End event.
+
+    The pending entry must go regardless; what else happens depends on how
+    the call died. A ``GeneratorExit`` — client disconnected mid-SSE — is the
+    consumer walking away, not the call failing, and LlamaIndex surfaces no
+    partial usage on this path, so there is nothing worth a span. A real
+    exception is recorded through :func:`record_llm_call`'s failure channel —
+    unless a provider patch covers the system, in which case the patch saw
+    the raise on the provider's own method and has already recorded it.
+    """
+    call = pending.finish(span_id)
+    if call is None:
+        return
+    if error is None or isinstance(error, GeneratorExit):
+        return
+    if call.system and provider_patch_covers(call.system):
+        return
+    record_llm_call(
+        call.system or _UNKNOWN_SYSTEM,
+        call.model,
+        operation=call.operation,
+        start_time_ns=call.start_time_ns,
+        end_time_ns=now_ns(),
+        extra={LLMAttributes.STREAMING: True} if call.streaming else None,
+        error=error,
+    )
+
+
 def _make_handlers(logger: Any) -> Tuple[Any, Any]:
     """Build the two handlers.
 
@@ -338,21 +372,36 @@ def _make_handlers(logger: Any) -> Tuple[Any, Any]:
 
         def handle(self, event: Any, **kwargs: Any) -> None:
             try:
-                if isinstance(event, (LLMChatStartEvent, LLMCompletionStartEvent)):
+                if isinstance(event, LLMChatStartEvent):
                     if capturing():
-                        _begin_llm_call(pending, event)
+                        _begin_llm_call(pending, event, "chat")
+                elif isinstance(event, LLMCompletionStartEvent):
+                    if capturing():
+                        _begin_llm_call(pending, event, "text_completion")
                 elif isinstance(event, LLMChatEndEvent):
                     _end_llm_call(pending, event, "chat")
                 elif isinstance(event, LLMCompletionEndEvent):
                     _end_llm_call(pending, event, "text_completion")
-                elif isinstance(event, (ExceptionEvent, SpanDropEvent)):
-                    # The two ways a call ends without an End event. An
-                    # abandoned stream — a client that disconnects mid-SSE —
-                    # raises GeneratorExit into the wrapper, which reports an
-                    # ExceptionEvent. A provider that raises outright reports
-                    # none: the only trace of it is its dropped span. Nothing to
-                    # record either way, but the start must go.
-                    pending.finish(event.span_id)
+                elif isinstance(event, ExceptionEvent):
+                    # One of the two ways a call ends without an End event:
+                    # the wrapper caught something. For an abandoned stream
+                    # that something is GeneratorExit, which _fail_llm_call
+                    # declines to call a failure; anything else is one.
+                    _fail_llm_call(
+                        pending, event.span_id, getattr(event, "exception", None)
+                    )
+                elif isinstance(event, SpanDropEvent):
+                    # The other way: a provider that raises outright reports
+                    # no End event, and the only trace is its dropped span
+                    # carrying the stringified error. If an ExceptionEvent
+                    # for the same span got here first, the pending entry is
+                    # already gone and this is a no-op.
+                    err_str = getattr(event, "err_str", None)
+                    _fail_llm_call(
+                        pending,
+                        event.span_id,
+                        RuntimeError(err_str) if err_str else None,
+                    )
             except Exception:
                 logger.debug(
                     "agentsight: llama_index event capture failed", exc_info=True

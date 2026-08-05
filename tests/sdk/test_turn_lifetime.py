@@ -32,8 +32,8 @@ def spans():
     """A live SDK whose spans land in memory instead of on the network.
 
     Wired the same way ``init()`` wires production — buffering above batching —
-    so the discard-an-unfinished-turn behaviour under test is the real one and
-    not a simplified stand-in.
+    so the hold-a-turn's-family-together behaviour under test is the real one
+    and not a simplified stand-in.
     """
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -179,8 +179,12 @@ def test_a_streaming_decorator_does_not_follow_the_handler_home(spans):
 # ---------------------------------------------------------------------------
 
 
-def test_abandoned_stream_is_discarded_with_its_children(spans):
-    """A client that disconnects mid-answer produces no half-exchange."""
+def test_abandoned_stream_is_exported_incomplete_with_its_children(spans):
+    """A client that disconnects mid-answer is real spend, not a non-event.
+
+    The turn and its tool span both go out — marked, so ingest keeps the
+    half-exchange out of the transcript while the work stays on the books.
+    """
 
     @ags.tool
     def lookup(user_id):
@@ -202,12 +206,32 @@ def test_abandoned_stream_is_discarded_with_its_children(spans):
     assert next(stream) == "partial"
     stream.close()  # GeneratorExit — what a disconnect looks like
 
-    assert spans.get_finished_spans() == (), (
-        "an unfinished turn must take its tool spans down with it"
+    kinds = sorted(
+        (s.attributes or {}).get(SpanAttributes.KIND)
+        for s in spans.get_finished_spans()
+    )
+    assert kinds == [SpanKind.TOOL, SpanKind.TURN], (
+        "an unfinished turn must still deliver itself and its children"
     )
 
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ABANDONED
+    )
+    assert turn.status.status_code.name == "ERROR"
+    # The marker is what downstream filters on; the child must carry the
+    # turn id that ties it to its (incomplete) parent.
+    tool = next(
+        s
+        for s in spans.get_finished_spans()
+        if (s.attributes or {}).get(SpanAttributes.KIND) == SpanKind.TOOL
+    )
+    assert tool.attributes[TurnAttributes.ID] == turn.attributes[TurnAttributes.ID]
 
-def test_exception_mid_stream_discards_the_turn(spans):
+
+def test_exception_mid_stream_exports_the_turn_as_error(spans):
     def handler():
         with ags.conversation("c-boom"):
             with ags.turn():
@@ -222,7 +246,21 @@ def test_exception_mid_stream_discards_the_turn(spans):
     assert next(stream) == "ok"
     with pytest.raises(RuntimeError):
         next(stream)
-    assert spans.get_finished_spans() == ()
+
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ERROR
+    )
+    assert turn.status.status_code.name == "ERROR"
+    # The exception itself rides along as a span event, so "what killed this
+    # turn" is answerable from the archive.
+    exception_events = [e for e in turn.events if e.name == "exception"]
+    assert exception_events, "the mid-stream exception must be recorded"
+    assert "upstream died" in exception_events[0].attributes.get(
+        "exception.message", ""
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +336,9 @@ async def test_task(spans):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_task_discards_the_turn(spans):
+async def test_cancelled_task_exports_the_turn_as_abandoned(spans):
+    """Cancellation is the caller walking away, not the work blowing up."""
+
     async def work():
         await asyncio.sleep(5)
 
@@ -313,7 +353,35 @@ async def test_cancelled_task_discards_the_turn(spans):
         await task
     await asyncio.sleep(0)
 
-    assert turns(spans) == []
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ABANDONED
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_task_exports_the_turn_as_error(spans):
+    async def work():
+        raise ValueError("worker blew up")
+
+    async def handler():
+        with ags.conversation("c-task-error"):
+            with ags.turn():
+                return ags.wrap(asyncio.create_task(work()))
+
+    task = await handler()
+    with pytest.raises(ValueError):
+        await task
+    await asyncio.sleep(0)
+
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ERROR
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +390,11 @@ async def test_cancelled_task_discards_the_turn(spans):
 
 
 def test_a_stream_that_is_never_drained_is_eventually_closed(spans):
-    """Open question 3, answered: a held-but-never-read generator is bounded.
+    """A held-but-never-read generator is bounded by the deadline.
 
-    Without the deadline this turn never ends, never exports, and holds its
-    buffered children in memory for the life of the process — with nothing
-    raised anywhere to say so.
+    Without it this turn never ends, and a span that never ends can never be
+    exported — the exchange would vanish with nothing raised anywhere to say
+    so. The deadline closes it as incomplete, and out it goes, marked.
     """
     core._state.turn_timeout_ms = 150
 
@@ -349,9 +417,12 @@ def test_a_stream_that_is_never_drained_is_eventually_closed(spans):
         time.sleep(0.02)
 
     assert scope._ended, "the deadline must close a turn nobody is draining"
-    # Decision 11: it is dropped in the SDK rather than exported and filtered,
-    # so a half-drained stream never reaches the dashboard at all.
-    assert spans.get_finished_spans() == ()
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_DEADLINE
+    )
 
 
 def test_the_deadline_is_cancelled_when_the_stream_ends_normally(spans):
@@ -397,6 +468,86 @@ def test_finish_is_idempotent_under_a_race(spans):
         thread.join()
 
     assert len(turns(spans)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Process exit
+# ---------------------------------------------------------------------------
+
+
+def test_shutdown_exports_open_deferred_turns(spans):
+    """Process exit must not silently lose turns in flight.
+
+    Mirrors core.shutdown()'s exact first steps: enabled flips off, then the
+    watchdog fires every pending deadline instead of clearing it. Each open
+    deferred turn ends marked ``shutdown`` — with the pipeline below it still
+    alive, so the span actually goes out.
+    """
+    core._state.turn_timeout_ms = 60_000  # far away: only shutdown can end it
+
+    def handler():
+        with ags.conversation("c-exit"):
+            with ags.turn():
+                ags.user_message("still streaming when the process dies")
+
+                def body():
+                    yield "one"
+                    yield "two"
+
+                return ags.wrap(body())
+
+    stream = handler()
+    assert next(stream) == "one"
+
+    core._state.enabled = False  # what core.shutdown() does first...
+    watchdog.shutdown()  # ...and second. finish() must survive both.
+
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_SHUTDOWN
+    )
+    assert messages(turn) == [
+        ("end_user", "still streaming when the process dies")
+    ], "what was captured before the exit must survive it"
+
+
+def test_children_of_a_turn_open_at_shutdown_are_released(spans):
+    """A plain ``with`` block open in a live thread cannot be ended from
+    outside at exit — but the tool spans it already finished are real work
+    and must not vanish with it."""
+
+    @ags.tool
+    def lookup(user_id):
+        return "found"
+
+    with ags.conversation("c-live"):
+        with ags.turn():
+            lookup(user_id="u-1")
+            # The process exits here; nothing can end this block's turn.
+            core._state.provider.shutdown()
+
+    kinds = [
+        (s.attributes or {}).get(SpanAttributes.KIND)
+        for s in spans.get_finished_spans()
+    ]
+    assert SpanKind.TOOL in kinds, "the orphan's work must not vanish with it"
+
+
+def test_abandon_turn_reason(spans):
+    """An app that detects its own disconnect reports abandonment, not error."""
+    with ags.conversation("c-self-abandon"):
+        with ags.turn():
+            ags.user_message("hello?")
+            ags.abandon_turn()
+
+    (turn,) = turns(spans)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ABANDONED
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,3 +608,143 @@ def test_wrap_survives_a_broken_turn(spans, monkeypatch):
         with ags.turn():
             assert ags.wrap(source) is source
     assert list(source) == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Watchdog lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_watchdog_stays_usable_after_shutdown():
+    """shutdown() drains, it does not decommission.
+
+    A "stopped" flag would have to be checked by arm() and reset somewhere,
+    and the window between the two is where a deadline gets orphaned — armed
+    onto a heap no thread serves, its turn open forever. So there is no such
+    flag: an arm() racing (or following) shutdown is simply new business.
+    """
+    watchdog.shutdown()
+
+    fired = threading.Event()
+    handle = watchdog.arm(0.05, lambda expired: fired.set())
+    assert handle is not None
+    assert fired.wait(2.0), "a deadline armed after shutdown must still fire"
+
+
+def test_shutdown_waits_for_an_in_flight_deadline():
+    """The worker may have popped a deadline and be mid-callback when
+    shutdown() runs. Returning before that callback finishes would let
+    core.shutdown() kill the provider under a span still being ended."""
+    started = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+
+    def slow_callback(expired):
+        started.set()
+        release.wait(2.0)
+        done.set()
+
+    watchdog.arm(0.01, slow_callback)
+    assert started.wait(2.0), "deadline must fire"
+
+    finished = threading.Event()
+
+    def call_shutdown():
+        watchdog.shutdown()
+        finished.set()
+
+    shutdown_thread = threading.Thread(target=call_shutdown)
+    shutdown_thread.start()
+
+    assert not finished.wait(0.2), "shutdown must wait for the callback"
+    release.set()
+    assert finished.wait(2.0), "shutdown must return once the callback ends"
+    assert done.is_set()
+    shutdown_thread.join()
+
+
+# ---------------------------------------------------------------------------
+# Buffer overflow — bounded memory, split delivery
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tiny_buffer():
+    """The production pipeline with a 2-span buffer, so overflow is reachable."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        TurnBufferingProcessor(SimpleSpanProcessor(exporter), max_buffered_spans=2)
+    )
+    previous = (core._state.enabled, core._state.provider, core._state.tracer)
+    core._state.provider = provider
+    core._state.tracer = provider.get_tracer("agentsight-test")
+    core._state.enabled = True
+    try:
+        yield exporter
+    finally:
+        core._state.enabled, core._state.provider, core._state.tracer = previous
+
+
+def test_overflow_releases_children_early_and_still_exports_the_turn(tiny_buffer):
+    @ags.tool
+    def step(n):
+        return n
+
+    with ags.conversation("c-overflow"):
+        with ags.turn():
+            for n in range(5):  # 5 > max_buffered_spans=2
+                step(n)
+
+    kinds = [
+        (s.attributes or {}).get(SpanAttributes.KIND)
+        for s in tiny_buffer.get_finished_spans()
+    ]
+    assert kinds.count(SpanKind.TOOL) == 5, "overflow must not drop any child"
+    assert kinds.count(SpanKind.TURN) == 1, "the turn must follow its children out"
+    (turn,) = turns(tiny_buffer)
+    assert turn.attributes[TurnAttributes.COMPLETE] is True
+
+
+def test_overflow_on_an_incomplete_turn_exports_everything_marked(tiny_buffer):
+    """The overflow path and the incomplete path compose: children already
+    downstream cannot be retracted, and the turn still goes out marked so
+    ingest can keep the family out of the transcript."""
+
+    @ags.tool
+    def step(n):
+        return n
+
+    with ags.conversation("c-overflow-err"):
+        with pytest.raises(RuntimeError):
+            with ags.turn():
+                for n in range(4):
+                    step(n)
+                raise RuntimeError("mid-turn crash after overflow")
+
+    (turn,) = turns(tiny_buffer)
+    assert turn.attributes[TurnAttributes.COMPLETE] is False
+    assert (
+        turn.attributes[TurnAttributes.INCOMPLETE_REASON]
+        == TurnAttributes.REASON_ERROR
+    )
+    kinds = [
+        (s.attributes or {}).get(SpanAttributes.KIND)
+        for s in tiny_buffer.get_finished_spans()
+    ]
+    assert kinds.count(SpanKind.TOOL) == 4
+
+
+def test_shutdown_with_an_overflowed_slot_does_not_crash(tiny_buffer):
+    """An overflowed turn leaves a None slot in the buffer; shutdown() must
+    skip it rather than iterate it."""
+
+    @ags.tool
+    def step(n):
+        return n
+
+    with ags.conversation("c-overflow-exit"):
+        with ags.turn():
+            for n in range(3):
+                step(n)
+            core._state.provider.shutdown()  # exit mid-turn, slot is None

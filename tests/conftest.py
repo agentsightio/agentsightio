@@ -18,6 +18,10 @@ def isolated_env(monkeypatch):
     monkeypatch.delenv("AGENTSIGHT_TOKEN_HANDLER_TYPE", raising=False)
     monkeypatch.delenv("AGENTSIGHT_API_KEY", raising=False)
     monkeypatch.delenv("AGENTSIGHT_CONVERSATION_ID", raising=False)
+    # Both change what init() builds, so a developer's shell must not decide
+    # which transport the suite exercises or which environment it stamps.
+    monkeypatch.delenv("AGENTSIGHT_FILE_EXPORTER", raising=False)
+    monkeypatch.delenv("AGENTSIGHT_ENVIRONMENT", raising=False)
 
 @pytest.fixture
 def valid_api_key():
