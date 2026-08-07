@@ -45,19 +45,18 @@ AgentSight complements observability platforms. It’s not built for tracing or 
 ## Quick start
 Get up and running with just a few lines of code to track complete conversations:
 ```python
-from agentsight import conversation_tracker
+import agentsight
 
-conversation_tracker.get_or_create_conversation(
-    conversation_id="your_conversation_id"
-)
-conversation_tracker.track_human_message(
-    message="What's the weather like today?",
-)
-conversation_tracker.track_agent_message(
-    message="It's sunny with clear skies."
-)
-conversation_tracker.send_tracked_data()
+agentsight.init(api_key="ags_...")  # or set AGENTSIGHT_API_KEY
+
+with agentsight.conversation("your_conversation_id"):
+    with agentsight.turn():
+        agentsight.user_message("What's the weather like today?")
+        reply = my_agent.run(...)  # token usage, cost and tool calls captured automatically
+        agentsight.agent_message(reply)
 ```
+
+Sending happens in the background — there is nothing to flush in a long-running service. LLM calls made through OpenAI, Anthropic, LangChain or LlamaIndex inside a turn are captured without any extra code, and `agentsight.upload_attachments(...)` delivers files shared in the conversation.
 
 ## Learn More
 Visit the docs to learn more: [docs](https://docs.agentsight.io)

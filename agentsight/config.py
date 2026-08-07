@@ -7,7 +7,7 @@ import re
 
 from agentsight.exceptions import InvalidApiKeyException
 from agentsight.helpers.serialization import AgentSightJSONEncoder
-from agentsight.enums import LogLevel, TokenHandlerType, Environment
+from agentsight.enums import LogLevel, Environment
 
 API_KEY_PATTERN = re.compile(r"^ags_[a-f0-9]{32}_[a-f0-9]{6}$", re.IGNORECASE)
 
@@ -16,7 +16,6 @@ class ConfigDict(TypedDict):
     endpoint: str
     app_url: str
     conversation_id: Optional[str]
-    token_handler: Optional[TokenHandlerType]
     log_level: Union[str, LogLevel]
 
 
@@ -47,11 +46,6 @@ class Config:
         metadata={"description": "Conversation ID for tracking"},
     )
 
-    token_handler: Optional[TokenHandlerType] = field(
-        default_factory=lambda: TokenHandlerType.from_env(os.getenv("AGENTSIGHT_TOKEN_HANDLER_TYPE")),
-        metadata={"description": "Token handler type for AgentSight"},
-    )
-
     log_level: LogLevel = field(
         default_factory=lambda: LogLevel.from_string(os.getenv("AGENTSIGHT_LOG_LEVEL", "INFO")),
         metadata={"description": "Logging level for AgentSight"},
@@ -76,9 +70,6 @@ class Config:
         if isinstance(self.log_level, str):
             self.log_level = LogLevel.from_string(self.log_level)
 
-        if self.token_handler and isinstance(self.token_handler, str):
-            self.token_handler = TokenHandlerType.from_env(self.token_handler)
-
     def configure(
         self,
         api_key: Optional[str] = None,
@@ -86,7 +77,6 @@ class Config:
         app_url: Optional[str] = None,
         environment: Optional[Environment|None] = None,
         conversation_id: Optional[str] = None,
-        token_handler: Optional[TokenHandlerType|None] = None,
         log_level: Optional[Union[str, LogLevel]] = None,
     ):
         """Configure settings from kwargs, then re-run validation."""
@@ -105,9 +95,6 @@ class Config:
         if conversation_id is not None:
             self.conversation_id = conversation_id
 
-        if token_handler is not None:
-            self.token_handler = token_handler
-        
         if log_level is not None:
             self.log_level = log_level
 
@@ -122,7 +109,6 @@ class Config:
             "app_url": self.app_url,
             "environment": self.environment,
             "conversation_id": self.conversation_id,
-            "token_handler": self.token_handler,
             "log_level": self.log_level
         }
 

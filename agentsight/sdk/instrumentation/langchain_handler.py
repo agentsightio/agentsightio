@@ -27,6 +27,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
+from agentsight.exceptions import ToolFailure
 from agentsight.sdk.instrumentation.base import (
     capturing,
     end_tool_span,
@@ -223,16 +224,7 @@ def _system_of(metadata: Dict[str, Any], serialized: Dict[str, Any]) -> str:
     return _SYSTEM_ALIASES.get(provider, provider) or _UNKNOWN_SYSTEM
 
 
-class _ToolFailure(Exception):
-    """LangChain has already turned the tool's exception into a string.
-
-    ``end_tool_span`` records an exception rather than a message, so what
-    reaches it has to be one. This carries the text the framework kept and
-    invents nothing else.
-    """
-
-
-def _tool_result(output: Any) -> Tuple[Any, Optional[_ToolFailure]]:
+def _tool_result(output: Any) -> Tuple[Any, Optional[ToolFailure]]:
     """Split ``on_tool_end``'s payload into a result and a failure.
 
     A tool invoked with a ``ToolCall`` — which is every tool an agent calls —
@@ -249,7 +241,7 @@ def _tool_result(output: Any) -> Tuple[Any, Optional[_ToolFailure]]:
         return output, None
     content = getattr(output, "content", output)
     if getattr(output, "status", None) == "error":
-        return None, _ToolFailure(to_text(content))
+        return None, ToolFailure(to_text(content))
     return content, None
 
 

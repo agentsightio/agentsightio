@@ -17,7 +17,16 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from agentsight.sdk.semconv import ConversationAttributes, SpanAttributes
 
 SDK_NAME = "agentsight-python"
-SDK_VERSION = "1.0.0-poc"
+
+# The installed distribution's version, so the wire always reports what is
+# actually running. The fallback covers a source checkout that was never
+# pip-installed and must track pyproject.toml by hand.
+try:
+    from importlib.metadata import version as _distribution_version
+
+    SDK_VERSION = _distribution_version("agentsight")
+except Exception:  # pragma: no cover - PackageNotFoundError in dev checkouts
+    SDK_VERSION = "0.1.0"
 
 
 def _iso(nanoseconds: Optional[int]) -> Optional[str]:

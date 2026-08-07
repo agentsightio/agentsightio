@@ -1,14 +1,14 @@
-"""AgentSight 1.0 SDK — the complete public surface.
+"""The OpenTelemetry-based tracking surface.
 
-In 1.0 these names are promoted to the top-level ``agentsight`` package. While
-the 0.0.x clients still exist they live here, so the two do not collide::
-
-    from agentsight.sdk import init, conversation, turn, user_message, agent_message
+Every name here is re-exported by the top-level ``agentsight`` package, which
+is the intended import path — ``from agentsight.sdk import ...`` works but is
+an implementation detail.
 
 See ``design/otel-migration.md`` for the design and ``design/demo.py`` for
 worked examples.
 """
 
+from agentsight.exceptions import UploadError
 from agentsight.sdk.api import (
     abandon_turn,
     agent_message,
@@ -24,6 +24,7 @@ from agentsight.sdk.core import flush, init, is_enabled, shutdown
 from agentsight.sdk.decorators import task, tool
 from agentsight.sdk.instrumentation import register_price
 from agentsight.sdk.scopes import turn
+from agentsight.sdk.uploads import upload_attachments
 
 __all__ = [
     # lifecycle
@@ -48,6 +49,9 @@ __all__ = [
     "open_conversation",
     "button",
     "attachments",
+    # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
+    "upload_attachments",
+    "UploadError",
     # cost of a model the bundled price table has never heard of
     "register_price",
 ]

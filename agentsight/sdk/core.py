@@ -46,6 +46,11 @@ class _State:
         self.tracer = None
         self.environment: Optional[str] = None
         self.turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS
+        #: What init() resolved, kept for the data-plane calls (attachment
+        #: uploads) that share the key but not the span pipeline. The key is
+        #: None when init() ran without one (file exporter, custom transport).
+        self.api_key: Optional[str] = None
+        self.endpoint: str = DEFAULT_ENDPOINT
 
 
 _state = _State()
@@ -67,6 +72,11 @@ def get_turn_timeout_ms() -> int:
     """How long a turn may stay open after its lifetime was handed to
     ``turn.wrap()`` before it is closed as incomplete. 0 disables the deadline."""
     return _state.turn_timeout_ms
+
+
+def api_credentials() -> "tuple[Optional[str], str]":
+    """``(api_key, endpoint)`` as resolved by :func:`init`."""
+    return _state.api_key, _state.endpoint
 
 
 def default_environment() -> Optional[str]:
@@ -181,6 +191,8 @@ def init(
             _state.tracer = otel_trace.get_tracer(_TRACER_NAME, SDK_VERSION, provider)
             _state.environment = environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
             _state.turn_timeout_ms = turn_timeout_ms
+            _state.api_key = resolved_key
+            _state.endpoint = resolved_endpoint
             _state.enabled = True
         except Exception as exc:
             logger.error("AgentSight disabled: initialization failed: %s", exc)
