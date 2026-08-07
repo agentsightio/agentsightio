@@ -1,15 +1,15 @@
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from typing import Optional, TypedDict, Union
-import re
 
-from agentsight.exceptions import InvalidApiKeyException
+from agentsight import _settings
+from agentsight.enums import Environment, LogLevel
+from agentsight.exceptions import InvalidApiKeyError
 from agentsight.helpers.serialization import AgentSightJSONEncoder
-from agentsight.enums import LogLevel, Environment
 
-API_KEY_PATTERN = re.compile(r"^ags_[a-f0-9]{32}_[a-f0-9]{6}$", re.IGNORECASE)
+#: Shared with both planes — see :mod:`agentsight._settings`.
+API_KEY_PATTERN = _settings.API_KEY_PATTERN
 
 class ConfigDict(TypedDict):
     api_key: Optional[str]
@@ -27,12 +27,12 @@ class Config:
     )
 
     endpoint: str = field(
-        default_factory=lambda: os.getenv("AGENTSIGHT_API_ENDPOINT", "https://api.agentsight.io"),
+        default_factory=lambda: os.getenv("AGENTSIGHT_API_ENDPOINT", _settings.DEFAULT_ENDPOINT),
         metadata={"description": "Base URL for the AgentSight API"},
     )
 
     app_url: str = field(
-        default_factory=lambda: os.getenv("AGENTSIGHT_APP_URL", "https://app.agentsight.io"),
+        default_factory=lambda: os.getenv("AGENTSIGHT_APP_URL", _settings.DEFAULT_APP_URL),
         metadata={"description": "Dashboard URL for the AgentSight application"},
     )
 
@@ -55,7 +55,7 @@ class Config:
     #     default_factory=lambda: os.getenv("AGENTSIGHT_AGENT_TYPE", "agent"),
     #     metadata={"description": "Logging level for AgentSight"},
     # )
-    
+
     def __post_init__(self):
         """
         Validate and normalize fields after the object is initialized.
@@ -65,7 +65,7 @@ class Config:
             if not self.api_key.strip():
                 self.api_key = None
             elif not API_KEY_PATTERN.match(self.api_key):
-                raise InvalidApiKeyException(self.api_key, self.app_url)
+                raise InvalidApiKeyError(self.api_key, self.app_url)
 
         if isinstance(self.log_level, str):
             self.log_level = LogLevel.from_string(self.log_level)

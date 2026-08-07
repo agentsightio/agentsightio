@@ -8,25 +8,19 @@ return ``FAILURE``, never raise.
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from agentsight import _settings
 from agentsight.sdk.semconv import ConversationAttributes, SpanAttributes
 
-SDK_NAME = "agentsight-python"
-
-# The installed distribution's version, so the wire always reports what is
-# actually running. The fallback covers a source checkout that was never
-# pip-installed and must track pyproject.toml by hand.
-try:
-    from importlib.metadata import version as _distribution_version
-
-    SDK_VERSION = _distribution_version("agentsight")
-except Exception:  # pragma: no cover - PackageNotFoundError in dev checkouts
-    SDK_VERSION = "0.1.0"
+#: Re-exported: this module was where they lived before both planes needed
+#: them, and ``sdk.uploads`` still imports them from here.
+SDK_NAME = _settings.SDK_NAME
+SDK_VERSION = _settings.SDK_VERSION
 
 
 def _iso(nanoseconds: Optional[int]) -> Optional[str]:
@@ -177,14 +171,15 @@ class AgentSightSpanExporter(SpanExporter):
     _WARN_INTERVAL = 60.0
 
     def __init__(self, endpoint: str, api_key: str, logger):
-        self._url = f"{endpoint.rstrip('/')}/api/ingest/"
+        self._url = _settings.join_url(endpoint, "/api/ingest/")
         self._logger = logger
         self._session = requests.Session()
         self._session.headers.update(
             {
-                "Authorization": f"Api-Key {api_key}",
+                "Authorization": _settings.auth_header(api_key),
                 "Content-Type": "application/json",
-                "User-Agent": f"{SDK_NAME}/{SDK_VERSION}",
+                "Accept": "application/json",
+                "User-Agent": _settings.USER_AGENT,
             }
         )
         #: Last response body, for tests and the PoC. Not part of the API.
@@ -219,6 +214,13 @@ class AgentSightSpanExporter(SpanExporter):
                 if 400 <= response.status_code < 500:
                     # Client error: retrying cannot help, and a stuck batch
                     # would block every later batch behind it.
+                    #
+                    # Note that a bad key shows up here as **403, not 401**:
+                    # this route pins itself to ApiKeyAuthentication, which
+                    # defines no authenticate_header(), so DRF downgrades the
+                    # status. Everywhere else in the API the same failure is a
+                    # 401 — which is why agentsight._transport does not try to
+                    # special-case it and this loop reports the raw status.
                     self._warn_dropped(
                         "ingest rejected batch (%s): %s"
                         % (response.status_code, response.text[:500])

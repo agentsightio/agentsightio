@@ -26,11 +26,11 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from agentsight.exceptions import UploadError
+from agentsight._transport import Transport
+from agentsight.exceptions import NetworkError, UploadError
 from agentsight.sdk import context as ags_context
 from agentsight.sdk.api import attachments as _record_attachment_span
 from agentsight.sdk.core import api_credentials, default_environment, logger
-from agentsight.sdk.exporter import SDK_NAME, SDK_VERSION
 from agentsight.sdk.semconv import ConversationAttributes, MessageAttributes
 
 _TIMEOUT_SECONDS = 30
@@ -87,14 +87,27 @@ def upload_attachments(
             "over HTTP.)"
         )
 
-    headers = {
-        "Authorization": f"Api-Key {api_key}",
-        "User-Agent": f"{SDK_NAME}/{SDK_VERSION}",
-    }
-    base = endpoint.rstrip("/")
+    # The shared transport: one pooled session, one auth header, one URL
+    # joiner. Its raising taxonomy is not used here — this call owes its
+    # callers UploadError — so it is driven through ``raw()``.
+    transport = Transport(api_key, endpoint, timeout=timeout)
+    try:
+        return _upload(transport, normalized, resolved_id, environment, sender, metadata, timeout)
+    finally:
+        transport.close()
 
+
+def _upload(
+    transport: Transport,
+    normalized: List[Dict[str, Any]],
+    resolved_id: str,
+    environment: Optional[str],
+    sender: str,
+    metadata: Optional[Dict[str, Any]],
+    timeout: float,
+) -> Any:
     conversation_pk = _ensure_conversation(
-        base, headers, resolved_id, environment, timeout
+        transport, resolved_id, environment, timeout
     )
 
     payload = {
@@ -113,11 +126,12 @@ def upload_attachments(
         ],
     }
 
-    url = f"{base}/api/attachments/"
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    except requests.RequestException as exc:
-        raise UploadError(f"attachment upload to {url} failed: {exc}") from exc
+        response = transport.raw(
+            "POST", "/api/attachments/", json=payload, timeout=timeout
+        )
+    except NetworkError as exc:
+        raise UploadError(f"attachment upload failed: {exc}") from exc
 
     if response.status_code not in (200, 201):
         raise UploadError(
@@ -240,8 +254,7 @@ def _guess_mime(filename: str) -> str:
 
 
 def _ensure_conversation(
-    base: str,
-    headers: Dict[str, str],
+    transport: Transport,
     conversation_id: str,
     environment: Optional[str],
     timeout: float,
@@ -253,15 +266,20 @@ def _ensure_conversation(
     travel on a batched background pipeline while this call is immediate.
     ``POST /api/conversations/`` upserts on (agent, conversation_id), which
     closes both gaps in one round trip.
+
+    Note this is *not* the same operation as ``AgentSight.conversations``'
+    id resolution, which fails when the conversation is unknown. Creating on
+    demand is load-bearing here and wrong there.
     """
-    url = f"{base}/api/conversations/"
     payload: Dict[str, Any] = {"conversation_id": conversation_id}
     if environment:
         payload["environment"] = environment
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    except requests.RequestException as exc:
-        raise UploadError(f"could not reach {url}: {exc}") from exc
+        response = transport.raw(
+            "POST", "/api/conversations/", json=payload, timeout=timeout
+        )
+    except NetworkError as exc:
+        raise UploadError(f"could not create conversation: {exc}") from exc
 
     if response.status_code in (200, 201):
         pk = _response_body(response).get("id")
@@ -270,17 +288,17 @@ def _ensure_conversation(
 
     # The upsert can be refused on grounds an existing row doesn't suffer
     # (e.g. an environment slug the agent doesn't have). The conversation may
-    # still exist from the span path — look it up before giving up.
-    lookup_url = f"{base}/api/conversations/lookup/"
+    # still exist from the span path — look it up before giving up. This route
+    # is write-role-only, which is fine: uploading already requires one.
     try:
-        lookup = requests.get(
-            lookup_url,
+        lookup = transport.raw(
+            "GET",
+            "/api/conversations/lookup/",
             params={"conversation_id": conversation_id},
-            headers=headers,
             timeout=timeout,
         )
-    except requests.RequestException as exc:
-        raise UploadError(f"could not reach {lookup_url}: {exc}") from exc
+    except NetworkError as exc:
+        raise UploadError(f"could not look up conversation: {exc}") from exc
     if lookup.status_code == 200:
         pk = _response_body(lookup).get("id")
         if pk is not None:

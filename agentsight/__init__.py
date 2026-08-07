@@ -12,17 +12,49 @@ The tracking surface is OpenTelemetry-based and lives at the top level::
             ...                          # tokens, cost and tool calls captured
             agentsight.agent_message(reply)
 
-Alongside it, the data-plane clients for fetching and managing what was
-tracked: ``agentsight_api`` (read) and ``conversation_manager`` (manage).
+Reading and managing what was tracked is a separate surface, in
+:mod:`agentsight.api`::
+
+    from agentsight.api import AgentSight
+
+    ags = AgentSight()
+    for conversation in ags.conversations.list(has_feedback=True):
+        ...
+
+Importing this package does nothing but define names — it opens no
+connections, reads no configuration and never raises, whether or not an API
+key is set.
 """
 
-from agentsight.client.api_client import AgentSightAPI, agentsight_api
-from agentsight.client.conversation_manager_client import (
-    ConversationManager,
-    conversation_manager,
+try:
+    # Kept from 0.0.x, where it happened as a side effect of importing the
+    # logging module that the deleted clients pulled in. Made explicit here
+    # so it is a decision rather than an accident: a local AGENTSIGHT_API_KEY
+    # in a .env file keeps working exactly as it did.
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:  # python-dotenv is a dev extra, not a runtime dependency
+    pass
+
+from agentsight.api import AgentSight
+from agentsight.exceptions import (
+    AgentSightError,
+    APIError,
+    AuthenticationError,
+    ConfigurationError,
+    InvalidApiKeyError,
+    MethodNotAllowedError,
+    MissingApiKeyError,
+    NetworkError,
+    NotFoundError,
+    PermissionDeniedError,
+    ServerError,
+    SubscriptionInactiveError,
+    UploadError,
+    ValidationError,
 )
 from agentsight.sdk import (
-    UploadError,
     abandon_turn,
     agent_message,
     attachments,
@@ -68,12 +100,23 @@ __all__ = [
     "attachments",
     # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
     "upload_attachments",
-    "UploadError",
     # cost of a model the bundled price table has never heard of
     "register_price",
-    # data-plane clients
-    "AgentSightAPI",
-    "agentsight_api",
-    "ConversationManager",
-    "conversation_manager",
+    # reading and managing what was tracked — agentsight.api
+    "AgentSight",
+    # errors
+    "AgentSightError",
+    "ConfigurationError",
+    "MissingApiKeyError",
+    "InvalidApiKeyError",
+    "APIError",
+    "AuthenticationError",
+    "SubscriptionInactiveError",
+    "PermissionDeniedError",
+    "NotFoundError",
+    "ValidationError",
+    "MethodNotAllowedError",
+    "ServerError",
+    "NetworkError",
+    "UploadError",
 ]

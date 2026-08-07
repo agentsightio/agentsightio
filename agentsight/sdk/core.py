@@ -1,33 +1,36 @@
 """SDK lifecycle: ``init()``, the tracer, flushing and shutdown.
 
-Deliberately does not import ``agentsight.config`` or any 0.0.x module. The
-old package builds three singletons at import time and raises without an API
-key, which is exactly the behaviour design §10 forbids — and those modules are
-being removed in 1.0 anyway.
+Deliberately does not import ``agentsight.config``: that module raises on a
+malformed key at construction, and ``init()`` must never raise into user code
+(design §10). The constants both planes need live in ``agentsight._settings``
+instead, which holds nothing but literals and pure functions.
 """
 
 import atexit
 import logging
 import os
-import re
 import threading
-from typing import Any, List, Optional, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
+from agentsight import _settings
 from agentsight.sdk import watchdog
-from agentsight.sdk.exporter import AgentSightSpanExporter, SDK_NAME, SDK_VERSION
+from agentsight.sdk.exporter import SDK_NAME, SDK_VERSION, AgentSightSpanExporter
 from agentsight.sdk.file_exporter import FileSpanExporter
 from agentsight.sdk.processors import TurnBufferingProcessor
 
 logger = logging.getLogger("agentsight")
 
-API_KEY_PATTERN = re.compile(r"^ags_[a-f0-9]{32}_[a-f0-9]{6}$", re.IGNORECASE)
+#: Shared with the data plane. ``_settings`` is the one module both sides may
+#: import: it holds only constants and pure functions, so it cannot raise the
+#: way ``agentsight.config`` does.
+API_KEY_PATTERN = _settings.API_KEY_PATTERN
 
-DEFAULT_ENDPOINT = "https://api.agentsight.io"
+DEFAULT_ENDPOINT = _settings.DEFAULT_ENDPOINT
 
 _TRACER_NAME = "agentsight"
 
