@@ -1,12 +1,16 @@
 """Reading and managing conversations."""
 
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, Iterable, List, Optional
 
+from agentsight import _metadata
 from agentsight.api import _params
 from agentsight.api._client import ConversationRef
 from agentsight.api._pagination import PageIterator
 from agentsight.api.resources._base import Resource
 from agentsight.exceptions import ValidationError
+
+logger = logging.getLogger("agentsight")
 
 _MAX_NAME = 255
 
@@ -168,6 +172,65 @@ class Conversations(Resource):
         pk = self._client._resolve(conversation)
         return self._request("PATCH", f"/api/conversations/{pk}/update/", json=payload)
 
+    def update_metadata(
+        self,
+        conversation: ConversationRef,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        remove: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        """Change some metadata keys, keeping the rest. *Write role.*
+
+        :meth:`update` replaces the whole document, because that is all the
+        endpoint can do. This reads what is stored, merges, and writes the
+        result back::
+
+            ags.conversations.update_metadata("wa-3859", {"plan": "enterprise"})
+            ags.conversations.update_metadata("wa-3859", remove=["trial_ends"])
+
+        Merging is shallow — a nested dict is replaced whole — and **no value is
+        filtered**: ``None``, ``False``, ``0`` and ``""`` are stored as given.
+        ``remove`` is the only thing that deletes a key, and naming a key that
+        is not there is a no-op.
+
+        Two round trips, and not atomic: the backend offers no conditional
+        write, so two callers merging into the same conversation at the same
+        moment can lose one of the two updates. Prefer
+        :func:`agentsight.update_metadata` while the conversation is still open
+        in this process — it needs no fetch and cannot race.
+
+        Blocking, like the rest of this client. It does not need to be async to
+        stay off an event loop:
+
+        * FastAPI / Starlette —
+          ``background_tasks.add_task(ags.conversations.update_metadata, ...)``.
+          ``add_task`` hands a sync callable to ``run_in_threadpool``.
+        * anywhere else —
+          ``await asyncio.to_thread(ags.conversations.update_metadata, ...)``.
+        """
+        _metadata.check(metadata, remove)
+
+        record = self.get(conversation, full=False)
+        if not isinstance(record, dict) or "metadata" not in record:
+            # Merging into {} here would write an empty document over whatever
+            # is stored. The field is visibility-flagged server-side and the
+            # flag fails open for API keys, so this should not happen — but
+            # "should not" is not worth a silent data loss.
+            raise ValidationError(
+                "the server did not return this conversation's metadata, so "
+                "there is nothing safe to merge into. Use update(metadata=...) "
+                "to replace it outright."
+            )
+
+        merged = _metadata.merge(
+            _metadata.coerce(record["metadata"], source="stored metadata"),
+            metadata,
+            remove,
+        )
+        response = self.update(conversation, metadata=merged)
+        _sync_live_scope(record.get("conversation_id"), merged)
+        return response
+
     def delete(self, conversation: ConversationRef) -> Dict[str, Any]:
         """Soft-delete a conversation. *Write role.*
 
@@ -211,6 +274,29 @@ class Conversations(Resource):
             return body
 
         return PageIterator(fetch, params)
+
+
+def _sync_live_scope(conversation_id: Any, merged: Dict[str, Any]) -> None:
+    """Carry a written document into the tracking scope, if it is this one.
+
+    Conversation metadata rides on every span, and ingest takes the newest
+    document it has seen — so a conversation still open in this process would
+    overwrite what was just written the moment it emitted its next span. The
+    caller would see a successful PATCH and, seconds later, the old metadata.
+
+    Best-effort and deliberately quiet: this client is usable on its own, in a
+    process where the tracking SDK was never imported or never initialised.
+    """
+    if not isinstance(conversation_id, str):
+        return
+    try:
+        from agentsight.sdk import context as ags_context
+
+        scope = ags_context.current_conversation()
+        if scope is not None and scope.conversation_id == conversation_id:
+            scope.set_metadata(merged)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("could not sync metadata into the live scope: %s", exc)
 
 
 def _check_name(name: Any) -> str:

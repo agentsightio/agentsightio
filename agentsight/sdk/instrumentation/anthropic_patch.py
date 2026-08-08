@@ -63,6 +63,7 @@ def _record(
     streaming: bool,
     logger: Any,
     error: Optional[BaseException] = None,
+    requested_model: Optional[str] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
@@ -76,6 +77,7 @@ def _record(
         record_llm_call(
             **from_anthropic(usage, model),
             operation="chat",
+            requested_model=requested_model,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             extra=extra or None,
@@ -346,6 +348,7 @@ def _capture(
         end_time_ns,
         False,
         logger,
+        requested_model=model,
     )
 
 

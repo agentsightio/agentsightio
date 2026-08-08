@@ -17,6 +17,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
+from agentsight import _settings
 from agentsight.sdk import context as ags_context
 from agentsight.sdk.semconv import (
     ConversationAttributes,
@@ -25,7 +26,15 @@ from agentsight.sdk.semconv import (
     SpanKind,
     TurnAttributes,
 )
-from agentsight.sdk.serialization import first_string_argument, bind_arguments, to_json, to_text
+from agentsight.sdk.serialization import (
+    bind_arguments,
+    clamp_field,
+    first_string_argument,
+    to_json,
+    to_text,
+    valid_ip,
+    warn_once,
+)
 
 _logger = None
 
@@ -37,6 +46,27 @@ def _log():
 
         _logger = logger
     return _logger
+
+
+def _resolve_environment(value: Optional[str]) -> Optional[str]:
+    """A per-conversation environment, or ``None`` if the backend won't know it.
+
+    Warned and dropped rather than sent: an unknown slug 400s the whole
+    payload, which costs every other conversation in the batch. Dropped, this
+    conversation still lands — against the agent's default environment.
+    """
+    if not value:
+        return None
+    resolved = _settings.normalize_environment(value)
+    if resolved is None:
+        warn_once(
+            "environment:%s" % value,
+            "AgentSight: environment %r is not one this agent has (%s); "
+            "recording this conversation without one.",
+            value,
+            ", ".join(_settings.KNOWN_ENVIRONMENTS),
+        )
+    return resolved
 
 
 def generate_conversation_id() -> str:
@@ -76,14 +106,11 @@ class ConversationScope:
         metadata: Optional[Dict[str, Any]] = None,
         enabled: bool = True,
     ):
-        self.conversation_id = conversation_id or generate_conversation_id()
-        self.enabled = enabled
-        self._token = None
-
-        attributes: Dict[str, Any] = {
-            ConversationAttributes.ID: self.conversation_id,
-        }
-        supplied = {
+        #: What the caller actually passed, kept apart from what it resolved
+        #: to. The decorator form rebuilds a scope per invocation from these,
+        #: so ``None`` here has to stay ``None`` — see __call__.
+        self._explicit_id = conversation_id
+        self._kwargs = {
             "customer_id": customer_id,
             "customer_ip_address": customer_ip_address,
             "device": device,
@@ -91,24 +118,86 @@ class ConversationScope:
             "language": language,
             "name": name,
             "environment": environment,
+            "metadata": metadata,
+            "enabled": enabled,
+        }
+
+        self.conversation_id = clamp_field(
+            "conversation_id", conversation_id
+        ) or generate_conversation_id()
+        self.enabled = enabled
+        self._token = None
+
+        attributes: Dict[str, Any] = {
+            ConversationAttributes.ID: self.conversation_id,
+        }
+        # Clamped, not passed through: ingest validates the whole payload at
+        # once, so a single over-length field rejects every conversation in
+        # the batch it travelled with.
+        supplied = {
+            "customer_id": clamp_field("customer_id", customer_id),
+            "customer_ip_address": valid_ip(customer_ip_address),
+            "device": clamp_field("device", device),
+            "source": clamp_field("source", source),
+            "language": clamp_field("language", language),
+            "name": clamp_field("name", name),
+            "environment": _resolve_environment(environment),
         }
         for kwarg, value in supplied.items():
             if value is not None:
                 attributes[ConversationAttributes.BY_KWARG[kwarg]] = value
-        if environment is None:
+        if supplied["environment"] is None:
             # The deployment-wide default from init(environment=...) /
             # AGENTSIGHT_ENVIRONMENT. Per-conversation always wins — a
-            # staging conversation inside a production process is the
+            # development conversation inside a production process is the
             # caller's statement, not ours to override.
             from agentsight.sdk.core import default_environment
 
             fallback = default_environment()
             if fallback:
                 attributes[ConversationAttributes.BY_KWARG["environment"]] = fallback
+        #: The live document, kept as a dict beside the serialized attribute so
+        #: ``update_metadata`` can merge into it. Copied rather than aliased:
+        #: ``self._kwargs["metadata"]`` is the same object, and the decorator
+        #: form rebuilds a scope from those kwargs on every invocation — an
+        #: in-place mutation would leak one request's update into every later
+        #: request through the same decorated handler.
+        self.metadata: Dict[str, Any] = dict(metadata) if metadata else {}
+        #: A scope is reachable from more than one thread: a streaming turn
+        #: re-attaches its conversation from the consumer's context.
+        self._metadata_lock = threading.Lock()
+
         if metadata:
             attributes[ConversationAttributes.METADATA] = to_json(metadata)
 
         self.attributes = attributes
+
+    # -- metadata -----------------------------------------------------------
+
+    def set_metadata(self, document: Dict[str, Any]) -> None:
+        """Replace the conversation's metadata, for every span from here on.
+
+        Spans already exported keep the document they carried; there is no
+        rewriting them. Ingest takes the newest it has seen, so the row
+        converges on this one.
+
+        The raw dict is what gets kept and re-serialized each time. Merging out
+        of the serialized attribute instead would compound ``to_json``'s
+        truncation: a document trimmed once would be trimmed again on the next
+        update, and the keys it shed the first time could never come back.
+        """
+        with self._metadata_lock:
+            self.metadata = dict(document)
+            if self.metadata:
+                self.attributes[ConversationAttributes.METADATA] = to_json(
+                    self.metadata
+                )
+            else:
+                # An empty document is a real instruction — "clear it" — and
+                # has to travel, so it is sent as `{}` rather than by dropping
+                # the attribute, which would read as "no opinion" and leave
+                # whatever the row already holds in place.
+                self.attributes[ConversationAttributes.METADATA] = to_json({})
 
     # -- context manager ----------------------------------------------------
 
@@ -137,25 +226,37 @@ class ConversationScope:
     # -- decorator ----------------------------------------------------------
 
     def __call__(self, func: Callable) -> Callable:
+        """Decorator form: one conversation per *call*, not per decoration.
+
+        The scope this is called on is a template. Each invocation builds its
+        own from the arguments the caller originally supplied, which is the
+        only way ``@agentsight.conversation()`` with no id can mean "a new
+        conversation each time" — resolving the id once, at decoration, put
+        every user who ever hit the handler into the same conversation for the
+        life of the process.
+
+        Rebuilding also re-reads the deployment-wide environment. Decoration
+        happens at import, which is before ``init()``, so a template built
+        then has no environment on it at all.
+        """
         if asyncio.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                async with ConversationScope(
-                    self.conversation_id, enabled=self.enabled
-                ) as scope:
-                    scope.attributes = dict(self.attributes)
+                async with self._per_call_scope():
                     return await func(*args, **kwargs)
 
             return async_wrapper
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            with ConversationScope(self.conversation_id, enabled=self.enabled) as scope:
-                scope.attributes = dict(self.attributes)
+            with self._per_call_scope():
                 return func(*args, **kwargs)
 
         return sync_wrapper
+
+    def _per_call_scope(self) -> "ConversationScope":
+        return ConversationScope(self._explicit_id, **self._kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -652,17 +753,29 @@ class _TurnFactory:
 
     def __init__(self, spec: _TurnSpec):
         self._spec = spec
-        self._scope: Optional[TurnScope] = None
+        #: A stack, not a slot. ``t = agentsight.turn("ask")`` used twice — or
+        #: nested — would otherwise overwrite the first scope with the second
+        #: and leave the first turn open forever, and ``__exit__`` without a
+        #: matching ``__enter__`` would raise AttributeError out of a `with`
+        #: statement, which is the one thing tracking must never do.
+        self._scopes: "list[TurnScope]" = []
+        self._lock = threading.Lock()
 
     def __call__(self, func: Callable) -> Callable:
         return _decorate_turn(func, self._spec)
 
     def __enter__(self) -> TurnScope:
-        self._scope = TurnScope(self._spec.name).start()
-        return self._scope
+        scope = TurnScope(self._spec.name).start()
+        with self._lock:
+            self._scopes.append(scope)
+        return scope
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        return self._scope.__exit__(exc_type, exc_val, exc_tb)
+        with self._lock:
+            scope = self._scopes.pop() if self._scopes else None
+        if scope is None:
+            return False
+        return scope.__exit__(exc_type, exc_val, exc_tb)
 
     async def __aenter__(self) -> TurnScope:
         return self.__enter__()

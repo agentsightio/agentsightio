@@ -25,12 +25,20 @@ server is thousands.
 
 import heapq
 import itertools
+import logging
 import threading
 from typing import Any, Callable, List, Optional, Tuple
 
 #: 5 minutes. Long enough that a slow LLM streaming a long answer is never cut
 #: off, short enough that a leak is bounded.
 DEFAULT_TIMEOUT_MS = 300_000
+
+#: How long shutdown() will wait for a callback that is already running. This
+#: is an atexit path, so the ceiling is what stops one stuck turn from holding
+#: the whole process open.
+_SHUTDOWN_WAIT_SECONDS = 5.0
+
+logger = logging.getLogger("agentsight")
 
 
 class _Watchdog:
@@ -135,11 +143,14 @@ class _Watchdog:
           no thread serves). The worker is a daemon thread that already dies
           when idle and dies with the process; an arm() after shutdown is
           simply new business, which is also what makes re-init() work.
-        * **In-flight callbacks are awaited.** The worker may have popped a
-          deadline and be mid-callback outside the lock; returning before it
-          finishes would let core.shutdown() kill the provider under a span
-          that is still being ended. The wait releases the lock, so the
-          callback's own cancel() call cannot deadlock against it.
+        * **In-flight callbacks are awaited, but not forever.** The worker may
+          have popped a deadline and be mid-callback outside the lock;
+          returning before it finishes would let core.shutdown() kill the
+          provider under a span that is still being ended. The wait releases
+          the lock, so the callback's own cancel() call cannot deadlock
+          against it — but it is bounded, because this runs from ``atexit``
+          and a callback that hangs would hang the process on the way out.
+          Giving up costs one turn's span; not giving up costs the exit.
 
         Callbacks fire outside the lock, same as in _run and for a stronger
         reason: finishing a turn cancels its own deadline, which re-enters
@@ -152,8 +163,17 @@ class _Watchdog:
                 if handle not in self._cancelled:
                     pending.append(callback)
             self._cancelled.clear()
+            deadline = _monotonic() + _SHUTDOWN_WAIT_SECONDS
             while self._firing:
-                self._wake.wait(timeout=0.1)
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    logger.debug(
+                        "watchdog: a turn callback is still running after %ss; "
+                        "continuing shutdown without it",
+                        _SHUTDOWN_WAIT_SECONDS,
+                    )
+                    break
+                self._wake.wait(timeout=min(0.1, remaining))
             self._wake.notify_all()
         for callback in pending:
             try:

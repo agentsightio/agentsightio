@@ -200,6 +200,129 @@ def test_update_refuses_non_dict_metadata(ags):
         ags.conversations.update(42, metadata="tier=gold")
 
 
+# -- merging metadata -------------------------------------------------------
+
+
+def _fetch_and_patch(requests_mock, stored, patched=None):
+    """The two round trips update_metadata makes: read, then write."""
+    requests_mock.get(DETAIL, json=conversation(42, "wa-3859", metadata=stored))
+    return requests_mock.patch(f"{DETAIL}update/", json=patched or {})
+
+
+def test_update_metadata_merges_instead_of_replacing(ags, requests_mock):
+    """`update(metadata=...)` replaces the whole document, because that is all
+    the endpoint can do. This is the version that keeps what is already there."""
+    _fetch_and_patch(requests_mock, {"order_id": "A-1", "plan": "trial"})
+
+    ags.conversations.update_metadata(42, {"plan": "enterprise"})
+
+    assert requests_mock.last_request.json() == {
+        "metadata": {"order_id": "A-1", "plan": "enterprise"}
+    }
+
+
+def test_update_metadata_reads_before_it_writes(ags, requests_mock):
+    _fetch_and_patch(requests_mock, {"a": 1})
+
+    ags.conversations.update_metadata(42, {"b": 2})
+
+    methods = [request.method for request in requests_mock.request_history]
+    assert methods == ["GET", "PATCH"]
+
+
+def test_update_metadata_removes_keys(ags, requests_mock):
+    _fetch_and_patch(requests_mock, {"plan": "trial", "trial_ends": "friday"})
+
+    ags.conversations.update_metadata(42, remove=["trial_ends"])
+
+    assert requests_mock.last_request.json() == {"metadata": {"plan": "trial"}}
+
+
+@pytest.mark.parametrize("value", [None, False, 0, ""])
+def test_update_metadata_stores_falsy_values(ags, requests_mock, value):
+    """Removing a key is said with `remove=`. A falsy value is data."""
+    _fetch_and_patch(requests_mock, {"keep": 1})
+
+    ags.conversations.update_metadata(42, {"flag": value})
+
+    assert requests_mock.last_request.json() == {
+        "metadata": {"keep": 1, "flag": value}
+    }
+
+
+def test_update_metadata_handles_a_conversation_with_none_stored(ags, requests_mock):
+    _fetch_and_patch(requests_mock, None)
+
+    ags.conversations.update_metadata(42, {"a": 1})
+
+    assert requests_mock.last_request.json() == {"metadata": {"a": 1}}
+
+
+def test_update_metadata_reads_a_document_stored_as_a_json_string(ags, requests_mock):
+    """Rows written by older SDK builds hold the document as a JSON string.
+    Merging into one of those must preserve its keys, not discard them."""
+    _fetch_and_patch(requests_mock, '{"order_id": "A-1"}')
+
+    ags.conversations.update_metadata(42, {"plan": "enterprise"})
+
+    assert requests_mock.last_request.json() == {
+        "metadata": {"order_id": "A-1", "plan": "enterprise"}
+    }
+
+
+def test_update_metadata_refuses_when_the_server_withholds_the_field(ags, requests_mock):
+    """Merging into {} here would write an empty document over whatever is
+    stored. The field is visibility-flagged server-side."""
+    requests_mock.get(DETAIL, json={"id": 42, "conversation_id": "wa-3859"})
+    patch = requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with pytest.raises(ValidationError):
+        ags.conversations.update_metadata(42, {"a": 1})
+
+    assert patch.call_count == 0
+
+
+def test_update_metadata_refuses_a_bare_string_for_remove(ags, requests_mock):
+    get = requests_mock.get(DETAIL, json=conversation(42, metadata={}))
+
+    with pytest.raises(ValidationError) as excinfo:
+        ags.conversations.update_metadata(42, remove="plan")
+
+    assert "remove=['plan']" in str(excinfo.value)
+    # Rejected before it costs a round trip.
+    assert get.call_count == 0
+
+
+def test_update_metadata_needs_something_to_do(ags):
+    with pytest.raises(ValidationError):
+        ags.conversations.update_metadata(42)
+
+
+def test_update_metadata_syncs_a_live_tracking_scope(ags, resolved, requests_mock):
+    """Conversation metadata rides on every span and ingest takes the newest
+    document it has seen. Without this, the PATCH lands and is then overwritten
+    seconds later by the next span carrying the scope's stale copy."""
+    import agentsight
+
+    _fetch_and_patch(requests_mock, {"a": 1})
+
+    with agentsight.conversation("wa-3859", metadata={"a": 1}) as scope:
+        ags.conversations.update_metadata("wa-3859", {"b": 2})
+
+        assert scope.metadata == {"a": 1, "b": 2}
+
+
+def test_update_metadata_leaves_an_unrelated_scope_alone(ags, resolved, requests_mock):
+    import agentsight
+
+    _fetch_and_patch(requests_mock, {"a": 1})
+
+    with agentsight.conversation("somebody-else", metadata={"x": 9}) as scope:
+        ags.conversations.update_metadata("wa-3859", {"b": 2})
+
+        assert scope.metadata == {"x": 9}
+
+
 def test_soft_delete_and_hard_delete_are_different_routes(ags, requests_mock):
     soft = requests_mock.delete(f"{DETAIL}delete/", json={})
     hard = requests_mock.delete(DETAIL, json={})

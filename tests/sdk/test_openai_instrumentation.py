@@ -406,6 +406,42 @@ def test_a_caller_supplied_usage_option_is_left_alone(spans, client, api):
     assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
 
 
+def test_the_alias_the_caller_asked_for_survives_the_resolved_id(spans, client, api):
+    """``gen_ai.request.model`` holds the id that ran and was billed, so it is
+    overwritten with the provider's dated snapshot — which used to lose the
+    alias people actually write in their code, and with it any answer to
+    "which of my model aliases is expensive"."""
+    reply = chat_completion()
+    reply["model"] = "gpt-4o-2024-08-06"
+    api.reply = json_reply(reply)
+
+    with ags.conversation("c-alias"):
+        with ags.turn():
+            client.chat.completions.create(
+                model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
+            )
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "gpt-4o-2024-08-06"
+    assert llm.attributes[LLMAttributes.REQUESTED_MODEL] == "gpt-4o"
+
+
+def test_no_requested_model_attribute_when_the_two_agree(spans, client, api):
+    """Present only on the difference — its absence is the statement that the
+    provider answered with exactly what was asked for."""
+    api.reply = json_reply(chat_completion())
+
+    with ags.conversation("c-same"):
+        with ags.turn():
+            client.chat.completions.create(
+                model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
+            )
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "gpt-4o"
+    assert LLMAttributes.REQUESTED_MODEL not in llm.attributes
+
+
 def test_the_disabled_sdk_changes_neither_the_wire_nor_the_chunks(client, api):
     """No conversation open: the call must be byte-identical to unpatched."""
     api.reply = stream_reply(chat_chunk("a"), chat_chunk("b"))

@@ -4,19 +4,19 @@ Every name here is re-exported by the top-level ``agentsight`` package, which
 is the intended import path — ``from agentsight.sdk import ...`` works but is
 an implementation detail.
 
-See ``design/otel-migration.md`` for the design and ``design/demo.py`` for
-worked examples.
+``examples/`` has a runnable script per integration.
 """
 
 from agentsight.exceptions import UploadError
 from agentsight.sdk.api import (
     abandon_turn,
     agent_message,
-    attachments,
     button,
     conversation,
     end_turn,
     open_conversation,
+    record_attachments,
+    update_metadata,
     user_message,
     wrap,
 )
@@ -48,7 +48,9 @@ __all__ = [
     # explicit, because nothing in the call stack can observe them
     "open_conversation",
     "button",
-    "attachments",
+    "record_attachments",
+    # enriching a conversation after the scope that opened it was built
+    "update_metadata",
     # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
     "upload_attachments",
     "UploadError",

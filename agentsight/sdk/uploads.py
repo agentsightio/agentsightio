@@ -21,19 +21,49 @@ from 0.0.x.
 import base64
 import mimetypes
 import os
+import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from agentsight._transport import Transport
 from agentsight.exceptions import NetworkError, UploadError
 from agentsight.sdk import context as ags_context
-from agentsight.sdk.api import attachments as _record_attachment_span
+from agentsight.sdk.api import _attachment_span
 from agentsight.sdk.core import api_credentials, default_environment, logger
 from agentsight.sdk.semconv import ConversationAttributes, MessageAttributes
 
 _TIMEOUT_SECONDS = 30
+
+#: One pooled transport per credential pair, kept for the life of the process.
+#: A fresh Transport per call meant a new session, a new connection pool and a
+#: new TLS handshake for every file — on a conversation that uploads several,
+#: that is the dominant cost of the call.
+_transports: Dict[Tuple[str, str], Transport] = {}
+_transports_lock = threading.Lock()
+
+
+def _shared_transport(api_key: str, endpoint: str) -> Transport:
+    key = (api_key, endpoint)
+    with _transports_lock:
+        transport = _transports.get(key)
+        if transport is None:
+            transport = Transport(api_key, endpoint, timeout=_TIMEOUT_SECONDS)
+            _transports[key] = transport
+        return transport
+
+
+def close_transports() -> None:
+    """Release the pooled sessions. Called by ``agentsight.shutdown()``."""
+    with _transports_lock:
+        pooled = list(_transports.values())
+        _transports.clear()
+    for transport in pooled:
+        try:
+            transport.close()
+        except Exception:  # pragma: no cover - closing a dead socket
+            pass
 
 
 def upload_attachments(
@@ -90,11 +120,12 @@ def upload_attachments(
     # The shared transport: one pooled session, one auth header, one URL
     # joiner. Its raising taxonomy is not used here — this call owes its
     # callers UploadError — so it is driven through ``raw()``.
-    transport = Transport(api_key, endpoint, timeout=timeout)
-    try:
-        return _upload(transport, normalized, resolved_id, environment, sender, metadata, timeout)
-    finally:
-        transport.close()
+    #
+    # Not closed on the way out: it is pooled per credential pair and every
+    # request carries its own timeout, so nothing about it is per-call.
+    # ``agentsight.shutdown()`` releases it.
+    transport = _shared_transport(api_key, endpoint)
+    return _upload(transport, normalized, resolved_id, environment, sender, metadata, timeout)
 
 
 def _upload(
@@ -145,7 +176,7 @@ def _upload(
     # the span pipeline may be disabled or scopeless, and a missing descriptor
     # span must not turn a successful upload into an error.
     try:
-        _record_attachment_span(
+        _attachment_span(
             [
                 {
                     "filename": entry["filename"],

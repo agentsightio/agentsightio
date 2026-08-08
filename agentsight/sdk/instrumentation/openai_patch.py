@@ -105,6 +105,7 @@ def _record_usage(
     streaming: bool,
     logger: Any,
     error: Optional[BaseException] = None,
+    requested_model: Optional[str] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
@@ -119,6 +120,7 @@ def _record_usage(
         record_llm_call(
             **from_openai(usage, model),
             operation=operation,
+            requested_model=requested_model,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             extra=extra or None,
@@ -148,6 +150,7 @@ def _record_embeddings(
             getattr(result, "model", None) or model,
             embedding_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             operation="embeddings",
+            requested_model=model,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             error=error,
@@ -507,6 +510,7 @@ def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any
                     end_time_ns,
                     False,
                     logger,
+                    requested_model=model,
                 )
         except Exception:
             logger.debug("agentsight: openai capture failed", exc_info=True)
@@ -564,6 +568,7 @@ def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logge
                     end_time_ns,
                     False,
                     logger,
+                    requested_model=model,
                 )
         except Exception:
             logger.debug("agentsight: openai capture failed", exc_info=True)
@@ -675,11 +680,11 @@ def install_openai(logger: Any) -> None:
 
     from openai import AsyncStream, Stream
     from openai.resources.chat.completions import AsyncCompletions, Completions
-    from openai.resources.embeddings import AsyncEmbeddings, Embeddings
 
     # Same name, different class: legacy text completions, not chat.
     from openai.resources.completions import AsyncCompletions as AsyncTextCompletions
     from openai.resources.completions import Completions as TextCompletions
+    from openai.resources.embeddings import AsyncEmbeddings, Embeddings
 
     _INJECTION_SAFE = _injection_is_safe(Stream, AsyncStream)
     if not _INJECTION_SAFE:

@@ -106,6 +106,7 @@ def record_llm_call(
     embedding_tokens: int = 0,
     *,
     operation: Optional[str] = None,
+    requested_model: Optional[str] = None,
     start_time_ns: Optional[int] = None,
     end_time_ns: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
@@ -120,6 +121,12 @@ def record_llm_call(
     than being an instant. Without them "how much of the turn was the LLM" —
     the question §4.2 of the design promises is answerable for free — has no
     answer, because every LLM span would have zero duration.
+
+    ``model`` is the *resolved* id when the provider reported one, because
+    that is what was billed and what cost is keyed on. Pass the id the caller
+    asked for as ``requested_model`` and it is recorded alongside whenever the
+    two differ — otherwise the alias people actually write in their code is
+    lost the moment a provider answers with a dated snapshot.
 
     ``error`` is the failure channel (design §13, question 5 — closed): a
     call that raised is recorded as an ERROR span rather than dropped or
@@ -157,6 +164,11 @@ def record_llm_call(
     )
     if model:
         attributes[LLMAttributes.REQUEST_MODEL] = model
+    if requested_model and requested_model != model:
+        # Only on the difference. ``model`` is the resolved id, which is what
+        # cost and usage are keyed on and must not move; this preserves the
+        # alias the caller actually typed, which the resolved id overwrites.
+        attributes[LLMAttributes.REQUESTED_MODEL] = requested_model
     if operation:
         attributes[LLMAttributes.OPERATION] = operation
     if error is not None:

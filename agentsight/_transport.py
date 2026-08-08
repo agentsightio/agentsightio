@@ -38,9 +38,9 @@ from agentsight.exceptions import (
     ValidationError,
 )
 
-# Deliberately the stdlib logger rather than ``agentsight.logging``, whose
-# import calls ``load_dotenv()`` as a side effect. Nothing on this path should
-# be reading the user's .env just because it was imported.
+# The stdlib logger, configured by the host application and nothing else. The
+# SDK never installs handlers or sets ``propagate``: a library that configures
+# logging silences itself for anyone who already configured it themselves.
 logger = logging.getLogger("agentsight")
 
 #: Backoff before retry attempt N, in seconds. Same shape the span exporter

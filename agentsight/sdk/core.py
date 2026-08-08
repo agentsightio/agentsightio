@@ -1,9 +1,9 @@
 """SDK lifecycle: ``init()``, the tracer, flushing and shutdown.
 
-Deliberately does not import ``agentsight.config``: that module raises on a
-malformed key at construction, and ``init()`` must never raise into user code
-(design §10). The constants both planes need live in ``agentsight._settings``
-instead, which holds nothing but literals and pure functions.
+``init()`` must never raise into user code (design §10), so nothing on this
+path may import a module that validates on construction. The constants and
+resolvers both planes need live in ``agentsight._settings``, which holds
+nothing but literals and pure functions.
 """
 
 import atexit
@@ -26,8 +26,8 @@ from agentsight.sdk.processors import TurnBufferingProcessor
 logger = logging.getLogger("agentsight")
 
 #: Shared with the data plane. ``_settings`` is the one module both sides may
-#: import: it holds only constants and pure functions, so it cannot raise the
-#: way ``agentsight.config`` does.
+#: import: it holds only constants and pure functions, so importing it cannot
+#: raise, read the environment or open anything.
 API_KEY_PATTERN = _settings.API_KEY_PATTERN
 
 DEFAULT_ENDPOINT = _settings.DEFAULT_ENDPOINT
@@ -192,7 +192,9 @@ def init(
             _state.provider = provider
             _state.exporter = exporter
             _state.tracer = otel_trace.get_tracer(_TRACER_NAME, SDK_VERSION, provider)
-            _state.environment = environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
+            _state.environment = _resolve_environment(
+                environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
+            )
             _state.turn_timeout_ms = turn_timeout_ms
             _state.api_key = resolved_key
             _state.endpoint = resolved_endpoint
@@ -208,6 +210,29 @@ def init(
 
     logger.info("AgentSight initialized (exporting to %s)", destination)
     return True
+
+
+def _resolve_environment(raw: Optional[str]) -> Optional[str]:
+    """The deployment-wide environment, checked before anything is sent.
+
+    Loud, and at startup, because the alternative is silent: ingest rejects an
+    unknown environment with a 400, the exporter treats a 4xx as terminal, and
+    the drop warning is rate-limited — so a typo in ``AGENTSIGHT_ENVIRONMENT``
+    loses every batch for the life of the process while looking healthy. An
+    error here happens while someone is still watching the logs.
+    """
+    if not raw:
+        return None
+    resolved = _settings.normalize_environment(raw)
+    if resolved is None:
+        logger.error(
+            "AgentSight: environment %r is not one this agent has (%s). It has "
+            "been ignored — conversations will be recorded against the agent's "
+            "default environment.",
+            raw,
+            ", ".join(_settings.KNOWN_ENVIRONMENTS),
+        )
+    return resolved
 
 
 def _install_instrumentation(selection: Union[bool, Sequence[str]]) -> None:
@@ -283,3 +308,12 @@ def shutdown() -> None:
             provider.shutdown()
         except Exception as exc:
             logger.debug("shutdown failed: %s", exc)
+
+    # The attachment plane keeps a pooled session of its own; it has nothing
+    # to flush, so it goes last.
+    try:
+        from agentsight.sdk.uploads import close_transports
+
+        close_transports()
+    except Exception as exc:  # pragma: no cover
+        logger.debug("closing upload transports failed: %s", exc)

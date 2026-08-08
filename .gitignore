@@ -163,3 +163,6 @@ docs/node_modules
 docs/.vitepress/cache
 # Example trace output (regenerated on every run)
 examples/traces/
+
+# Internal working notes. This repository is public; these documents are not.
+design/

@@ -10,8 +10,9 @@ Each one has a one-sentence justification, and they are short:
                  cannot express "the widget loaded but nobody typed"
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
+from agentsight import _metadata
 from agentsight.sdk import context as ags_context
 from agentsight.sdk.core import logger
 from agentsight.sdk.scopes import ConversationScope, TurnScope
@@ -166,11 +167,77 @@ def open_conversation(conversation_id: str, **kwargs: Any) -> None:
         logger.debug("open_conversation failed: %s", exc)
 
 
+def update_metadata(
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    remove: Optional[Iterable[str]] = None,
+) -> None:
+    """Add to or change the active conversation's metadata, keeping the rest.
+
+    ``agentsight.conversation(...)`` takes metadata once, at the top of a
+    handler, which is before most of what is worth recording has happened. This
+    is the same field afterwards::
+
+        agentsight.update_metadata({"plan": "enterprise", "escalated": False})
+        agentsight.update_metadata(remove=["awaiting_reply"])
+
+    Merging is shallow — a nested dict is replaced whole, not merged key by
+    key — and **no value is filtered**: ``None``, ``False``, ``0`` and ``""``
+    are stored as given. ``remove`` is the only thing that deletes a key, and
+    naming a key that is not there is a no-op.
+
+    The merge is against what this process knows, which is what the scope was
+    opened with plus any earlier calls. Keys written by another process are not
+    visible here, so they are not preserved — use
+    ``AgentSight().conversations.update_metadata(...)`` when the previous state
+    lives on the server rather than in this scope.
+
+    Needs an active ``agentsight.conversation(...)`` scope; outside one there is
+    nothing to update and the call is dropped with a debug line.
+    """
+    try:
+        from agentsight.sdk.core import is_enabled
+
+        if not is_enabled() or not ags_context.tracking_enabled():
+            logger.debug(
+                "update_metadata not recorded: no active conversation scope. "
+                "Call it inside `with agentsight.conversation(...)`."
+            )
+            return
+
+        scope = ags_context.current_conversation()
+        if scope is None:  # pragma: no cover — tracking_enabled() implies one
+            return
+
+        _metadata.check(metadata, remove)
+        scope.set_metadata(_metadata.merge(scope.metadata, metadata, remove))
+
+        # Emitted, not merely stored, because the merged document only reaches
+        # the backend on a span — and the most natural moment to call this is
+        # as a conversation closes, when there may be no further span to ride.
+        # `conversation` is the right kind for a second reason: ingest reads
+        # any other kind as "someone engaged", and recording metadata is not
+        # engagement.
+        _emit_span(SpanKind.CONVERSATION, "metadata_updated", {})
+    except Exception as exc:
+        logger.debug("update_metadata failed: %s", exc)
+
+
 def _emit_span(kind: str, name: str, attributes: Dict[str, Any]) -> None:
     """A point-in-time span for something that has no duration to measure."""
     from agentsight.sdk.core import get_tracer, is_enabled
 
-    if not is_enabled() or not ags_context.tracking_enabled():
+    if not is_enabled():
+        return
+    if not ags_context.tracking_enabled():
+        # No conversation scope, so there is nothing to file this under and it
+        # is dropped. Said out loud at debug because from the caller's side a
+        # silent no-op and a successful record look identical.
+        logger.debug(
+            "%s not recorded: no active conversation scope. Call it inside "
+            "`with agentsight.conversation(...)`.",
+            kind,
+        )
         return
     tracer = get_tracer()
     if tracer is None:
@@ -195,7 +262,11 @@ def button(
     value: str,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Record a button click. Explicit because a click happens in the browser."""
+    """Record a button click. Explicit because a click happens in the browser.
+
+    Needs an active ``agentsight.conversation(...)`` scope; outside one there
+    is nothing to attach the click to and it is dropped with a debug line.
+    """
     try:
         _emit_span(
             SpanKind.BUTTON,
@@ -211,20 +282,37 @@ def button(
         logger.debug("button failed: %s", exc)
 
 
-def attachments(
+def record_attachments(
     files: List[Any],
     sender: str = MessageAttributes.SENDER_USER,
-    mode: str = "base64",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Record uploads. Explicit because blobs cannot ride in spans.
+    """Record that files exist, for bytes you moved yourself.
 
-    The span records *that* an upload happened, with a descriptor per file. The
-    bytes still go over the existing ``/api/attachments/`` route, unchanged
-    from 0.0.x — a span pipeline sized in spans is the wrong place to push
-    megabytes through, and losing a batch under backpressure would mean losing
-    a customer's file rather than a metric.
+    **This moves no bytes and does not put the files in the dashboard.** Use
+    :func:`agentsight.upload_attachments` for that — it is the call that
+    uploads, and it records this span for you afterwards. Reach for this one
+    only when the bytes already went somewhere else (your own storage, a CDN)
+    and you want AgentSight's archive to know the files were part of the
+    conversation.
+
+    Blobs cannot ride in spans: a pipeline sized in spans is the wrong place
+    to push megabytes through, and losing a batch under backpressure would
+    mean losing a customer's file rather than a metric. So this carries a
+    descriptor per file — name, size, type — and nothing else.
     """
+    _attachment_span(files, sender=sender, metadata=metadata)
+
+
+def _attachment_span(
+    files: List[Any],
+    sender: str = MessageAttributes.SENDER_USER,
+    mode: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """The span itself. ``mode`` is how the bytes travelled, when they did —
+    set by ``upload_attachments``, absent for a record-only call, and never a
+    user-facing choice (that was removed in 0.1.0)."""
     try:
         _emit_span(
             SpanKind.ATTACHMENT,

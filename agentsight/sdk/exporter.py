@@ -5,6 +5,7 @@ can reach the user's call stack. It follows the rule from design §10: log and
 return ``FAILURE``, never raise.
 """
 
+import json
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -115,6 +116,23 @@ def span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
     }
 
 
+def _as_object(value: Any) -> Any:
+    """A serialized metadata attribute back as a dict.
+
+    Anything that will not parse into one is passed through untouched rather
+    than dropped: export runs on a background thread with no caller to tell,
+    and letting ingest reject a malformed document is more honest than
+    silently sending nothing.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        loaded = json.loads(value)
+    except ValueError:  # pragma: no cover — to_json guarantees this parses
+        return value
+    return loaded if isinstance(loaded, dict) else value
+
+
 def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
     """Group spans into per-conversation blocks.
 
@@ -122,6 +140,13 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
     because a conversation outlives any single process — there is no span that
     owns it. Later spans win on conflict, so a scope that supplies richer
     metadata mid-conversation updates the row.
+
+    It is also parsed back into an object on the way out. Span attributes have
+    to be primitives, so the metadata attribute is a JSON *string* — but ingest
+    stores conversation metadata in a JSON column without parsing it first, and
+    a string handed to that column is stored as a JSON string rather than an
+    object. Metadata filtering and the metadata-key endpoints then cannot see
+    inside it. The wire block is ours to shape, so it is shaped here.
     """
     conversations: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 
@@ -140,7 +165,9 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
             if attribute in attributes:
                 block[kwarg] = attributes[attribute]
         if ConversationAttributes.METADATA in attributes:
-            block["metadata"] = attributes[ConversationAttributes.METADATA]
+            block["metadata"] = _as_object(
+                attributes[ConversationAttributes.METADATA]
+            )
 
         block["spans"].append(span_to_dict(span))
 

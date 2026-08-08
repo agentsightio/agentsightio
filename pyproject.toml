@@ -33,11 +33,17 @@ test = [
     "pytest-mock",
     "pytest-asyncio",
     "requests-mock",
+    # `timeout = 30` under [tool.pytest.ini_options] is read by this plugin and
+    # by nothing else; without it the setting is silently inert and a hung test
+    # hangs CI instead of failing it.
+    "pytest-timeout",
     # Provider integrations are tested against a mock transport rather than the
     # network, which needs the provider SDK present to exercise its real
-    # streaming decoder. Tests skip cleanly when one is absent.
+    # streaming decoder. Tests skip cleanly when one is absent — which is the
+    # trap: a provider missing here does not fail, it quietly tests nothing.
     "httpx",
     "openai",
+    "anthropic",
     "langchain-core",
     "llama-index-core",
 ]
@@ -82,7 +88,9 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py37"
+# Matches requires-python. Was py37, which let ruff accept syntax
+# the project itself does not support.
+target-version = "py39"
 
 [tool.ruff.lint]
 select = [

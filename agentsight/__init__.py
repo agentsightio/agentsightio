@@ -57,7 +57,6 @@ from agentsight.exceptions import (
 from agentsight.sdk import (
     abandon_turn,
     agent_message,
-    attachments,
     button,
     conversation,
     end_turn,
@@ -65,11 +64,13 @@ from agentsight.sdk import (
     init,
     is_enabled,
     open_conversation,
+    record_attachments,
     register_price,
     shutdown,
     task,
     tool,
     turn,
+    update_metadata,
     upload_attachments,
     user_message,
     wrap,
@@ -97,7 +98,9 @@ __all__ = [
     # explicit, because nothing in the call stack can observe them
     "open_conversation",
     "button",
-    "attachments",
+    "record_attachments",
+    # enriching a conversation after the scope that opened it was built
+    "update_metadata",
     # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
     "upload_attachments",
     # cost of a model the bundled price table has never heard of

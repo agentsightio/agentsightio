@@ -263,7 +263,7 @@ def test_attachments_record_descriptors_and_never_content(spans):
 
     with ags.conversation("c-files"):
         with ags.turn():
-            ags.attachments(
+            ags.record_attachments(
                 [Upload("receipt.pdf", 20_000, "application/pdf")],
                 sender="end_user",
             )
@@ -281,7 +281,7 @@ def test_attachments_record_descriptors_and_never_content(spans):
 def test_attachment_descriptors_survive_an_uncooperative_object(spans):
     with ags.conversation("c-files-odd"):
         with ags.turn():
-            ags.attachments([object(), "invoice.png", {"name": "a.txt", "size": 3}])
+            ags.record_attachments([object(), "invoice.png", {"name": "a.txt", "size": 3}])
 
     (attachment,) = by_kind(spans, SpanKind.ATTACHMENT)
     assert json.loads(attachment.attributes[AttachmentAttributes.FILES]) == [
@@ -677,7 +677,7 @@ def test_a_bare_exception_never_yields_a_falsy_error_marker(spans):
 def test_init_environment_is_inherited_by_conversations(spans, monkeypatch):
     """init(environment=...) is the deployment-wide default; a conversation
     that names its own environment overrides it."""
-    monkeypatch.setattr(core._state, "environment", "staging")
+    monkeypatch.setattr(core._state, "environment", "development")
 
     with ags.conversation("c-inherit"):
         with ags.turn():
@@ -688,7 +688,7 @@ def test_init_environment_is_inherited_by_conversations(spans, monkeypatch):
 
     payload = build_payload(spans.get_finished_spans())
     by_id = {c["conversation_id"]: c for c in payload["conversations"]}
-    assert by_id["c-inherit"]["environment"] == "staging"
+    assert by_id["c-inherit"]["environment"] == "development"
     assert by_id["c-explicit"]["environment"] == "production"
 
 

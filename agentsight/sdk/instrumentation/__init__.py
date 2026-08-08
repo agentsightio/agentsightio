@@ -104,7 +104,12 @@ def install(target: str, logger: Any) -> None:
 
 
 def installed_targets() -> Dict[str, bool]:
-    """What is actually active. Used by tests and by ``agentsight.status()``."""
+    """Which auto-instrumentation targets actually installed.
+
+    A provider that is not importable is skipped at debug level, so this is
+    how you tell "the patch is on" from "the patch quietly never loaded".
+    Used by the tests and by the example scripts.
+    """
     return dict(_installed)
 
 

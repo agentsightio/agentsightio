@@ -437,16 +437,30 @@ def test_absent_counters_are_absent_from_the_span(fake_anthropic, spans):
 
 
 def test_cost_is_priced_from_the_resolved_model(fake_anthropic, spans):
+    """The rate that applies is the one for the model that actually ran.
+
+    Deliberately asks for one model and answers as another, and derives the
+    expected figure from the price table rather than hard-coding dollars —
+    published rates change (claude-sonnet-5 is on introductory pricing until
+    2026-08-31), and a test that pins a number breaks on the day someone
+    correctly updates the table.
+    """
+    from agentsight.sdk.instrumentation.pricing import lookup_price
+
     install_anthropic(LOGGER)
     client = fake_anthropic.Messages()
     client.reply = SimpleNamespace(
-        model="claude-sonnet-5", usage=usage(1_000_000, 1_000_000)
+        model="claude-haiku-4-5", usage=usage(1_000_000, 1_000_000)
     )
 
     with ags.conversation("c"):
         client.create(model="claude-sonnet-5", max_tokens=1, messages=[])
 
-    assert llm_spans(spans)[0].attributes[LLMAttributes.COST_USD] == pytest.approx(18.0)
+    resolved = lookup_price("claude-haiku-4-5")
+    requested = lookup_price("claude-sonnet-5")
+    expected = resolved.input + resolved.output
+    assert expected != requested.input + requested.output  # the test can tell them apart
+    assert llm_spans(spans)[0].attributes[LLMAttributes.COST_USD] == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------

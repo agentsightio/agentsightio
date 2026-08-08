@@ -176,7 +176,17 @@ class LLMAttributes:
     """
 
     SYSTEM = "gen_ai.system"
+    #: The model the call actually ran on — the resolved id
+    #: (``gpt-4o-mini-2024-07-18``) whenever the provider reports one, falling
+    #: back to what was asked for. This is the field cost and usage are keyed
+    #: on, so it holds the id that was billed, not the id that was typed.
     REQUEST_MODEL = "gen_ai.request.model"
+    #: What the caller asked for, when that differs from what ran
+    #: (``gpt-4o-mini`` against the dated snapshot above). Present only on the
+    #: difference, so its absence means the two agreed. Without it the alias
+    #: a caller actually uses is unrecoverable, and "which of my model
+    #: aliases is expensive" cannot be answered.
+    REQUESTED_MODEL = "agentsight.llm.requested_model"
     #: GenAI standard: "chat", "text_completion", "embeddings". Distinguishes an
     #: embedding call from a chat call without having to infer it from which
     #: token fields happen to be set.
