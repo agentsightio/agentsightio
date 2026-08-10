@@ -13,19 +13,26 @@ class Usage(Resource):
     Read-only. Rows are written by the tracking SDK from the token counts each
     provider reports; there is no way to create one here.
 
-    **Cost is priced by the backend, not by this SDK.** The SDK sends the
-    figure its own price table computes, and that figure is kept — as
-    ``cost_usd_reported``, for reconciliation — but ``cost_usd`` is the
-    backend's own number, computed at ingest from the stored token counts.
-    ``cost_source`` says which happened:
+    **Cost is priced by the backend. This SDK computes none of it**, and sends
+    none — it reports the token counts, the resolved model id and the
+    timestamp, which is everything cost is a function of. That keeps every
+    customer on one rate table instead of on whichever one their pinned release
+    shipped with, and it means a rate that turns out to have been wrong can be
+    restated across history rather than being frozen per-release.
+
+    ``cost_source`` says where a row's ``cost_usd`` came from:
 
     ``backend``
-        priced server-side. The number of record.
-    ``reported``
-        no server-side price matched this model, so the SDK's figure was kept
-        rather than booking zero. A data gap, not an authority.
+        priced server-side. The number of record, and what you should expect.
     ``unpriced``
-        neither side had a price. The tokens are still exact.
+        no price matched this model, so no cost was booked. Reads as "we do not
+        know", never as "this was free" — and it is recoverable, because the
+        tokens are exact and the backend can restate the row once a rate for
+        that model exists.
+    ``reported``
+        a client sent its own figure and no server-side price matched, so it
+        was kept rather than booking zero. This SDK no longer produces such
+        rows; the value remains for older clients and for historical data.
 
     Only the five billable token categories are priced. ``reasoning_tokens``
     and the audio counts are subsets of prompt/completion that are already

@@ -244,8 +244,11 @@ class LLMAttributes:
     #: Separate models and separate prices — never a subset of anything.
     EMBEDDING_TOKENS = "agentsight.llm.embedding_tokens"
 
-    # -- derived -------------------------------------------------------------
-    COST_USD = "agentsight.llm.cost_usd"
+    # There is deliberately no cost attribute. Cost is a pure function of the
+    # counts above, the model and the date, so the backend derives it on
+    # arrival — one rate table for every customer, and a rate that turns out to
+    # have been wrong can be restated instead of being frozen into whichever
+    # release each caller pinned.
 
     #: Categories that are their own billable line. Summing these gives the
     #: true total; summing every attribute above would double-count.

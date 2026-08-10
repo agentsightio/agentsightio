@@ -18,7 +18,6 @@ from typing import Any, Dict, Optional
 from opentelemetry.trace import Status, StatusCode
 
 from agentsight.sdk import context as ags_context
-from agentsight.sdk.instrumentation.pricing import estimate_cost
 from agentsight.sdk.semconv import (
     LLMAttributes,
     SpanAttributes,
@@ -123,10 +122,16 @@ def record_llm_call(
     answer, because every LLM span would have zero duration.
 
     ``model`` is the *resolved* id when the provider reported one, because
-    that is what was billed and what cost is keyed on. Pass the id the caller
-    asked for as ``requested_model`` and it is recorded alongside whenever the
-    two differ — otherwise the alias people actually write in their code is
-    lost the moment a provider answers with a dated snapshot.
+    that is what was billed and what the backend prices against. Pass the id
+    the caller asked for as ``requested_model`` and it is recorded alongside
+    whenever the two differ — otherwise the alias people actually write in
+    their code is lost the moment a provider answers with a dated snapshot.
+
+    No cost is computed here, deliberately. Cost is a pure function of the
+    token counts, the model and the date, and all three are recorded — so the
+    backend prices it on arrival, which keeps every customer on one rate table
+    instead of on whichever one their pinned release shipped with, and makes
+    historical spend restatable when a rate turns out to have been wrong.
 
     ``error`` is the failure channel (design §13, question 5 — closed): a
     call that raised is recorded as an ERROR span rather than dropped or
@@ -193,17 +198,6 @@ def record_llm_call(
 
     if extra:
         attributes.update({k: v for k, v in extra.items() if v is not None})
-
-    cost = estimate_cost(
-        model,
-        input_tokens,
-        output_tokens,
-        cache_read_tokens,
-        cache_write_tokens,
-        embedding_tokens,
-    )
-    if cost is not None:
-        attributes[LLMAttributes.COST_USD] = cost
 
     tracer = get_tracer()
     if tracer is None:

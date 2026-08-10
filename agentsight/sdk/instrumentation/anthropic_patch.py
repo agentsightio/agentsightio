@@ -5,8 +5,9 @@ reason: ``AnthropicVertex``, ``AnthropicBedrock``, ``AnthropicAWS`` and
 ``AnthropicFoundry`` all build the very same ``Messages``/``AsyncMessages``, so
 one class patch covers every platform. (Their model ids are platform-flavoured
 — ``anthropic.claude-...-v2:0`` on Bedrock, ``claude-...@20240229`` on Vertex —
-so ``lookup_price`` misses them and the cost comes back ``None``. Tokens are
-still exact.)
+so the backend's prefix match misses them and they book as ``unpriced`` until
+somebody adds a rate for that shape. Tokens are still exact, so the cost is
+recoverable with ``reprice_token_usage`` whenever that happens.)
 
 Three separate patch points are needed where one would seem to do:
 

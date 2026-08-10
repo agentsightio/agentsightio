@@ -22,7 +22,6 @@ from agentsight.sdk.api import (
 )
 from agentsight.sdk.core import flush, init, is_enabled, shutdown
 from agentsight.sdk.decorators import task, tool
-from agentsight.sdk.instrumentation import register_price
 from agentsight.sdk.scopes import turn
 from agentsight.sdk.uploads import upload_attachments
 
@@ -54,6 +53,4 @@ __all__ = [
     # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
     "upload_attachments",
     "UploadError",
-    # cost of a model the bundled price table has never heard of
-    "register_price",
 ]

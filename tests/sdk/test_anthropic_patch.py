@@ -436,17 +436,15 @@ def test_absent_counters_are_absent_from_the_span(fake_anthropic, spans):
     assert LLMAttributes.CACHE_WRITE_TOKENS not in attributes
 
 
-def test_cost_is_priced_from_the_resolved_model(fake_anthropic, spans):
-    """The rate that applies is the one for the model that actually ran.
+def test_the_resolved_model_is_what_gets_reported(fake_anthropic, spans):
+    """Spend is keyed on the model that actually ran, not the one asked for.
 
-    Deliberately asks for one model and answers as another, and derives the
-    expected figure from the price table rather than hard-coding dollars —
-    published rates change (claude-sonnet-5 is on introductory pricing until
-    2026-08-31), and a test that pins a number breaks on the day someone
-    correctly updates the table.
+    Deliberately asks for one model and answers as another. This is the whole
+    reason ``requested_model`` exists as a separate attribute: the backend
+    prices ``REQUEST_MODEL``, so if the alias the caller typed ended up there
+    instead, every aliased call would be billed at the wrong rate — and an
+    alias that resolves to a cheaper model would understate spend invisibly.
     """
-    from agentsight.sdk.instrumentation.pricing import lookup_price
-
     install_anthropic(LOGGER)
     client = fake_anthropic.Messages()
     client.reply = SimpleNamespace(
@@ -456,11 +454,9 @@ def test_cost_is_priced_from_the_resolved_model(fake_anthropic, spans):
     with ags.conversation("c"):
         client.create(model="claude-sonnet-5", max_tokens=1, messages=[])
 
-    resolved = lookup_price("claude-haiku-4-5")
-    requested = lookup_price("claude-sonnet-5")
-    expected = resolved.input + resolved.output
-    assert expected != requested.input + requested.output  # the test can tell them apart
-    assert llm_spans(spans)[0].attributes[LLMAttributes.COST_USD] == pytest.approx(expected)
+    attributes = llm_spans(spans)[0].attributes
+    assert attributes[LLMAttributes.REQUEST_MODEL] == "claude-haiku-4-5"
+    assert attributes[LLMAttributes.REQUESTED_MODEL] == "claude-sonnet-5"
 
 
 # ---------------------------------------------------------------------------

@@ -324,10 +324,6 @@ def test_cached_openai_tokens_are_not_double_counted(spans):
     (llm,) = by_kind(spans, SpanKind.LLM)
     assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 200
     assert llm.attributes[LLMAttributes.CACHE_READ_TOKENS] == 1000
-    # 200 @ $2.50/1M + 95 @ $10/1M + 1000 cached @ half the input rate.
-    assert llm.attributes[LLMAttributes.COST_USD] == pytest.approx(
-        (200 * 2.50 + 95 * 10.00 + 1000 * 2.50 * 0.5) / 1_000_000
-    )
 
 
 def test_reasoning_tokens_are_recorded_but_never_added_to_the_total(spans):
@@ -349,25 +345,32 @@ def test_reasoning_tokens_are_recorded_but_never_added_to_the_total(spans):
     assert billable == 107
 
 
-def test_an_unknown_model_gets_no_cost_rather_than_a_wrong_one(spans):
-    with ags.conversation("c-unknown-model"):
+def test_no_cost_is_computed_locally(spans):
+    """
+    The SDK sends counts; the backend prices them. Nothing here may carry a
+    cost, however well known the model — a client-side figure would be frozen
+    at whatever release the caller pinned, would differ between customers on
+    different versions, and is forgeable by anyone holding a write key.
+
+    An unknown model is the same case as a known one, which is the point: it
+    is no longer a gap the SDK has to have an opinion about.
+    """
+    with ags.conversation("c-no-local-cost"):
         with ags.turn():
+            record_llm_call(system="openai", model="gpt-4o",
+                            input_tokens=1200, output_tokens=95)
             record_llm_call(system="openai", model="ft:something-nobody-priced",
                             input_tokens=10, output_tokens=5)
 
-    (llm,) = by_kind(spans, SpanKind.LLM)
-    assert LLMAttributes.COST_USD not in llm.attributes
-
-
-def test_register_price_fills_the_gap(spans):
-    ags.register_price("ft:my-tuned-model", 1.0, 3.0)
-    with ags.conversation("c-registered"):
-        with ags.turn():
-            record_llm_call(system="openai", model="ft:my-tuned-model:v3",
-                            input_tokens=1_000_000, output_tokens=1_000_000)
-
-    (llm,) = by_kind(spans, SpanKind.LLM)
-    assert llm.attributes[LLMAttributes.COST_USD] == pytest.approx(4.0)
+    priced, unpriced = by_kind(spans, SpanKind.LLM)
+    for llm in (priced, unpriced):
+        assert not any(
+            name.endswith("cost_usd") for name in llm.attributes
+        ), "cost must be derived by the backend, not sent"
+    # The inputs it derives from are all still on the wire.
+    assert priced.attributes[LLMAttributes.REQUEST_MODEL] == "gpt-4o"
+    assert priced.attributes[LLMAttributes.INPUT_TOKENS] == 1200
+    assert priced.attributes[LLMAttributes.OUTPUT_TOKENS] == 95
 
 
 # ---------------------------------------------------------------------------

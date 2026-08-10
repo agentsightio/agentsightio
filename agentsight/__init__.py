@@ -66,7 +66,6 @@ from agentsight.sdk import (
     is_enabled,
     open_conversation,
     record_attachments,
-    register_price,
     shutdown,
     task,
     tool,
@@ -104,8 +103,6 @@ __all__ = [
     "update_metadata",
     # the data plane: moves bytes, blocks, and raises — see sdk/uploads.py
     "upload_attachments",
-    # cost of a model the bundled price table has never heard of
-    "register_price",
     # reading and managing what was tracked — agentsight.api
     "AgentSight",
     # errors
