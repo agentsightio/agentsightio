@@ -13,7 +13,16 @@ BASE = "https://api.test.agentsight.io"
 CONVERSATIONS = f"{BASE}/api/conversations/"
 FEEDBACKS = f"{BASE}/api/feedbacks/"
 ACTIONS = f"{BASE}/api/actions/"
-BUTTONS = f"{BASE}/api/buttons/"
+USAGE = f"{BASE}/api/token-usage/"
+USAGE_SUMMARY = f"{USAGE}summary/"
+ME = f"{BASE}/api/me/"
+
+IDENTITY = {
+    "agent_id": 7,
+    "agent_name": "Support bot",
+    "role": "write",
+    "environments": ["production", "development"],
+}
 
 
 @pytest.fixture

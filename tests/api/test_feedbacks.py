@@ -3,7 +3,7 @@
 import pytest
 
 from agentsight.exceptions import ValidationError
-from tests.api.conftest import BASE, FEEDBACKS, envelope
+from tests.api.conftest import BASE, FEEDBACKS, IDENTITY, ME, envelope
 
 
 def test_create_uses_the_unified_route_not_the_deprecated_one(ags, requests_mock):
@@ -52,7 +52,7 @@ def test_conversation_feedback_needs_no_id_resolution(ags, requests_mock):
 def test_agent_feedback_carries_the_environment_slug(ags, requests_mock):
     requests_mock.post(FEEDBACKS, json={"id": 1})
 
-    ags.feedbacks.create_for_agent(7, "positive", environment="production")
+    ags.feedbacks.create_for_agent("positive", agent=7, environment="production")
 
     assert requests_mock.last_request.json() == {
         "kind": "agent",
@@ -60,6 +60,28 @@ def test_agent_feedback_carries_the_environment_slug(ags, requests_mock):
         "sentiment": "positive",
         "environment": "production",
     }
+
+
+def test_agent_feedback_resolves_its_own_agent(ags, requests_mock):
+    # The whole point of /api/me/: a key writes to exactly one agent, so
+    # naming its pk was redundant — and the pk used to be discoverable only
+    # as a side effect of listing conversations.
+    requests_mock.get(ME, json=IDENTITY)
+    requests_mock.post(FEEDBACKS, json={"id": 1})
+
+    ags.feedbacks.create_for_agent("positive")
+
+    assert requests_mock.last_request.json()["agent"] == IDENTITY["agent_id"]
+
+
+def test_the_agent_lookup_happens_once(ags, requests_mock):
+    requests_mock.get(ME, json=IDENTITY)
+    requests_mock.post(FEEDBACKS, json={"id": 1})
+
+    ags.feedbacks.create_for_agent("positive")
+    ags.feedbacks.create_for_agent("negative")
+
+    assert len(requests_mock.request_history) == 3  # one GET, two POSTs
 
 
 def test_conversation_feedback_cannot_carry_an_environment(ags):
@@ -98,12 +120,21 @@ def test_a_nonsense_conversation_reference_is_refused(ags, bad):
 def test_list_filters(ags, requests_mock):
     requests_mock.get(FEEDBACKS, json=envelope([]))
 
-    list(ags.feedbacks.list(sentiment="negative", has_ticket=True, kind="conversation"))
+    list(ags.feedbacks.list(sentiment="negative", has_comment=True, kind="conversation"))
 
     qs = requests_mock.last_request.qs
     assert qs["sentiment"] == ["negative"]
-    assert qs["has_ticket"] == ["true"]
+    assert qs["has_comment"] == ["true"]
     assert qs["kind"] == ["conversation"]
+
+
+@pytest.mark.parametrize("gone", ["has_ticket", "ticket_status"])
+def test_ticket_filters_are_refused_locally(ags, gone):
+    # Tickets are internal workflow state and are not on the API-key plane at
+    # all — the backend now 400s these. Refusing them here turns that round
+    # trip into an error that names the filters that do work.
+    with pytest.raises(ValidationError, match=gone):
+        ags.feedbacks.list(**{gone: True})
 
 
 def test_an_unknown_filter_is_refused(ags):
@@ -112,15 +143,15 @@ def test_an_unknown_filter_is_refused(ags):
 
 
 def test_page_exposes_the_counts_block(ags, requests_mock):
-    # The only place these totals are published.
-    requests_mock.get(
-        FEEDBACKS,
-        json=envelope([], counts={"all": 12, "open_tickets": 3, "done": 9}),
-    )
+    # For an API key this collapses to {"all": N} — the ticket aggregates it
+    # used to carry leaked the same internal workflow state the nested ticket
+    # object did, in summary form. `extra` passes the envelope through
+    # generically, so nothing here had to change to follow it.
+    requests_mock.get(FEEDBACKS, json=envelope([], counts={"all": 12}))
 
     page = ags.feedbacks.page()
 
-    assert page.extra["counts"]["open_tickets"] == 3
+    assert page.extra["counts"] == {"all": 12}
 
 
 def test_get(ags, requests_mock):

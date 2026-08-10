@@ -1,9 +1,9 @@
-"""The actions and buttons namespaces — and the bare-array endpoints."""
+"""The actions namespace — and the bare-array endpoints."""
 
 import pytest
 
 from agentsight.exceptions import ValidationError
-from tests.api.conftest import ACTIONS, BUTTONS, envelope
+from tests.api.conftest import ACTIONS, envelope
 
 # -- actions ----------------------------------------------------------------
 
@@ -60,35 +60,34 @@ def test_delete(ags, requests_mock):
     assert ags.actions.delete(1) == {}
 
 
+# -- filters ----------------------------------------------------------------
+
+
+def test_filters_reach_the_wire(ags, requests_mock):
+    requests_mock.get(ACTIONS, json=envelope([]))
+
+    list(ags.actions.list(name__icontains="ref", display_name="Refund", search="r"))
+
+    query = requests_mock.last_request.qs
+    assert query["name__icontains"] == ["ref"]
+    assert query["display_name"] == ["refund"]  # qs lowercases values
+    assert query["search"] == ["r"]
+
+
+def test_agent_is_not_a_filter(ags):
+    # An API key is bound to one agent and the scoping runs before any filter,
+    # so `agent` could only ever be a no-op or a contradiction. Refusing it
+    # locally is the point of the filter set.
+    with pytest.raises(ValidationError, match="agent"):
+        list(ags.actions.list(agent=2))
+
+
 # -- buttons ----------------------------------------------------------------
 
 
-def test_button_stats_come_back_as_a_bare_array(ags, requests_mock):
-    requests_mock.get(
-        f"{BUTTONS}stats/",
-        json=[{"button_event": "cta", "value": "buy", "label": "Buy", "count": 12}],
-    )
-
-    stats = ags.buttons.stats()
-
-    assert stats[0]["count"] == 12
-
-
-def test_button_stats_can_be_narrowed_to_one_event(ags, requests_mock):
-    requests_mock.get(f"{BUTTONS}stats/", json=[])
-
-    ags.buttons.stats(event="cta")
-
-    assert requests_mock.last_request.qs["event"] == ["cta"]
-
-
-def test_list_buttons(ags, requests_mock):
-    requests_mock.get(BUTTONS, json=envelope([{"id": 1, "button_event": "cta"}]))
-
-    assert [b["button_event"] for b in ags.buttons.list()] == ["cta"]
-
-
-def test_buttons_are_read_only(ags):
-    # Button events are recorded by agentsight.button() on the tracking side.
-    for method in ("create", "update", "delete"):
-        assert not hasattr(ags.buttons, method)
+def test_there_is_no_buttons_namespace(ags):
+    # agentsight.button() writes to the span archive, but nothing projects
+    # those clicks into a readable table — so a buttons.list() here would
+    # return an empty page for every caller and read as "no clicks" rather
+    # than "not surfaced yet".
+    assert not hasattr(ags, "buttons")

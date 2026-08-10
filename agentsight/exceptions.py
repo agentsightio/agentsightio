@@ -112,8 +112,9 @@ class SubscriptionInactiveError(AuthenticationError):
 class PermissionDeniedError(APIError):
     """403. The key authenticated but is not allowed to do this.
 
-    Most often a ``read``-role key attempting a write. There is no endpoint
-    that reports a key's own role, so this is how a caller finds out.
+    Most often a ``read``-role key attempting a write. ``AgentSight().me()``
+    reports the key's own role, so this no longer has to be how a caller finds
+    out — but it is still what a write attempt raises.
     """
 
 
@@ -137,6 +138,24 @@ class ValidationError(APIError):
 
 class MethodNotAllowedError(APIError):
     """405. Several routes here disable verbs a router would otherwise expose."""
+
+
+class RateLimitError(APIError):
+    """429. Too many requests, and the right response is to wait.
+
+    Separate from the rest of the 4xx family because it is the only one where
+    the request was *fine* — nothing about retrying the identical call is
+    wrong, which is the opposite of every other client error here.
+
+    ``retry_after`` is the server's own pacing in seconds where it sent a
+    ``Retry-After`` header, and ``None`` where it did not. It is already
+    normalised: the header's HTTP-date form is converted to a duration, and a
+    time in the past reads as ``0.0``.
+    """
+
+    def __init__(self, message: str, *, retry_after: Optional[float] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
 
 
 class ServerError(APIError):

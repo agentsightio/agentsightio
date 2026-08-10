@@ -9,19 +9,25 @@ import json
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from agentsight import _settings
+from agentsight._transport import retry_after
 from agentsight.sdk.semconv import ConversationAttributes, SpanAttributes
 
 #: Re-exported: this module was where they lived before both planes needed
 #: them, and ``sdk.uploads`` still imports them from here.
 SDK_NAME = _settings.SDK_NAME
 SDK_VERSION = _settings.SDK_VERSION
+
+#: How many failing blocks a rejection warning names before it stops listing
+#: them and just counts. Ingest itself lists at most 20; a log line is read by
+#: a human, and five is enough to see the pattern.
+_MAX_REPORTED_BLOCKS = 5
 
 
 def _iso(nanoseconds: Optional[int]) -> Optional[str]:
@@ -180,6 +186,70 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
     }
 
 
+def _rejection_detail(response: requests.Response) -> str:
+    """What a 400 from ingest actually says, block by block where it can.
+
+    Ingest names the offending conversation blocks rather than just failing:
+    ``detail`` plus a ``conversations`` list of ``{index, conversation_id,
+    errors}``. Surfacing those ids is the difference between an operator
+    knowing which conversation to look at and knowing only that something in
+    the last flush was wrong.
+
+    Errors that are *not* per-block — a missing ``conversations`` key, a
+    top-level type error — carry neither key, because there is no block to
+    point at. Those fall back to the raw text, which is all there is.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+
+    if not isinstance(body, dict):
+        return (response.text or "")[:500]
+
+    blocks = body.get("conversations")
+    if not isinstance(blocks, list) or not blocks:
+        return (response.text or "")[:500]
+
+    named: List[str] = []
+    for block in blocks[:_MAX_REPORTED_BLOCKS]:
+        if not isinstance(block, dict):
+            continue
+        # conversation_id is read back from the raw request server-side, so it
+        # survives even when conversation_id is itself the invalid field.
+        who = block.get("conversation_id") or f"index {block.get('index')}"
+        named.append(f"{who} ({_errors_summary(block.get('errors'))})")
+
+    if not named:
+        return (response.text or "")[:500]
+
+    detail = body.get("detail") or "ingest rejected the batch"
+    suffix = ""
+    hidden = len(blocks) - len(named)
+    if hidden > 0:
+        suffix = f", and {hidden} more"
+    if body.get("truncated"):
+        suffix += " (server truncated the list)"
+    return f"{detail} Offending block(s): {'; '.join(named)}{suffix}"
+
+
+def _errors_summary(errors: Any) -> str:
+    """One block's field errors, flattened to a line."""
+    if isinstance(errors, dict):
+        parts = []
+        for field, messages in errors.items():
+            if isinstance(messages, (list, tuple)):
+                joined = ", ".join(str(message) for message in messages)
+            else:
+                joined = str(messages)
+            parts.append(f"{field}: {joined}")
+        if parts:
+            return "; ".join(parts)
+    elif errors:
+        return str(errors)
+    return "no field detail"
+
+
 class AgentSightSpanExporter(SpanExporter):
     """POSTs span batches to ``/api/ingest/`` using the existing API-key plane."""
 
@@ -189,6 +259,13 @@ class AgentSightSpanExporter(SpanExporter):
     #: waiting here costs the user nothing — and retrying a struggling backend
     #: three times without pausing is how a brief wobble becomes an outage.
     _BACKOFF = (0.5, 2.0)
+    #: Ceiling on a server-supplied ``Retry-After``. The header is honoured
+    #: because the backend knows its own budget better than a fixed curve does,
+    #: but it arrives on the batch processor's only export thread: an
+    #: unbounded value would park every later batch behind it and let one
+    #: header stall the whole pipeline. Past this we wait the cap, retry, and
+    #: let the batch drop normally if it is still throttled.
+    _MAX_RETRY_AFTER = 30.0
     #: Seconds between dropped-batch warnings. A down backend at a 1s flush
     #: interval would otherwise emit one warning per second for as long as
     #: the outage lasts — a log flood that says the same thing every time
@@ -227,6 +304,7 @@ class AgentSightSpanExporter(SpanExporter):
     def _post(self, payload: Dict[str, Any]) -> SpanExportResult:
         last_failure = "unknown"
         for attempt in range(self._MAX_RETRIES):
+            pause: Optional[float] = None
             try:
                 response = self._session.post(
                     self._url, json=payload, timeout=self._TIMEOUT
@@ -238,7 +316,21 @@ class AgentSightSpanExporter(SpanExporter):
                     )
                     return SpanExportResult.SUCCESS
 
-                if 400 <= response.status_code < 500:
+                if response.status_code == 429:
+                    # Throttled, not refused. The batch is fine and the same
+                    # bytes will be accepted once the window rolls over, so
+                    # this is the one 4xx worth waiting on — dropping it loses
+                    # data that nothing was wrong with.
+                    pause = retry_after(response, self._MAX_RETRY_AFTER)
+                    last_failure = "throttled by ingest (429)"
+                    self._logger.debug(
+                        "ingest throttled (attempt %d/%d), waiting %ss",
+                        attempt + 1,
+                        self._MAX_RETRIES,
+                        pause if pause is not None else self._BACKOFF[0],
+                    )
+
+                elif 400 <= response.status_code < 500:
                     # Client error: retrying cannot help, and a stuck batch
                     # would block every later batch behind it.
                     #
@@ -250,17 +342,18 @@ class AgentSightSpanExporter(SpanExporter):
                     # special-case it and this loop reports the raw status.
                     self._warn_dropped(
                         "ingest rejected batch (%s): %s"
-                        % (response.status_code, response.text[:500])
+                        % (response.status_code, _rejection_detail(response))
                     )
                     return SpanExportResult.FAILURE
 
-                self._logger.debug(
-                    "ingest error %s (attempt %d/%d)",
-                    response.status_code,
-                    attempt + 1,
-                    self._MAX_RETRIES,
-                )
-                last_failure = "ingest error %s" % response.status_code
+                else:
+                    self._logger.debug(
+                        "ingest error %s (attempt %d/%d)",
+                        response.status_code,
+                        attempt + 1,
+                        self._MAX_RETRIES,
+                    )
+                    last_failure = "ingest error %s" % response.status_code
             except requests.RequestException as exc:
                 self._logger.debug(
                     "ingest network error (attempt %d/%d): %s",
@@ -271,7 +364,7 @@ class AgentSightSpanExporter(SpanExporter):
                 last_failure = "network error: %s" % exc
 
             if attempt < len(self._BACKOFF):
-                time.sleep(self._BACKOFF[attempt])
+                time.sleep(self._BACKOFF[attempt] if pause is None else pause)
 
         self._warn_dropped("batch dropped after %d attempts, last failure: %s"
                            % (self._MAX_RETRIES, last_failure))

@@ -15,6 +15,7 @@ from agentsight.exceptions import (
     NetworkError,
     NotFoundError,
     PermissionDeniedError,
+    RateLimitError,
     ServerError,
     SubscriptionInactiveError,
     ValidationError,
@@ -267,10 +268,65 @@ def test_a_get_never_retries_a_4xx(transport, requests_mock):
     assert requests_mock.call_count == 1
 
 
+# -- 429 --------------------------------------------------------------------
+
+
+def test_a_get_does_retry_a_429(transport, requests_mock, monkeypatch):
+    # The one 4xx where nothing was wrong with the request. Ingest is throttled
+    # per agent, so every worker in a deployment spends from one allowance and
+    # a caller can be refused without having done anything.
+    monkeypatch.setattr("agentsight._transport.time.sleep", lambda _: None)
+    requests_mock.get(CONVERSATIONS, [{"status_code": 429},
+                                      {"status_code": 200, "json": {"results": []}}])
+
+    transport.request("GET", "/api/conversations/")
+
+    assert requests_mock.call_count == 2
+
+
+def test_a_get_honours_retry_after(transport, requests_mock, monkeypatch):
+    slept = []
+    monkeypatch.setattr("agentsight._transport.time.sleep", slept.append)
+    requests_mock.get(
+        CONVERSATIONS,
+        [{"status_code": 429, "headers": {"Retry-After": "9"}},
+         {"status_code": 200, "json": {"results": []}}],
+    )
+
+    transport.request("GET", "/api/conversations/")
+
+    assert slept == [9.0]
+
+
+def test_an_exhausted_429_raises_rate_limit_error(transport, requests_mock, monkeypatch):
+    monkeypatch.setattr("agentsight._transport.time.sleep", lambda _: None)
+    requests_mock.get(CONVERSATIONS, status_code=429,
+                      headers={"Retry-After": "4"}, json={"detail": "slow down"})
+
+    with pytest.raises(RateLimitError) as raised:
+        transport.request("GET", "/api/conversations/")
+
+    assert raised.value.retry_after == 4.0
+    assert raised.value.status_code == 429
+
+
+def test_a_throttled_write_raises_rather_than_replaying(transport, requests_mock):
+    # Retrying is safe for a GET and never safe for a write, no matter what the
+    # server says about pacing — so the caller gets `retry_after` and decides.
+    requests_mock.post(CONVERSATIONS, status_code=429,
+                       headers={"Retry-After": "12"}, json={})
+
+    with pytest.raises(RateLimitError) as raised:
+        transport.request("POST", "/api/conversations/")
+
+    assert requests_mock.call_count == 1
+    assert raised.value.retry_after == 12.0
+
+
 @pytest.mark.parametrize("method", ["POST", "PATCH", "PUT", "DELETE"])
 def test_no_write_is_ever_retried(transport, requests_mock, method, monkeypatch):
-    # POST /api/feedbacks/ is not idempotent and the backend publishes no
-    # 429 or Retry-After, so replaying a write is guessing with user data.
+    # POST /api/feedbacks/ is not idempotent, and no amount of server-side
+    # pacing makes replaying it safe.
     monkeypatch.setattr("agentsight._transport.time.sleep", lambda _: None)
     getattr(requests_mock, method.lower())(CONVERSATIONS, status_code=503, json={})
 

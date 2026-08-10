@@ -266,6 +266,14 @@ def button(
 
     Needs an active ``agentsight.conversation(...)`` scope; outside one there
     is nothing to attach the click to and it is dropped with a debug line.
+
+    **Recorded, not yet surfaced.** The click is archived verbatim — event,
+    label, value, metadata and the conversation it belongs to — but no read
+    API or dashboard currently displays it, so there is nothing to query it
+    back with today. Keep calling this if you want the record: the archive is
+    complete enough to reconstruct button analytics exactly, whenever
+    something is built to consume them. What you should not do is build a
+    feature that depends on reading these back this week.
     """
     try:
         _emit_span(

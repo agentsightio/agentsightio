@@ -19,8 +19,10 @@ Two entry points, because the two callers want different things:
 Both share the session, the auth header, the URL joining and the retry policy.
 """
 
+import email.utils
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -33,6 +35,7 @@ from agentsight.exceptions import (
     NetworkError,
     NotFoundError,
     PermissionDeniedError,
+    RateLimitError,
     ServerError,
     SubscriptionInactiveError,
     ValidationError,
@@ -47,7 +50,54 @@ logger = logging.getLogger("agentsight")
 #: uses, so the two planes behave alike under a flaky backend.
 _BACKOFF = (0.5, 2.0)
 
+#: Ceiling on a server-supplied ``Retry-After``. Waiting is better than
+#: failing, but a caller blocked inside a library call has no way to change
+#: its mind, so there is a limit past which raising and letting them decide is
+#: the more honest answer.
+MAX_RETRY_AFTER = 30.0
+
 _SUCCESS = (200, 201, 202, 204)
+
+
+def retry_after(
+    response: requests.Response, cap: float = MAX_RETRY_AFTER
+) -> Optional[float]:
+    """The server's own pacing, in seconds, or ``None`` if it did not say.
+
+    Lives here rather than in either retry loop because both planes need it and
+    neither owns it: :class:`Transport` retries GETs with it, and the span
+    exporter — which keeps its own loop on purpose — imports it for the same
+    reason. Written once so the two cannot drift.
+
+    RFC 9110 allows two spellings and both are in the wild: a count of seconds,
+    and an HTTP-date. DRF sends the first; a proxy in front of it may rewrite to
+    the second, so parsing only one is how this silently stops working.
+
+    Clamped into ``[0, cap]`` — a past date means "now", and an unparseable
+    header means ``None`` rather than an exception, because every caller is
+    somewhere that would rather wait a default than fail.
+    """
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+
+    raw = raw.strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            parsed = email.utils.parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            return None
+        if parsed is None:  # pragma: no cover — 3.10+ raises instead of returning
+            return None
+        if parsed.tzinfo is None:
+            # A date with no zone is UTC by RFC 9110; reading it as local time
+            # would shift the wait by the host's offset.
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        seconds = (parsed - datetime.now(tz=timezone.utc)).total_seconds()
+
+    return max(0.0, min(seconds, cap))
 
 
 class Transport:
@@ -111,10 +161,12 @@ class Transport:
         """Send a request and hand back the response, whatever its status.
 
         Retries are applied here so both entry points get them, and only to
-        GET: no write on this API is known-idempotent enough to replay
-        blindly. ``POST /api/feedbacks/`` in particular would create a second
-        row, and the backend publishes no 429 or ``Retry-After`` to pace
-        against, so a client that guesses is guessing with the user's data.
+        GET: no write on this API is known-idempotent enough to replay blindly.
+        ``POST /api/feedbacks/`` in particular would create a second row, and
+        no amount of server-side pacing makes replaying it safe — so a write
+        that comes back throttled is raised as :class:`RateLimitError` carrying
+        ``retry_after``, and the caller decides. A GET has no such problem and
+        is retried, honouring ``Retry-After`` when the server sends one.
         """
         method = method.upper()
         url = _settings.join_url(self.endpoint, path)
@@ -139,9 +191,20 @@ class Transport:
                 self._sleep(attempt, f"{method} {url}", str(exc))
                 continue
 
-            if retryable and response.status_code >= 500 and attempt + 1 < attempts:
-                self._sleep(attempt, f"{method} {url}", f"HTTP {response.status_code}")
-                continue
+            if retryable and attempt + 1 < attempts:
+                if response.status_code >= 500:
+                    self._sleep(
+                        attempt, f"{method} {url}", f"HTTP {response.status_code}"
+                    )
+                    continue
+                if response.status_code == 429:
+                    self._sleep(
+                        attempt,
+                        f"{method} {url}",
+                        "HTTP 429 (throttled)",
+                        override=retry_after(response),
+                    )
+                    continue
 
             return response
 
@@ -154,8 +217,18 @@ class Transport:
 
     # -- internals ---------------------------------------------------------
 
-    def _sleep(self, attempt: int, what: str, why: str) -> None:
-        delay = _BACKOFF[min(attempt, len(_BACKOFF) - 1)]
+    def _sleep(
+        self, attempt: int, what: str, why: str, *, override: Optional[float] = None
+    ) -> None:
+        """Wait before the next attempt.
+
+        ``override`` is the server's own ``Retry-After`` where it sent one; it
+        wins over the fixed curve, because the backend knows its own budget and
+        we are only guessing.
+        """
+        delay = override if override is not None else _BACKOFF[
+            min(attempt, len(_BACKOFF) - 1)
+        ]
         logger.warning("%s failed (%s); retrying in %ss", what, why, delay)
         time.sleep(delay)
 
@@ -230,6 +303,12 @@ def _error_for(response: requests.Response) -> APIError:
         return NotFoundError(message, **kwargs)
     if status == 405:
         return MethodNotAllowedError(message, **kwargs)
+    if status == 429:
+        # Ingest is throttled per agent, and every worker in a deployment
+        # spends from the same allowance — so this is reachable without the
+        # caller having done anything wrong, and `retry_after` is the only
+        # part of the answer they can act on.
+        return RateLimitError(message, retry_after=retry_after(response), **kwargs)
     if status >= 500:
         return ServerError(message, **kwargs)
     return APIError(message, **kwargs)

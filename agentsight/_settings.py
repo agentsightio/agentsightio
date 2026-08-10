@@ -40,15 +40,20 @@ except Exception:  # pragma: no cover - PackageNotFoundError in dev checkouts
 
 USER_AGENT = f"{SDK_NAME}/{SDK_VERSION}"
 
-#: Every agent is created with exactly these two environments, and ingest
-#: rejects anything else with a 400 that takes the whole batch down with it.
-#: The slug is the published wire value — the backend's own model says so —
-#: so it is safe to hard-code, and the shorthand below is a convenience the
-#: backend accepts on query params but never stores.
+#: The **offline fallback**, not the authority. Every agent is created with
+#: exactly these two, and ingest rejects anything else with a 400 that takes
+#: the whole batch down with it, so validating locally is what keeps a typo in
+#: ``AGENTSIGHT_ENVIRONMENT`` from silently costing every batch.
 #:
-#: This list is temporary by design. Custom environments per agent are
-#: supported end to end except for the API to create and list them; when that
-#: lands, this pair is replaced by a lookup against the agent's own slugs.
+#: ``AgentSight().environments()`` is the authoritative list, and is what to
+#: check against when a custom slug might exist. It is deliberately not
+#: consulted from here: this module performs no I/O and ``init()`` must never
+#: raise into user code, so the tracking plane cannot make a network call to
+#: find out what it is allowed to send. The pair below is what it assumes when
+#: it cannot ask.
+#:
+#: The shorthand is a convenience the backend accepts on query params but
+#: never stores.
 PRODUCTION = "production"
 DEVELOPMENT = "development"
 KNOWN_ENVIRONMENTS = (PRODUCTION, DEVELOPMENT)

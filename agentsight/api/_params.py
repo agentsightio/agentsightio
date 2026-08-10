@@ -6,11 +6,21 @@ a filter that was not passed must be absent rather than sent as ``None``.
 """
 
 from datetime import date, datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from agentsight.exceptions import ValidationError
 
 SENTIMENTS = ("positive", "neutral", "negative")
+
+#: ``environment`` and ``env`` are the same filter on the conversation and
+#: feedback routes, and only one name may go on the wire.
+#:
+#: This is **not** universal, which is why it is a parameter of :func:`build`
+#: rather than a rule inside it. ``/api/token-usage/`` names its filter
+#: ``environment`` and does not answer to ``env`` — sending the wrong one there
+#: is silently ignored, which returns *more* rows than the caller asked for,
+#: the exact failure this module exists to prevent.
+ENV_ALIAS = {"environment": "env"}
 
 #: Filters ``GET /api/conversations/`` understands. Anything else is refused
 #: locally rather than silently ignored by the backend, because a filter that
@@ -56,19 +66,59 @@ FEEDBACK_FILTERS = frozenset(
         "env",
         "environment",
         "has_comment",
-        "has_ticket",
         "kind",
         "ordering",
         "search",
         "sentiment",
-        "ticket_status",
         "user",
     }
 )
+#: ``has_ticket`` and ``ticket_status`` are deliberately absent. Tickets are
+#: internal workflow state and are not on the API-key plane at all: the nested
+#: ``ticket`` object is omitted from every feedback payload, the ``counts``
+#: envelope carries only ``all``, and both filters now return 400. Refusing
+#: them here turns that into an error naming the supported filters.
 
-ACTION_FILTERS = frozenset({"agent", "name", "ordering", "search"})
+#: Note the absence of ``agent``: an API key is bound to exactly one agent and
+#: the scoping is applied before any filter runs, so the parameter could only
+#: ever be a no-op or a contradiction. The same is true on ``/api/buttons/``,
+#: which this client no longer reads.
+ACTION_FILTERS = frozenset(
+    {
+        "display_name",
+        "name",
+        "name__icontains",
+        "ordering",
+        "search",
+    }
+)
 
-BUTTON_FILTERS = frozenset({"agent", "button_event", "conversation", "ordering", "value"})
+#: ``/api/token-usage/`` — what an LLM call cost, per call.
+#:
+#: ``environment`` here accepts any slug the agent owns, unlike the fixed
+#: ``production|development|prod|dev`` choice list the conversation and feedback
+#: routes still enforce. That asymmetry is deliberate on the backend's side;
+#: do not "fix" this set to match the others.
+USAGE_FILTERS = frozenset(
+    {
+        "conversation",
+        "conversation_id",
+        "cost_source",
+        "environment",
+        "incomplete",
+        "model",
+        "ordering",
+        "started_at_after",
+        "started_at_before",
+        "turn_id",
+    }
+)
+
+#: How spend was priced, as reported on every usage row.
+COST_SOURCES = ("backend", "reported", "unpriced")
+
+USAGE_GROUP_BY = ("model", "conversation", "day")
+USAGE_CURRENCIES = ("usd", "eur")
 
 
 def format_value(value: Any) -> Any:
@@ -89,8 +139,14 @@ def build(
     allowed: Iterable[str],
     *,
     what: str,
+    rename: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Validate filter names, drop the unset ones, format the rest."""
+    """Validate filter names, drop the unset ones, format the rest.
+
+    ``rename`` maps a caller-facing filter name onto the name the route
+    actually answers to, and defaults to :data:`ENV_ALIAS`. Pass ``{}`` for a
+    route that wants the caller-facing spelling verbatim.
+    """
     allowed = frozenset(allowed)
     unknown = sorted(set(filters) - allowed)
     if unknown:
@@ -99,20 +155,32 @@ def build(
             f"Supported: {', '.join(sorted(allowed))}"
         )
 
+    rename = ENV_ALIAS if rename is None else rename
     params: Dict[str, Any] = {}
     for key, value in filters.items():
         if value is None:
             continue
-        # `environment` and `env` are the same backend filter; send one name.
-        params["env" if key == "environment" else key] = format_value(value)
+        params[rename.get(key, key)] = format_value(value)
     return params
 
 
-def check_sentiment(sentiment: Optional[str]) -> Optional[str]:
-    if sentiment is None:
+def check_choice(
+    value: Optional[str], choices: Iterable[str], *, what: str
+) -> Optional[str]:
+    """One of a fixed set, or a local error naming the set.
+
+    Same reasoning as the filter names above: a value the backend does not
+    recognise is either a 400 round trip or, worse, silently ignored.
+    """
+    if value is None:
         return None
-    if sentiment not in SENTIMENTS:
+    choices = tuple(choices)
+    if value not in choices:
         raise ValidationError(
-            f"sentiment must be one of {', '.join(SENTIMENTS)}, got {sentiment!r}"
+            f"{what} must be one of {', '.join(choices)}, got {value!r}"
         )
-    return sentiment
+    return value
+
+
+def check_sentiment(sentiment: Optional[str]) -> Optional[str]:
+    return check_choice(sentiment, SENTIMENTS, what="sentiment")

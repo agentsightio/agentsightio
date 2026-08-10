@@ -4,6 +4,16 @@ Separated from the capture code because prices change on a different schedule
 than instrumentation does — this file is expected to be edited often, the rest
 of the package rarely.
 
+**The backend prices spend; this table is the fallback.** Cost is recomputed
+server-side at ingest from the stored token counts, and that is the number of
+record. What this file computes is still sent, still stored (as the reported
+figure, for reconciliation) and still used verbatim wherever the backend has
+no price for the model — which is why the rates here have to stay honest, but
+also why a stale entry now shows up as a discrepancy against a correct number
+rather than as the only number anyone has. Server-side pricing is also what
+makes historical spend restatable, which a figure frozen by a customer's
+pinned SDK version can never be.
+
 **Rates verified 2026-08-07** against the providers' published rate cards
 (``developers.openai.com/api/docs/pricing`` and
 ``platform.claude.com/docs/en/about-claude/pricing``). A model absent from

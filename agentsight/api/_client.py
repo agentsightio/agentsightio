@@ -3,7 +3,7 @@
 import logging
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from agentsight import _settings
 from agentsight._transport import Transport
@@ -42,6 +42,12 @@ class AgentSight:
     messages, buttons, action logs or attachments — those belong to the
     tracking SDK, and having two ways to write the same row would mean two
     sets of semantics for how it projects into the dashboards.
+
+    There is deliberately no ``buttons`` namespace. ``agentsight.button()``
+    records clicks to the span archive, but nothing currently projects them
+    into a table this client could read, so a ``buttons.list()`` here would
+    return an empty page for every caller and look like "no clicks" rather
+    than "not surfaced yet". See :func:`agentsight.button`.
     """
 
     def __init__(
@@ -69,14 +75,17 @@ class AgentSight:
         # Imported here rather than at module scope: the resources import this
         # module for its type, and doing it at the top would be a cycle.
         from agentsight.api.resources.actions import Actions
-        from agentsight.api.resources.buttons import Buttons
         from agentsight.api.resources.conversations import Conversations
         from agentsight.api.resources.feedbacks import Feedbacks
+        from agentsight.api.resources.usage import Usage
 
         self.conversations = Conversations(self)
         self.feedbacks = Feedbacks(self)
         self.actions = Actions(self)
-        self.buttons = Buttons(self)
+        self.usage = Usage(self)
+
+        self._identity: Optional[Dict[str, Any]] = None
+        self._identity_lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -98,15 +107,61 @@ class AgentSight:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         return self._transport.request(method, path, **kwargs)
 
+    # -- identity ----------------------------------------------------------
+
+    def me(self, *, refresh: bool = False) -> Dict[str, Any]:
+        """Who this key is: agent, role and the environments it may write to.
+
+        ``{"agent_id": 12, "agent_name": "Support bot", "role": "read",
+        "environments": ["production", "development"]}``
+
+        This is the preflight the SDK had no way to perform. It answers three
+        questions that previously had only indirect answers: the agent's
+        numeric pk (which :meth:`Feedbacks.create_for_agent` needs, and which
+        was otherwise discoverable only as a side effect of listing
+        conversations), the key's role (previously learned by attempting a
+        write and catching the 403), and the environment slugs ingest will
+        accept — which the tracking side otherwise assumes.
+
+        Cached, because none of it changes for the life of a key. Pass
+        ``refresh=True`` after adding an environment server-side.
+
+        API keys only. A JWT session gets 403 here by design and should use
+        the dashboard's own route instead.
+        """
+        with self._identity_lock:
+            if self._identity is None or refresh:
+                self._identity = self._request("GET", "/api/me/")
+            return self._identity
+
+    def environments(self, *, refresh: bool = False) -> List[str]:
+        """The environment slugs this agent has.
+
+        Every agent is seeded with ``production`` and ``development``, and
+        until environment CRUD exists that is all any agent has — but asking
+        is what lets a slug added server-side reach an SDK that shipped before
+        it existed, which hard-coding the pair cannot do.
+        """
+        environments = self.me(refresh=refresh).get("environments") or []
+        return [str(slug) for slug in environments]
+
     # -- conversation id resolution ---------------------------------------
 
     def _resolve(self, conversation: ConversationRef) -> int:
         """A conversation reference as a primary key.
 
         Integers pass straight through. Strings are looked up through the list
-        filter — *not* ``/api/conversations/lookup/``, which despite being a
-        GET falls through to the write branch of the view's permissions and so
-        returns 403 to a read-only key. The list filter works for both roles.
+        filter rather than ``/api/conversations/lookup/``, for two reasons that
+        outlast the original one. (That original reason — ``lookup`` returned
+        403 to a read-role key — was a backend bug, and it has since been
+        fixed.)
+
+        First, the list filter carries ``include_deleted``, so a soft-deleted
+        conversation still resolves and can be inspected or restored; a
+        dedicated lookup that omits it would make exactly the conversations
+        someone is trying to recover the ones they cannot name. Second, this
+        path works against every deployment, including those predating the
+        permission fix, and it costs the same single request.
         """
         if isinstance(conversation, bool):  # bool is an int; nobody means this
             raise ValidationError(f"invalid conversation reference: {conversation!r}")

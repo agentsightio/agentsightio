@@ -95,7 +95,7 @@ def init(
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
     auto_instrument: Union[bool, Sequence[str]] = True,
-    export_interval_ms: int = 1000,
+    export_interval_ms: int = 5000,
     max_queue_size: int = 2048,
     turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS,
     span_exporter: Optional[SpanExporter] = None,
@@ -109,6 +109,16 @@ def init(
     ``span_exporter`` swaps the transport: any OTel ``SpanExporter`` slots in
     behind the same buffering and batching. With one supplied, the API key is
     not required — it exists only to authenticate the default transport.
+
+    ``export_interval_ms`` is how long finished spans wait before a batch is
+    POSTed, and it is a **per-process** rate against a **per-agent** ingest
+    budget. Every worker in a deployment spends from the same allowance, so the
+    figure that matters is ``60_000 / export_interval_ms × worker_count``. At
+    the default that is 12 batches a minute each, which leaves room for a few
+    dozen workers on one agent; at 1000 it was 60, and ten busy workers were
+    enough to start being throttled. Lower it if you want the dashboard to
+    update faster and know your worker count is small — nothing in the SDK
+    reads its own data back, so the only cost of the wait is freshness.
 
     Setting ``AGENTSIGHT_FILE_EXPORTER`` to a directory does the same thing
     without a code change: spans are written there as the JSON the ingest
@@ -226,9 +236,12 @@ def _resolve_environment(raw: Optional[str]) -> Optional[str]:
     resolved = _settings.normalize_environment(raw)
     if resolved is None:
         logger.error(
-            "AgentSight: environment %r is not one this agent has (%s). It has "
-            "been ignored — conversations will be recorded against the agent's "
-            "default environment.",
+            "AgentSight: environment %r is not one this agent is assumed to "
+            "have (%s). It has been ignored — conversations will be recorded "
+            "against the agent's default environment. If this slug was added "
+            "server-side, confirm it with AgentSight().environments(); that "
+            "list is authoritative and this one is only what the tracking "
+            "plane assumes without making a network call.",
             raw,
             ", ".join(_settings.KNOWN_ENVIRONMENTS),
         )

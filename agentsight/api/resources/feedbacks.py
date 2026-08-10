@@ -33,23 +33,33 @@ class Feedbacks(Resource):
         Filters: ``agent``, ``category``, ``comment_contains``,
         ``conversation`` (pk), ``conversation_id`` (string),
         ``created_at_after``, ``created_at_before``, ``environment`` (or
-        ``env``), ``has_comment``, ``has_ticket``, ``kind``, ``ordering``,
-        ``search``, ``sentiment``, ``ticket_status``, ``user``.
+        ``env``), ``has_comment``, ``kind``, ``ordering``, ``search``,
+        ``sentiment``, ``user``.
+
+        Tickets are not filterable here — see :meth:`get`.
         """
         return PageIterator(self._fetch, self._filters(filters))
 
     def page(self, number: int = 1, **filters: Any) -> Page:
-        """One page, with the aggregate counts the envelope carries.
+        """One page, with the aggregate count the envelope carries.
 
-        ``Page.extra["counts"]`` holds the backend's tally — ``all``,
-        ``tickets``, ``open_tickets``, ``backlog``, ``open``, ``in_progress``,
-        ``in_review``, ``done``, ``closed`` — which is the only place those
-        totals are published.
+        ``Page.extra["counts"]`` holds ``{"all": N}`` — how many rows match the
+        filters, which is the same number as ``Page.count`` and is kept only
+        because the envelope publishes it.
+
+        Earlier versions of this client documented ticket aggregates here too
+        (``tickets``, ``open_tickets``, and the per-status tallies). Those are
+        internal workflow state and are no longer sent to an API key.
         """
         return PageIterator(self._fetch, self._filters(filters)).page(number)
 
     def get(self, feedback_id: int) -> Dict[str, Any]:
-        """One feedback row, including its ticket if one was raised."""
+        """One feedback row.
+
+        No ``ticket`` key: tickets are internal workflow state and are not
+        exposed on the API-key plane, so the field is absent rather than null
+        on every payload here — list, retrieve and the echo from a create.
+        """
         return self._request("GET", f"/api/feedbacks/{int(feedback_id)}/")
 
     # -- writing -----------------------------------------------------------
@@ -87,20 +97,29 @@ class Feedbacks(Resource):
 
     def create_for_agent(
         self,
-        agent: int,
         sentiment: str,
         comment: Optional[str] = None,
+        *,
+        agent: Optional[int] = None,
         environment: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Record how the agent is doing overall. *Write role.*
 
-        ``environment`` is a slug — ``production`` or ``development``. It is
-        accepted on this kind only; the backend rejects it on conversation
-        feedback, which is why the two kinds have separate methods.
+        ``agentsight.api.AgentSight().feedbacks.create_for_agent("positive")``
+        is the whole call: ``agent`` defaults to the one your API key is bound
+        to, resolved once through :meth:`AgentSight.me` and then cached. A key
+        can only ever write to one agent, so naming it was redundant — and the
+        pk used to be discoverable only as a side effect of listing
+        conversations. Pass it explicitly only if you already have it.
+
+        ``environment`` is a slug; ``ags.environments()`` lists the ones this
+        agent has. It is accepted on this kind only — the backend rejects it on
+        conversation feedback, which is why the two kinds have separate
+        methods.
         """
         payload: Dict[str, Any] = {
             "kind": "agent",
-            "agent": int(agent),
+            "agent": int(agent) if agent is not None else self._client.me()["agent_id"],
             "sentiment": _require_sentiment(sentiment),
         }
         if comment:
