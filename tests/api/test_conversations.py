@@ -323,6 +323,162 @@ def test_update_metadata_leaves_an_unrelated_scope_alone(ags, resolved, requests
         assert scope.metadata == {"x": 9}
 
 
+def test_update_metadata_syncs_a_live_scope_named_by_pk(ags, requests_mock):
+    """The read it already makes names both ids, so passing the pk loses
+    nothing — the scope is still found and still updated."""
+    import agentsight
+
+    _fetch_and_patch(requests_mock, {"a": 1})
+
+    with agentsight.conversation("wa-3859", metadata={"a": 1}) as scope:
+        ags.conversations.update_metadata(42, {"b": 2})
+
+        assert scope.metadata == {"a": 1, "b": 2}
+
+
+# -- the same problem, for every other field that rides on a span -----------
+
+
+def test_update_syncs_the_span_fields_into_a_live_scope(ags, resolved,
+                                                        requests_mock):
+    """`customer_id`, `device`, `language` and `name` are stamped on every span
+    and written onto the row by ingest, exactly like metadata. Without this the
+    PATCH lands and the next span puts the old values straight back."""
+    import agentsight
+    from agentsight.sdk.semconv import ConversationAttributes as CA
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("wa-3859", customer_id="user-1",
+                                 device="ios") as scope:
+        ags.conversations.update("wa-3859", customer_id="user-42",
+                                 device="android", language="en")
+
+        assert scope.attributes[CA.CUSTOMER_ID] == "user-42"
+        assert scope.attributes[CA.DEVICE] == "android"
+        assert scope.attributes[CA.LANGUAGE] == "en"
+
+
+def test_update_syncs_metadata_and_fields_together(ags, resolved, requests_mock):
+    import agentsight
+    from agentsight.sdk.semconv import ConversationAttributes as CA
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("wa-3859", metadata={"a": 1}) as scope:
+        ags.conversations.update("wa-3859", name="Refund", metadata={"b": 2})
+
+        assert scope.attributes[CA.NAME] == "Refund"
+        # update() replaces the document; that is what the endpoint does.
+        assert scope.metadata == {"b": 2}
+
+
+def test_rename_syncs_a_live_scope(ags, resolved, requests_mock):
+    import agentsight
+    from agentsight.sdk.semconv import ConversationAttributes as CA
+
+    requests_mock.patch(f"{DETAIL}rename/", json={})
+
+    with agentsight.conversation("wa-3859", name="Untitled") as scope:
+        ags.conversations.rename("wa-3859", "Refund — resolved")
+
+        assert scope.attributes[CA.NAME] == "Refund — resolved"
+
+
+@pytest.fixture
+def spans():
+    """A real span pipeline, so the sync can be checked where it matters: in
+    the payload the exporter would have posted."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from agentsight.sdk import core
+    from agentsight.sdk.processors import TurnBufferingProcessor
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(TurnBufferingProcessor(SimpleSpanProcessor(exporter)))
+
+    previous = (core._state.enabled, core._state.provider, core._state.tracer)
+    core._state.provider = provider
+    core._state.tracer = provider.get_tracer("agentsight-test")
+    core._state.enabled = True
+    try:
+        yield exporter
+    finally:
+        core._state.enabled, core._state.provider, core._state.tracer = previous
+
+
+def test_a_synced_field_reaches_the_next_span(ags, resolved, requests_mock,
+                                              spans):
+    """The whole point, end to end: what the next payload block carries."""
+    import agentsight
+    from agentsight.sdk.exporter import build_payload
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("wa-3859", customer_id="user-1"):
+        ags.conversations.update("wa-3859", customer_id="user-42")
+        with agentsight.turn():
+            agentsight.user_message("after the patch")
+
+    block = build_payload(spans.get_finished_spans())["conversations"][0]
+    assert block["customer_id"] == "user-42"
+
+
+def test_update_leaves_an_unrelated_scope_alone(ags, resolved, requests_mock):
+    import agentsight
+    from agentsight.sdk.semconv import ConversationAttributes as CA
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("somebody-else", customer_id="user-9") as scope:
+        ags.conversations.update("wa-3859", customer_id="user-42")
+
+        assert scope.attributes[CA.CUSTOMER_ID] == "user-9"
+
+
+def test_is_marked_has_nowhere_to_sync_and_that_is_fine(ags, resolved,
+                                                        requests_mock):
+    """The one updatable field no span carries. It must not raise on the way
+    through, and it must not invent an attribute."""
+    import agentsight
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("wa-3859") as scope:
+        ags.conversations.update("wa-3859", is_marked=True)
+
+        assert not any("marked" in key for key in scope.attributes)
+
+
+def test_a_synced_value_is_clamped_like_any_other(ags, resolved, requests_mock):
+    """It travels on the wire, so it goes through the same 255-char clamp the
+    constructor uses — otherwise a value the API accepted could be what
+    rejects the batch it next rides in."""
+    import agentsight
+    from agentsight.sdk.semconv import ConversationAttributes as CA
+
+    requests_mock.patch(f"{DETAIL}update/", json={})
+
+    with agentsight.conversation("wa-3859") as scope:
+        ags.conversations.update("wa-3859", customer_id="x" * 400)
+
+        assert len(scope.attributes[CA.CUSTOMER_ID]) == 255
+
+
+def test_the_sync_is_silent_without_the_tracking_sdk(ags, resolved,
+                                                     requests_mock):
+    """This client is usable on its own. Managing a conversation from a process
+    that never initialised tracking must not raise."""
+    requests_mock.patch(f"{DETAIL}update/", json={"ok": True})
+
+    assert ags.conversations.update("wa-3859", customer_id="user-42") == {"ok": True}
+
+
 def test_soft_delete_and_hard_delete_are_different_routes(ags, requests_mock):
     soft = requests_mock.delete(f"{DETAIL}delete/", json={})
     hard = requests_mock.delete(DETAIL, json={})

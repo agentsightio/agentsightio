@@ -266,6 +266,22 @@ class AgentSightSpanExporter(SpanExporter):
     #: header stall the whole pipeline. Past this we wait the cap, retry, and
     #: let the batch drop normally if it is still throttled.
     _MAX_RETRY_AFTER = 30.0
+    #: How full the export queue may get before waiting out a throttle stops
+    #: being worth it. Blocking the one export thread saves the batch in hand
+    #: — at most ``max_export_batch_size`` spans — and costs everything the
+    #: queue drops meanwhile, which is unbounded in time and silent: the
+    #: overflow warning comes from OpenTelemetry's logger, not ours, so an
+    #: application that configured only the ``agentsight`` logger never hears
+    #: it. Below this line the queue has room and waiting is free; above it,
+    #: the trade has inverted and dropping one batch now is the cheaper loss.
+    _QUEUE_PRESSURE_LIMIT = 0.5
+    #: How full the queue may get before the operator is told, whatever the
+    #: cause. Deliberately higher than ``_QUEUE_PRESSURE_LIMIT``: that one
+    #: marks where a *trade* inverts, which is an internal decision nobody
+    #: needs to hear about, while this marks where the pipeline is losing
+    #: ground and somebody has to act on it. It sits below 1.0 so the warning
+    #: arrives while the loss is still avoidable rather than after.
+    _QUEUE_WARN_LIMIT = 0.8
     #: Seconds between dropped-batch warnings. A down backend at a 1s flush
     #: interval would otherwise emit one warning per second for as long as
     #: the outage lasts — a log flood that says the same thing every time
@@ -290,9 +306,105 @@ class AgentSightSpanExporter(SpanExporter):
         self.last_response: Optional[Dict[str, Any]] = None
         self._last_drop_warning = 0.0
         self._drops_since_warning = 0
+        #: Tracked separately from the drop warning above. The two say
+        #: different things — "the backend is refusing us" and "we cannot
+        #: keep up" — and one must not suppress the other, least of all
+        #: during an outage that causes both at once.
+        self._last_pressure_warning = 0.0
+        #: Set by :meth:`watch_queue` once the processor above exists.
+        self._queue_source: Optional[Any] = None
+
+    # -- backpressure ------------------------------------------------------
+
+    def watch_queue(self, processor: Any) -> None:
+        """Let the exporter see how much is waiting behind it.
+
+        Called by ``init()`` after the ``BatchSpanProcessor`` is built, because
+        the exporter has to exist first to be handed to it. Without this the
+        exporter knows only about the batch in its hands and will happily block
+        the single export thread while the queue behind it overflows.
+
+        Read through :meth:`_queue_pressure`, which treats every part of this
+        as optional — the attributes are OpenTelemetry internals and have moved
+        between releases. When they cannot be read the exporter behaves exactly
+        as it did before this existed.
+        """
+        self._queue_source = processor
+
+    def _queue_pressure(self) -> Optional[float]:
+        """How full the export queue is, in ``[0, 1]``, or ``None`` if unknown.
+
+        ``None`` is not zero and must not be treated as it: "the queue is
+        empty" and "we cannot see the queue" lead to opposite decisions, and
+        guessing the first would make an OpenTelemetry rename look like an idle
+        pipeline right when it matters.
+        """
+        source = self._queue_source
+        if source is None:
+            return None
+        try:
+            # The attribute moved to an inner BatchProcessor in newer releases
+            # and sat directly on the span processor in older ones.
+            holder = getattr(source, "_batch_processor", source)
+            # Explicit None tests, not `or`: an empty deque is falsy, and
+            # reading a healthy queue as an unreadable one is the failure this
+            # method's whole contract is written to avoid.
+            queue = getattr(holder, "_queue", None)
+            if queue is None:
+                queue = getattr(holder, "queue", None)
+            capacity = getattr(holder, "_max_queue_size", None)
+            if capacity is None:
+                capacity = getattr(holder, "max_queue_size", None)
+            if queue is None or not capacity:
+                return None
+            return min(len(queue) / float(capacity), 1.0)
+        except Exception:
+            return None
+
+    def _warn_if_falling_behind(self) -> None:
+        """Say so, on our logger, when the queue is filling up.
+
+        OpenTelemetry already notices this — ``BatchProcessor.emit`` drops from
+        a full queue and logs about it — but on *its* logger and once **per
+        dropped span**. That leaves two failure modes and no good one. An
+        application that configured the ``agentsight`` logger, which is what
+        the docs ask for, hears nothing at all while spans are being thrown
+        away. An application that configured root logging gets one line per
+        span, at exactly the volume that filled the queue in the first place,
+        and the log flood becomes its own incident.
+
+        So this reports it once a minute, on the logger the user was told to
+        configure, and before the queue is full rather than after — at 100%
+        the only honest thing left to say is how much has already been lost.
+        The message carries the three things that actually change the outcome,
+        because a warning that only announces loss cannot be acted on.
+        """
+        pressure = self._queue_pressure()
+        if pressure is None or pressure < self._QUEUE_WARN_LIMIT:
+            return
+        now = time.monotonic()
+        if now - self._last_pressure_warning < self._WARN_INTERVAL:
+            return
+        self._last_pressure_warning = now
+        if pressure >= 1.0:
+            state = ("export queue is full; spans are now being dropped as "
+                     "they are recorded")
+        else:
+            state = ("export queue is %d%% full; spans will be dropped once it "
+                     "reaches 100%%" % round(pressure * 100))
+        self._logger.warning(
+            "%s. The exporter cannot keep up with this process: raise "
+            "max_queue_size to absorb bursts, lower export_interval_ms to "
+            "drain more often, or check that ingest is reachable.",
+            state,
+        )
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         try:
+            # Read before the POST, not after: this is the depth at the moment
+            # the batch was picked up, and it still gets reported if the
+            # request then hangs for the full timeout.
+            self._warn_if_falling_behind()
             payload = build_payload(spans)
             if not payload["conversations"]:
                 return SpanExportResult.SUCCESS
@@ -321,6 +433,21 @@ class AgentSightSpanExporter(SpanExporter):
                     # bytes will be accepted once the window rolls over, so
                     # this is the one 4xx worth waiting on — dropping it loses
                     # data that nothing was wrong with.
+                    #
+                    # Unless something is waiting behind it. Then the wait is
+                    # no longer free, and it is paid for in spans that are
+                    # dropped without ever reaching this code.
+                    pressure = self._queue_pressure()
+                    if pressure is not None and pressure >= self._QUEUE_PRESSURE_LIMIT:
+                        self._warn_dropped(
+                            "ingest throttled (429) and the export queue is %d%% "
+                            "full; dropped this batch rather than blocking the "
+                            "export thread while the queue overflows. Raise "
+                            "export_interval_ms, or ask for a higher ingest rate."
+                            % round(pressure * 100)
+                        )
+                        return SpanExportResult.FAILURE
+
                     pause = retry_after(response, self._MAX_RETRY_AFTER)
                     last_failure = "throttled by ingest (429)"
                     self._logger.debug(

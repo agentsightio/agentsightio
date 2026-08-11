@@ -13,6 +13,18 @@ _UPDATABLE = ("sentiment", "comment")
 class Feedbacks(Resource):
     """``ags.feedbacks`` — the unified feedback surface.
 
+    **The one place this client creates rows, and deliberately so.** Everywhere
+    else the rule holds that data has exactly one way in: conversations,
+    messages, action logs, buttons, attachments and spans are written by the
+    tracking SDK, and the methods that would have duplicated that were removed
+    (see :class:`~agentsight.api.resources.actions.Actions`). Feedback is the
+    exception because it is not telemetry. Nothing about a run of the agent
+    reveals whether a person was happy with it — somebody has to say so, and
+    the moment they say it is a user action in the host application, not an
+    event the SDK could ever observe. So there is no tracking-plane path for
+    feedback, no span kind, and no inference: you call this when your user
+    clicks the thumb.
+
     Feedback comes in three kinds server-side. Two are reachable with an API
     key: ``conversation`` (how a specific conversation went) and ``agent``
     (how the agent is doing overall, optionally scoped to an environment).

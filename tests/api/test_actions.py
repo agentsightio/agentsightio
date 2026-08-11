@@ -21,24 +21,26 @@ def test_action_logs_come_back_as_a_bare_array(ags, requests_mock):
     assert ags.actions.logs(1) == [{"id": 9}, {"id": 10}]
 
 
-def test_create_sets_the_dashboard_facing_fields(ags, requests_mock):
-    # The reason this method survives: tracking upserts an Action by name but
-    # can never set display_name or description.
-    requests_mock.post(ACTIONS, json={"id": 1})
+def test_actions_cannot_be_created_or_destroyed_here(ags):
+    # Ingest upserts an Action by name from the first tool span that carries
+    # it, so the tracking plane is the only thing that brings one into being.
+    # A create() here would be a second set of semantics for the same row, and
+    # a delete() would destroy the definition every ActionLog hangs off.
+    assert not hasattr(ags.actions, "create")
+    assert not hasattr(ags.actions, "delete")
 
-    ags.actions.create("refund", display_name="Issue refund", description="…")
+
+def test_update_sets_the_dashboard_facing_fields(ags, requests_mock):
+    # What the namespace is actually for: a span carries a name and nothing
+    # else, so display_name and description can only be set here.
+    requests_mock.patch(f"{ACTIONS}1/", json={"id": 1})
+
+    ags.actions.update(1, display_name="Issue refund", description="…")
 
     assert requests_mock.last_request.json() == {
-        "name": "refund",
         "display_name": "Issue refund",
         "description": "…",
     }
-
-
-@pytest.mark.parametrize("bad", ["", "   ", None, 7])
-def test_create_needs_a_name(ags, bad):
-    with pytest.raises(ValidationError):
-        ags.actions.create(bad)
 
 
 def test_update(ags, requests_mock):
@@ -52,12 +54,6 @@ def test_update(ags, requests_mock):
 def test_update_refuses_unknown_fields(ags):
     with pytest.raises(ValidationError):
         ags.actions.update(1, agent=2)
-
-
-def test_delete(ags, requests_mock):
-    requests_mock.delete(f"{ACTIONS}1/", status_code=204, text="")
-
-    assert ags.actions.delete(1) == {}
 
 
 # -- filters ----------------------------------------------------------------

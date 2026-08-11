@@ -17,11 +17,32 @@ USAGE = f"{BASE}/api/token-usage/"
 USAGE_SUMMARY = f"{USAGE}summary/"
 ME = f"{BASE}/api/me/"
 
+def environment(slug, pk=1, is_production=False):
+    """One environment exactly as ``AgentEnvironmentSerializer`` sends it.
+
+    Spelled out rather than reduced to a slug string because that reduction is
+    precisely the bug this fixture used to hide: the route serialises whole
+    objects, and a client reading them as strings gets entries that look like
+    slugs and match nothing.
+    """
+    return {
+        "id": pk,
+        "slug": slug,
+        "name": slug.title(),
+        "is_production": is_production,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+
 IDENTITY = {
     "agent_id": 7,
     "agent_name": "Support bot",
     "role": "write",
-    "environments": ["production", "development"],
+    "environments": [
+        environment("production", 1, is_production=True),
+        environment("development", 2),
+    ],
 }
 
 

@@ -1,6 +1,6 @@
 """Action definitions and their logs."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from agentsight.api import _params
 from agentsight.api._pagination import PageIterator
@@ -13,12 +13,19 @@ _UPDATABLE = ("name", "description", "display_name")
 class Actions(Resource):
     """``ags.actions`` — the tools and steps your agent performs.
 
-    An ``Action`` is a definition, not an event. The tracking SDK creates one
-    implicitly the first time it sees a tool by that name, but it can only
-    supply the name — ``display_name`` and ``description``, which decide how
-    the action reads in the dashboard, can only be set here.
+    An ``Action`` is a definition, not an event, and **the tracking SDK is the
+    only thing that creates one**: ingest upserts it by name the first time a
+    ``@tool`` or ``@task`` span carries it. There is deliberately no
+    ``create()`` here, and no ``delete()`` — an action exists because your
+    agent performed it, and a second way to conjure or destroy that row would
+    mean two sets of semantics for how the same table reaches the dashboards.
 
-    Individual invocations are action *logs*, written by the tracking SDK.
+    What this namespace is for is the half tracking cannot supply.
+    ``display_name`` and ``description`` decide how an action reads in the
+    dashboard, and a span carries neither — so :meth:`update` is how they get
+    set, once the action has been seen at least once.
+
+    Individual invocations are action *logs*, also written by the tracking SDK.
     :meth:`logs` reads them back.
     """
 
@@ -40,33 +47,14 @@ class Actions(Resource):
         """
         return self._request("GET", f"/api/actions/{int(action_id)}/logs/")
 
-    def create(
-        self,
-        name: str,
-        *,
-        display_name: Optional[str] = None,
-        description: Optional[str] = None,
-        agent: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Define an action. *Write role.*
-
-        ``agent`` is optional and defaults to the one your API key is bound
-        to; passing a different one is refused server-side.
-        """
-        if not name or not isinstance(name, str) or not name.strip():
-            raise ValidationError("name must be a non-empty string")
-        payload: Dict[str, Any] = {"name": name.strip()}
-        if display_name is not None:
-            payload["display_name"] = display_name
-        if description is not None:
-            payload["description"] = description
-        if agent is not None:
-            payload["agent"] = int(agent)
-        return self._request("POST", "/api/actions/", json=payload)
-
     def update(self, action_id: int, **fields: Any) -> Dict[str, Any]:
         """Change an action's ``name``, ``display_name`` or ``description``.
-        *Write role.*"""
+        *Write role.*
+
+        The action has to exist, which means your agent has to have performed
+        it at least once — see the class docstring for why that is the only
+        way one comes into being.
+        """
         unknown = sorted(set(fields) - set(_UPDATABLE))
         if unknown:
             raise ValidationError(
@@ -77,7 +65,3 @@ class Actions(Resource):
         if not payload:
             raise ValidationError("update() needs at least one field to change")
         return self._request("PATCH", f"/api/actions/{int(action_id)}/", json=payload)
-
-    def delete(self, action_id: int) -> Dict[str, Any]:
-        """Remove an action definition. *Write role.*"""
-        return self._request("DELETE", f"/api/actions/{int(action_id)}/")

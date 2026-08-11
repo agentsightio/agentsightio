@@ -3,7 +3,7 @@
 import pytest
 
 from agentsight.exceptions import PermissionDeniedError
-from tests.api.conftest import IDENTITY, ME
+from tests.api.conftest import IDENTITY, ME, environment
 
 
 def test_me_reports_the_agent_role_and_environments(ags, requests_mock):
@@ -32,20 +32,41 @@ def test_it_is_cached(ags, requests_mock):
 
 
 def test_refresh_asks_again(ags, requests_mock):
+    grown = [*IDENTITY["environments"], environment("staging", 3)]
     requests_mock.get(ME, [{"json": IDENTITY},
-                           {"json": {**IDENTITY, "environments": ["production",
-                                                                  "development",
-                                                                  "staging"]}}])
+                           {"json": {**IDENTITY, "environments": grown}}])
 
     assert ags.environments() == ["production", "development"]
     assert ags.environments(refresh=True)[-1] == "staging"
+
+
+def test_environments_flattens_the_objects_the_route_actually_sends(ags,
+                                                                    requests_mock):
+    # /api/me/ serialises whole AgentEnvironment rows. Reading them as strings
+    # yielded "{'id': 1, 'slug': 'production', ...}" — entries that look like
+    # slugs, compare equal to nothing, and fail only downstream.
+    requests_mock.get(ME, json=IDENTITY)
+
+    assert ags.environments() == ["production", "development"]
+
+
+def test_environments_still_accepts_bare_slugs(ags, requests_mock):
+    # The contract of this method is a list of slugs; it should not break if
+    # the route ever flattens what it sends.
+    requests_mock.get(ME, json={**IDENTITY, "environments": ["production", "canary"]})
+
+    assert ags.environments() == ["production", "canary"]
 
 
 def test_environments_is_the_authoritative_list(ags, requests_mock):
     # The tracking plane hard-codes the pair because it may not perform I/O;
     # this is what a slug added server-side reaches an already-published
     # client through.
-    requests_mock.get(ME, json={**IDENTITY, "environments": ["production", "canary"]})
+    requests_mock.get(
+        ME,
+        json={**IDENTITY, "environments": [environment("production", 1),
+                                           environment("canary", 9)]},
+    )
 
     assert ags.environments() == ["production", "canary"]
 
@@ -54,6 +75,15 @@ def test_environments_survives_a_payload_without_the_key(ags, requests_mock):
     requests_mock.get(ME, json={"agent_id": 7, "agent_name": "x", "role": "read"})
 
     assert ags.environments() == []
+
+
+def test_environments_skips_entries_with_no_slug(ags, requests_mock):
+    # Better a short list than one carrying a placeholder nothing matches.
+    requests_mock.get(ME, json={**IDENTITY,
+                                "environments": [{"id": 4, "name": "Broken"},
+                                                 environment("production", 1)]})
+
+    assert ags.environments() == ["production"]
 
 
 def test_a_403_is_not_swallowed(ags, requests_mock):

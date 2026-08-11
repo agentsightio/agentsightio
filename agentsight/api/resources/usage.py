@@ -50,6 +50,14 @@ class Usage(Resource):
         that closed without a usage event, most often. Their token counts are
         unknowns rather than zeros, and averaging over them without excluding
         them understates every per-call figure.
+
+        ``cost_usd`` and ``cost_usd_reported`` arrive here as **strings**
+        (``"0.00201250"``) — the serializer keeps the stored decimal exact
+        rather than rounding it through a float. The same field on
+        :meth:`summary` is a number, because that one is computed. Rows are
+        returned verbatim, so summing costs across ``list()`` means converting
+        first; ``Decimal`` is the conversion that does not lose the precision
+        the string was preserving.
         """
         return PageIterator(
             lambda query: self._request("GET", "/api/token-usage/", params=query),

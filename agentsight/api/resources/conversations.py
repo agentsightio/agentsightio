@@ -121,12 +121,18 @@ class Conversations(Resource):
 
     def rename(self, conversation: ConversationRef, name: str) -> Dict[str, Any]:
         """Set a conversation's display name. *Write role.*"""
+        checked = _check_name(name)
         pk = self._client._resolve(conversation)
-        return self._request(
+        response = self._request(
             "PATCH",
             f"/api/conversations/{pk}/rename/",
-            json={"name": _check_name(name)},
+            json={"name": checked},
         )
+        # `name` rides on every span, so a conversation open in this process
+        # would rename itself back on its next one.
+        _sync_live_scope(self._live_id(conversation, response),
+                         fields={"name": checked})
+        return response
 
     def mark(self, conversation: ConversationRef, is_marked: bool = True) -> Dict[str, Any]:
         """Flag or unflag a conversation. *Write role.*"""
@@ -143,6 +149,17 @@ class Conversations(Resource):
         Accepts ``name``, ``is_marked``, ``customer_id``, ``device``,
         ``language`` and ``metadata``. The identity fields — ``conversation_id``,
         ``started_at``, ``agent`` — are immutable server-side.
+
+        Every one of those except ``is_marked`` is also stamped on every span,
+        so if this conversation is open *in this process* the new value is
+        pushed into the live scope as well — otherwise the next span would
+        carry the old one and ingest would write it straight back over what
+        was just PATCHed. That echo is best-effort by nature: it can only
+        reach a scope in this process, and it needs the business
+        ``conversation_id`` to know which scope that is, so passing an integer
+        pk for a conversation that is open here and was never listed or
+        resolved by string will write the row and skip the echo. Prefer the
+        string id, which is what you passed to ``agentsight.conversation()``.
         """
         unknown = sorted(set(fields) - set(_UPDATABLE))
         if unknown:
@@ -170,7 +187,17 @@ class Conversations(Resource):
             raise ValidationError("update() needs at least one field to change")
 
         pk = self._client._resolve(conversation)
-        return self._request("PATCH", f"/api/conversations/{pk}/update/", json=payload)
+        response = self._request(
+            "PATCH", f"/api/conversations/{pk}/update/", json=payload
+        )
+        _sync_live_scope(
+            self._live_id(conversation, response),
+            metadata=payload.get("metadata"),
+            # `is_marked` is the one updatable field no span carries, so the
+            # scope has nothing to hold it in and set_fields ignores it.
+            fields={k: v for k, v in payload.items() if k != "metadata"},
+        )
+        return response
 
     def update_metadata(
         self,
@@ -227,9 +254,10 @@ class Conversations(Resource):
             metadata,
             remove,
         )
-        response = self.update(conversation, metadata=merged)
-        _sync_live_scope(record.get("conversation_id"), merged)
-        return response
+        # The fetch above names both ids, so remembering it here is what lets
+        # update() echo into the live scope even when the caller passed a pk.
+        self._client.remember(record)
+        return self.update(conversation, metadata=merged)
 
     def delete(self, conversation: ConversationRef) -> Dict[str, Any]:
         """Soft-delete a conversation. *Write role.*
@@ -257,6 +285,27 @@ class Conversations(Resource):
 
     # -- internals ---------------------------------------------------------
 
+    def _live_id(self, conversation: ConversationRef, response: Any) -> Optional[str]:
+        """The business ``conversation_id``, for matching against a live scope.
+
+        A string reference is already the answer. An integer pk needs a name,
+        and there are two places one may be: the response the write just came
+        back with, and the client's id cache — which is populated by every
+        list, every resolve and every payload that names both ids. Neither is
+        guaranteed, and neither is worth a request: this only decides whether
+        an in-process echo happens, and the row is written either way.
+        """
+        if isinstance(conversation, str):
+            return conversation.strip()
+        if isinstance(response, dict):
+            named = response.get("conversation_id")
+            if isinstance(named, str) and named:
+                self._client.remember(response)
+                return named
+        if isinstance(conversation, int) and not isinstance(conversation, bool):
+            return self._client._cached_conversation_id(conversation)
+        return None
+
     def _list(self, filters: Dict[str, Any], *, full: bool) -> PageIterator:
         _params.check_sentiment(filters.get("feedback_sentiment"))
         params = _params.build(
@@ -276,27 +325,48 @@ class Conversations(Resource):
         return PageIterator(fetch, params)
 
 
-def _sync_live_scope(conversation_id: Any, merged: Dict[str, Any]) -> None:
-    """Carry a written document into the tracking scope, if it is this one.
+def _sync_live_scope(
+    conversation_id: Any,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+    fields: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Carry a written value into the tracking scope, if it is this one.
 
-    Conversation metadata rides on every span, and ingest takes the newest
-    document it has seen — so a conversation still open in this process would
-    overwrite what was just written the moment it emitted its next span. The
-    caller would see a successful PATCH and, seconds later, the old metadata.
+    Every field this client can PATCH except ``is_marked`` also rides on every
+    span — ``metadata``, ``name``, ``customer_id``, ``device``, ``language`` —
+    and ingest writes whichever of them a payload block carries onto the row.
+    So for a conversation still open in this process, the next span it emits
+    carries the *old* value and undoes the write. The caller sees a successful
+    PATCH and, seconds later, the previous value back in the dashboard.
+
+    Only the local scope is touched here; the row was already written by the
+    request that led here. This is what stops the two from disagreeing.
 
     Best-effort and deliberately quiet: this client is usable on its own, in a
-    process where the tracking SDK was never imported or never initialised.
+    process where the tracking SDK was never imported or never initialised, and
+    a conversation being managed from a different process than the one that is
+    tracking it is the normal case rather than the exception.
     """
     if not isinstance(conversation_id, str):
+        # An integer pk was passed and no string was resolvable. The row is
+        # written; only the local echo is skipped, which is the safe half to
+        # lose — see Conversations.update for why this stays best-effort.
+        return
+    if not metadata and not fields:
         return
     try:
         from agentsight.sdk import context as ags_context
 
         scope = ags_context.current_conversation()
-        if scope is not None and scope.conversation_id == conversation_id:
-            scope.set_metadata(merged)
+        if scope is None or scope.conversation_id != conversation_id:
+            return
+        if fields:
+            scope.set_fields(fields)
+        if metadata is not None:
+            scope.set_metadata(metadata)
     except Exception as exc:  # pragma: no cover
-        logger.debug("could not sync metadata into the live scope: %s", exc)
+        logger.debug("could not sync the live scope: %s", exc)
 
 
 def _check_name(name: Any) -> str:

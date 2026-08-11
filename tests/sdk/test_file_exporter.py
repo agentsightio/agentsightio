@@ -221,7 +221,10 @@ def test_without_the_variable_init_still_builds_the_http_transport(monkeypatch):
     monkeypatch.delenv("AGENTSIGHT_FILE_EXPORTER", raising=False)
     monkeypatch.setattr(core._state, "enabled", False)
 
-    assert ags.init(api_key=VALID_KEY, auto_instrument=False) is True
+    # verify_key=False keeps the suite off the network: the HTTP transport is
+    # the one path that has a key worth preflighting.
+    assert ags.init(api_key=VALID_KEY, auto_instrument=False,
+                    verify_key=False) is True
     try:
         assert isinstance(core.get_exporter(), AgentSightSpanExporter)
     finally:

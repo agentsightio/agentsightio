@@ -199,6 +199,45 @@ class ConversationScope:
                 # whatever the row already holds in place.
                 self.attributes[ConversationAttributes.METADATA] = to_json({})
 
+    def set_fields(self, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Update the conversation fields that ride on every span.
+
+        The counterpart to :meth:`set_metadata`, and it exists for the same
+        reason. ``customer_id``, ``device``, ``language`` and ``name`` are
+        stamped on every span and hoisted to the payload block, and ingest
+        writes whichever of them a block carries onto the row — so a value
+        changed through ``agentsight.api`` while this conversation is still
+        open in the process would be overwritten by the very next span. The
+        caller would watch a successful PATCH and see it revert seconds later.
+
+        Values go through the same clamps the constructor uses: this document
+        travels on the wire, and a field that the API accepted at some other
+        length must not be what rejects the batch it next rides in.
+
+        Returns the fields it actually applied, so a caller can log or test
+        what travelled. Unknown keys are ignored rather than refused — the API
+        surface accepts fields (``is_marked``) that no span carries, and this
+        is not the place to enumerate them a second time.
+        """
+        applied: Dict[str, Any] = {}
+        with self._metadata_lock:
+            for kwarg, value in fields.items():
+                attribute = ConversationAttributes.BY_KWARG.get(kwarg)
+                if attribute is None or value is None:
+                    continue
+                if kwarg == "customer_ip_address":
+                    resolved: Any = valid_ip(value)
+                elif kwarg == "environment":
+                    resolved = _resolve_environment(value)
+                else:
+                    resolved = clamp_field(kwarg, str(value))
+                if resolved is None:
+                    continue
+                self.attributes[attribute] = resolved
+                self._kwargs[kwarg] = resolved
+                applied[kwarg] = resolved
+        return applied
+
     # -- context manager ----------------------------------------------------
 
     def __enter__(self) -> "ConversationScope":

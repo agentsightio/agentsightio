@@ -99,6 +99,7 @@ def init(
     max_queue_size: int = 2048,
     turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS,
     span_exporter: Optional[SpanExporter] = None,
+    verify_key: bool = True,
 ) -> bool:
     """Start the SDK. Returns whether tracking is active.
 
@@ -126,6 +127,17 @@ def init(
     development aid for seeing what an integration emits. An explicit
     ``span_exporter`` still wins, because code is a clearer statement of intent
     than an environment left over in a shell.
+
+    ``verify_key`` asks the backend once, on a background thread, whether the
+    key actually works. Only the shape of a key can be checked locally, and a
+    key that is revoked, belongs to an inactive subscription, or carries the
+    read role instead of write is indistinguishable from a good one until the
+    first batch is refused — at which point the exporter drops it as a terminal
+    4xx and says so once a minute, forever. Something that fails that quietly
+    should be announced while somebody is still watching the logs. The check
+    never blocks ``init()``, never raises, and its failure changes nothing:
+    tracking stays on, because a preflight that could not reach the backend is
+    not evidence the key is bad. Pass ``False`` to skip it entirely.
     """
     with _state.lock:
         if _state.enabled:
@@ -189,15 +201,18 @@ def init(
             # Order matters: buffering sits ABOVE batching, so a turn and its
             # children enter the export queue together and land in the same
             # payload — which is what lets ingest treat the family atomically.
-            provider.add_span_processor(
-                TurnBufferingProcessor(
-                    BatchSpanProcessor(
-                        exporter,
-                        max_queue_size=max_queue_size,
-                        schedule_delay_millis=export_interval_ms,
-                    )
-                )
+            batching = BatchSpanProcessor(
+                exporter,
+                max_queue_size=max_queue_size,
+                schedule_delay_millis=export_interval_ms,
             )
+            # Only now can the exporter see what is waiting behind it: it had
+            # to exist before the processor it is handed to. Without this it
+            # would wait out a throttle no matter how full the queue was.
+            watch = getattr(exporter, "watch_queue", None)
+            if callable(watch):
+                watch(batching)
+            provider.add_span_processor(TurnBufferingProcessor(batching))
 
             _state.provider = provider
             _state.exporter = exporter
@@ -218,8 +233,124 @@ def init(
     if auto_instrument:
         _install_instrumentation(auto_instrument)
 
+    # Only the HTTP transport authenticates, so only it has a key worth
+    # checking — the file exporter and a caller-supplied exporter have none.
+    if verify_key and resolved_key and span_exporter is None and not file_destination:
+        _start_key_preflight(resolved_key, resolved_endpoint)
+
     logger.info("AgentSight initialized (exporting to %s)", destination)
     return True
+
+
+def _start_key_preflight(api_key: str, endpoint: str) -> None:
+    """Ask ``GET /api/me/`` whether this key works, off the startup path.
+
+    A daemon thread, so a process that finishes before the answer arrives is
+    not held open by it, and so a hung backend cannot delay an exit.
+    """
+    try:
+        thread = threading.Thread(
+            target=_verify_key,
+            args=(api_key, endpoint),
+            name="agentsight-preflight",
+            daemon=True,
+        )
+        thread.start()
+    except Exception as exc:  # pragma: no cover — thread creation failing
+        logger.debug("key preflight could not start: %s", exc)
+
+
+def _verify_key(api_key: str, endpoint: str) -> None:
+    """The preflight body. Runs on its own thread and swallows everything.
+
+    The distinction that matters here is between *this key will never work*
+    and *we could not find out right now*. Only the first is worth an error:
+    the second is what a network blip, a proxy, or a backend that predates
+    ``/api/me/`` looks like, and shouting about those trains people to ignore
+    the message that matters.
+
+    ``max_retries=1`` for the same reason, and it is not a detail. The shared
+    transport logs a **warning** before each retry, so a preflight against a
+    backend that happens to be unreachable — a process starting during a
+    deploy, an outbound rule not applied yet — announced the outage twice at
+    WARNING before quietly concluding "don't know" at DEBUG. That is precisely
+    the case this function promises to keep quiet about, and the noise arrived
+    from a check the user never asked for. Retrying could not help either: if
+    the backend answers, one GET is enough; if it does not, a second attempt
+    2.5 seconds later says exactly the same thing.
+    """
+    from agentsight._transport import Transport
+    from agentsight.exceptions import (
+        AuthenticationError,
+        NotFoundError,
+        PermissionDeniedError,
+        SubscriptionInactiveError,
+    )
+
+    transport = Transport(api_key, endpoint, timeout=10, max_retries=1)
+    try:
+        identity = transport.request("GET", "/api/me/")
+    # Subclass first: SubscriptionInactiveError *is* an AuthenticationError,
+    # and it is the one 401 that rotating a key will not fix — telling someone
+    # to replace a key that is fine is worse than saying nothing.
+    except SubscriptionInactiveError:
+        logger.error(
+            "AgentSight: the subscription behind this API key is not active, "
+            "so %s will refuse every batch. Tracking stays on and costs "
+            "nothing, but nothing will reach the dashboard until it is.",
+            endpoint,
+        )
+        return
+    except AuthenticationError:
+        logger.error(
+            "AgentSight: this API key was refused by %s. Spans will be "
+            "collected and then dropped by the exporter until it is replaced. "
+            "Check AGENTSIGHT_API_KEY against the dashboard — a rotated or "
+            "revoked key looks exactly like a working one from here.",
+            endpoint,
+        )
+        return
+    except PermissionDeniedError:
+        # /api/me/ needs only the read role, which write implies — so a 403
+        # here is a key the backend will not talk to at all.
+        logger.error(
+            "AgentSight: %s refused this API key on /api/me/, which needs only "
+            "the read role. Ingest will refuse it too.",
+            endpoint,
+        )
+        return
+    except NotFoundError:
+        # A backend older than /api/me/. Says nothing about the key.
+        logger.debug("key preflight: %s has no /api/me/ route", endpoint)
+        return
+    except Exception as exc:
+        logger.debug("key preflight did not complete: %s", exc)
+        return
+    finally:
+        try:
+            transport.close()
+        except Exception:  # pragma: no cover
+            pass
+
+    try:
+        role = (identity or {}).get("role")
+        agent = (identity or {}).get("agent_name") or (identity or {}).get("agent_id")
+        if role == "read":
+            # Format-valid, live, and useless for tracking: ingest takes the
+            # write role. This is the one the exporter would report as a bare
+            # 403 with no hint that the key is simply the wrong kind.
+            logger.error(
+                "AgentSight: this API key has the read role, and ingest "
+                "requires write. Every batch will be refused. Issue a write "
+                "key for agent %s.",
+                agent,
+            )
+        else:
+            logger.debug(
+                "key preflight ok: agent %s, role %s", agent, role
+            )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("key preflight could not read the identity: %s", exc)
 
 
 def _resolve_environment(raw: Optional[str]) -> Optional[str]:

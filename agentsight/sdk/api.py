@@ -130,6 +130,19 @@ def conversation(conversation_id: Optional[str] = None, **kwargs: Any) -> Conver
 
     ``conversation_id`` is generated when omitted: losing the data would be
     worse than a synthetic id.
+
+    Fields: ``customer_id``, ``customer_ip_address``, ``device``, ``source``,
+    ``language``, ``name``, ``environment``, ``metadata``. All optional, all
+    carried on every span in the conversation so a row stays correct even
+    though no single span owns it.
+
+    One caveat on ``source``, confirmed against a live backend rather than
+    assumed: it is the only one of these with no column behind it. It is
+    stored on the archived spans and can be read back from them, but it does
+    not reach the conversation row, which means no dashboard, filter or API
+    response will show it. It is still sent — the archive is where a later
+    backfill would have to read it from — but do not reach for it expecting
+    ``device``-like behaviour today.
     """
     return ConversationScope(conversation_id, **kwargs)
 

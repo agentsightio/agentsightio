@@ -112,8 +112,16 @@ class AgentSight:
     def me(self, *, refresh: bool = False) -> Dict[str, Any]:
         """Who this key is: agent, role and the environments it may write to.
 
-        ``{"agent_id": 12, "agent_name": "Support bot", "role": "read",
-        "environments": ["production", "development"]}``
+        Returned exactly as the route sends it::
+
+            {"agent_id": 12, "agent_name": "Support bot", "role": "read",
+             "environments": [{"id": 1, "slug": "production",
+                               "name": "Production", "is_production": True,
+                               "created_at": ..., "updated_at": ...}, ...]}
+
+        ``environments`` is a list of objects, not of slugs — use
+        :meth:`environments` for the flat list, which is what every caller
+        actually wants.
 
         This is the preflight the SDK had no way to perform. It answers three
         questions that previously had only indirect answers: the agent's
@@ -141,9 +149,26 @@ class AgentSight:
         until environment CRUD exists that is all any agent has — but asking
         is what lets a slug added server-side reach an SDK that shipped before
         it existed, which hard-coding the pair cannot do.
+
+        ``/api/me/`` serialises each environment as a whole object —
+        ``{"id", "slug", "name", "is_production", …}`` — so the slug is picked
+        out of it here. Bare strings are accepted too: this method's contract
+        is a list of slugs, and it should not break if the route ever flattens
+        what it sends. Anything that is neither is skipped rather than
+        stringified, because ``str(dict)`` produced entries that looked like
+        slugs, compared equal to nothing, and would have failed only where
+        somebody validated against them.
         """
         environments = self.me(refresh=refresh).get("environments") or []
-        return [str(slug) for slug in environments]
+        slugs: List[str] = []
+        for entry in environments:
+            if isinstance(entry, dict):
+                slug = entry.get("slug")
+                if slug:
+                    slugs.append(str(slug))
+            elif isinstance(entry, str) and entry:
+                slugs.append(entry)
+        return slugs
 
     # -- conversation id resolution ---------------------------------------
 
@@ -242,6 +267,20 @@ class AgentSight:
             stale = [key for key, pk in self._ids.items() if pk == conversation]
             for key in stale:
                 del self._ids[key]
+
+    def _cached_conversation_id(self, pk: int) -> Optional[str]:
+        """The business id for a pk, if the cache already knows it.
+
+        The reverse of the lookup this cache exists for, and deliberately
+        cache-only: its one caller is deciding whether to echo a write into a
+        live tracking scope, which is not worth a request when the answer is
+        unknown.
+        """
+        with self._ids_lock:
+            for conversation_id, cached in self._ids.items():
+                if cached == pk:
+                    return conversation_id
+        return None
 
     def _cached_pk(self, conversation_id: str) -> Optional[int]:
         with self._ids_lock:
