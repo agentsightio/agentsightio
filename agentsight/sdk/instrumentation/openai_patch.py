@@ -19,6 +19,7 @@ import inspect
 import weakref
 from typing import Any, Callable, Dict, NamedTuple, Optional, Tuple
 
+from agentsight.sdk import context as ags_context
 from agentsight.sdk.instrumentation.base import (
     already_patched,
     capturing,
@@ -116,6 +117,7 @@ def _record_usage(
     logger: Any,
     error: Optional[BaseException] = None,
     requested_model: Optional[str] = None,
+    model_hint: Optional[str] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
@@ -131,6 +133,7 @@ def _record_usage(
             **from_openai(usage, model),
             operation=operation,
             requested_model=requested_model,
+            model_hint=model_hint,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             extra=extra or None,
@@ -191,6 +194,11 @@ class _StreamRecorder:
         #: caller typed is lost on every streamed call, which is most of an
         #: agent's traffic.
         self._requested_model = model
+        #: Snapshotted here because __init__ runs while ``create`` does — the
+        #: last moment the caller's ``model_hint`` block is known to be open.
+        #: ``finish`` runs when the stream drains, which with ``wrap()`` can be
+        #: after that block exits.
+        self._model_hint = ags_context.current_model_hint()
         self._start_time_ns = start_time_ns
         self._logger = logger
         self._usage: Any = None
@@ -245,6 +253,7 @@ class _StreamRecorder:
             self._logger,
             error=self._error,
             requested_model=self._requested_model,
+            model_hint=self._model_hint,
         )
 
 

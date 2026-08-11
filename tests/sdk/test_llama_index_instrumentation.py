@@ -559,6 +559,72 @@ def test_no_alias_attribute_when_the_two_agree(spans):
     assert LLMAttributes.REQUESTED_MODEL not in llm_span.attributes
 
 
+class NamelessLLM(FakeLLM):
+    """No ``model`` in ``model_dict`` and none on ``raw`` — the genuinely
+    nameless custom LLM ``model_hint`` exists for."""
+
+    def to_dict(self, **kwargs: Any) -> dict:
+        return {"class_name": self.vendor}
+
+    @llm_chat_callback()
+    def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        return response(raw=Raw(model=None))
+
+
+def test_a_model_hint_names_a_model_nothing_else_could(spans):
+    """The declared name lands where the backend prices, stamped as an
+    assertion — without it this row would be permanently unpriceable."""
+    with ags.conversation("c-hint"):
+        with ags.turn():
+            with ags.model_hint("my-local-model"):
+                NamelessLLM().chat(HI)
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.REQUEST_MODEL] == "my-local-model"
+    assert llm_span.attributes[LLMAttributes.MODEL_DECLARED] is True
+    assert llm_span.attributes[LLMAttributes.INPUT_TOKENS] == 60
+
+
+def test_a_model_hint_never_overrides_a_detected_model(spans):
+    with ags.conversation("c-hint-detected"):
+        with ags.turn():
+            with ags.model_hint("wrong-model"):
+                FakeLLM().chat(HI)
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1"
+    assert LLMAttributes.MODEL_DECLARED not in llm_span.attributes
+
+
+def test_the_hint_survives_a_stream_drained_after_its_block(spans):
+    """The hint reads at the Start event, not at record time: the End event
+    fires when the stream is exhausted, which with ``wrap()`` is after the
+    hint block has exited."""
+
+    class NamelessStreamingLLM(NamelessLLM):
+        @llm_chat_callback()
+        def stream_chat(
+            self, messages: Sequence[ChatMessage], **kwargs: Any
+        ) -> ChatResponseGen:
+            def generate() -> ChatResponseGen:
+                yield response("he", raw=Raw(model=None, usage=None))
+                yield response("hello", raw=Raw(model=None))
+
+            return generate()
+
+    with ags.conversation("c-hint-drain"):
+        with ags.turn():
+            with ags.model_hint("stream-model"):
+                stream = NamelessStreamingLLM().stream_chat(HI)
+            drained = [c.delta for c in stream]
+
+    assert drained == ["he", "hello"]
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.REQUEST_MODEL] == "stream-model"
+    assert llm_span.attributes[LLMAttributes.MODEL_DECLARED] is True
+    assert llm_span.attributes[LLMAttributes.STREAMING] is True
+
+
 def test_anthropic_cache_counts_are_left_disjoint(spans):
     """Anthropic's ``input_tokens`` already excludes both cache counters."""
     llm = AnthropicishLLM()

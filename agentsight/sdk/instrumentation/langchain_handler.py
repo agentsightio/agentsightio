@@ -28,6 +28,7 @@ from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
 from agentsight.exceptions import ToolFailure
+from agentsight.sdk import context as ags_context
 from agentsight.sdk.instrumentation.base import (
     capturing,
     end_tool_span,
@@ -281,7 +282,9 @@ def _tool_name(serialized: Dict[str, Any], kwargs: Dict[str, Any]) -> str:
 class _PendingLLMRun:
     """What ``on_llm_end`` needs but is not told."""
 
-    __slots__ = ("start_time_ns", "system", "model", "operation", "streaming")
+    __slots__ = (
+        "start_time_ns", "system", "model", "operation", "streaming", "model_hint"
+    )
 
     def __init__(
         self, start_time_ns: int, system: str, model: Optional[str], operation: str
@@ -291,6 +294,10 @@ class _PendingLLMRun:
         self.model = model
         self.operation = operation
         self.streaming = False
+        #: Snapshotted at the start callback because ``on_llm_end`` fires when
+        #: a stream drains — with ``wrap()`` that can be after the caller's
+        #: ``model_hint`` block has exited.
+        self.model_hint = ags_context.current_model_hint()
 
 
 def _guarded(method):
@@ -494,6 +501,7 @@ class AgentSightCallbackHandler(BaseCallbackHandler):
             # alongside whenever the response resolved it to something else,
             # exactly as the provider patches do.
             requested_model=run.model,
+            model_hint=run.model_hint,
             start_time_ns=run.start_time_ns,
             end_time_ns=now_ns(),
             extra=extra,

@@ -1016,3 +1016,90 @@ def _decorate_turn(func: Callable, spec: _TurnSpec) -> Callable:
         return result
 
     return sync_wrapper
+
+
+# ---------------------------------------------------------------------------
+# model_hint
+# ---------------------------------------------------------------------------
+
+
+class ModelHintScope:
+    """A model name to fall back on when a call resolves none of its own.
+
+    For the models automatic detection genuinely cannot name: a hand-rolled
+    LangChain ``BaseChatModel`` around a self-hosted server, a custom
+    LlamaIndex LLM — wrappers that expose no model attribute and report none
+    in their responses. The caller knows what is on the other end; this is
+    where they say so::
+
+        with agentsight.model_hint("llama3.1:8b"):
+            chain.invoke(...)
+
+    Strictly a last resort. A call that resolves any model — from the
+    provider's response or from its own arguments — keeps it; the hint fills
+    the hole only when both came up empty, and the span it fills is stamped
+    ``model_declared`` so the archive can tell an assertion from a
+    measurement. That precedence is what makes a broad hint safe: at worst it
+    names a call that would otherwise be nameless, never one that was
+    resolved.
+
+    Worth filling because a nameless call is *permanently* unpriceable — with
+    no name on the usage row, no rate table entry can ever match it, and
+    repricing cannot recover what a missing rate row can. Named, it is priced
+    now or the day a rate row exists.
+
+    The hint is read when a call *starts*, so a stream created inside the
+    block is covered even when it drains after the block exits — the same
+    rule that keeps ``wrap()``-style handlers correct. Nesting works the way
+    the other scopes nest: innermost wins, exiting restores.
+    """
+
+    def __init__(self, model: Optional[str]):
+        # Anything with a str form is accepted rather than only str: model
+        # ids arrive as enums and config objects often enough, and dropping
+        # a hint over its type would defeat the one job it has.
+        self._model = str(model) if model is not None and not isinstance(model, str) else model
+        self._token = None
+
+    def __enter__(self) -> "ModelHintScope":
+        self._token = ags_context.set_model_hint(self._model or None)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if self._token is not None:
+            ags_context.reset_model_hint(self._token)
+            self._token = None
+        return False
+
+    async def __aenter__(self) -> "ModelHintScope":
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
+        return self.__exit__(exc_type, exc_val, exc_tb)
+
+    # -- decorator ----------------------------------------------------------
+
+    def __call__(self, func: Callable) -> Callable:
+        """Decorator form. A fresh scope per call, like the other scopes —
+        this one holds per-entry state (``_token``), and one instance entered
+        concurrently from two requests would unwind the wrong context."""
+        if asyncio.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                async with ModelHintScope(self._model):
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            with ModelHintScope(self._model):
+                return func(*args, **kwargs)
+
+        return sync_wrapper
+
+
+def model_hint(model: Optional[str]) -> ModelHintScope:
+    """See :class:`ModelHintScope`. Context manager or decorator."""
+    return ModelHintScope(model)

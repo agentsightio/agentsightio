@@ -36,6 +36,7 @@ import inspect
 import weakref
 from typing import Any, Callable, Dict, Optional
 
+from agentsight.sdk import context as ags_context
 from agentsight.sdk.instrumentation.base import (
     already_patched,
     capturing,
@@ -70,6 +71,7 @@ def _record(
     logger: Any,
     error: Optional[BaseException] = None,
     requested_model: Optional[str] = None,
+    model_hint: Optional[str] = None,
 ) -> None:
     """Emit one ``llm`` span. Never raises into the caller."""
     try:
@@ -84,6 +86,7 @@ def _record(
             **from_anthropic(usage, model),
             operation="chat",
             requested_model=requested_model,
+            model_hint=model_hint,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
             extra=extra or None,
@@ -116,6 +119,12 @@ class _StreamRecorder:
         #: the caller typed is lost on every streamed call, which is most of an
         #: agent's traffic.
         self._requested_model = model
+        #: Snapshotted here because __init__ runs while the call starts — for
+        #: ``create`` inside the patched method, for ``.stream()`` inside the
+        #: manager's ``__enter__``, which is where the request actually fires.
+        #: ``finish`` runs when the stream drains, which can be after the
+        #: caller's ``model_hint`` block has exited.
+        self._model_hint = ags_context.current_model_hint()
         self._start_time_ns = start_time_ns
         self._logger = logger
         self._usage: Dict[str, int] = {}
@@ -171,6 +180,7 @@ class _StreamRecorder:
             self._logger,
             error=self._error,
             requested_model=self._requested_model,
+            model_hint=self._model_hint,
         )
 
 

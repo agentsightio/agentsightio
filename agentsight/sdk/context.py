@@ -21,6 +21,9 @@ _conversation_var: ContextVar[Optional["ConversationScope"]] = ContextVar(
 _turn_var: ContextVar[Optional["TurnScope"]] = ContextVar(
     "agentsight_turn", default=None
 )
+_model_hint_var: ContextVar[Optional[str]] = ContextVar(
+    "agentsight_model_hint", default=None
+)
 
 
 def current_conversation() -> Optional["ConversationScope"]:
@@ -54,6 +57,28 @@ def reset_turn(token) -> None:
         _turn_var.reset(token)
     except ValueError:
         _turn_var.set(None)
+
+
+def current_model_hint() -> Optional[str]:
+    """The model name declared by the innermost ``agentsight.model_hint(...)``.
+
+    A fallback, never an override: consumed only when a call resolves no model
+    of its own — see :func:`record_llm_call`. Integrations that record after
+    their block may have exited (streams record when they drain) snapshot this
+    at call start instead of reading it here at record time.
+    """
+    return _model_hint_var.get()
+
+
+def set_model_hint(value: Optional[str]):
+    return _model_hint_var.set(value)
+
+
+def reset_model_hint(token) -> None:
+    try:
+        _model_hint_var.reset(token)
+    except ValueError:
+        _model_hint_var.set(None)
 
 
 def tracking_enabled() -> bool:

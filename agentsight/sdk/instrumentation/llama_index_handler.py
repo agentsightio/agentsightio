@@ -32,6 +32,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Dict, NamedTuple, Optional, Tuple
 
+from agentsight.sdk import context as ags_context
 from agentsight.sdk.instrumentation.base import (
     already_patched,
     capturing,
@@ -175,6 +176,10 @@ class _PendingCall(NamedTuple):
     system: Optional[str]
     streaming: bool
     operation: str = "chat"
+    #: Snapshotted at the Start event because the End event fires when a
+    #: stream drains — with ``wrap()`` that can be after the caller's
+    #: ``model_hint`` block has exited.
+    model_hint: Optional[str] = None
 
 
 class _PendingCalls:
@@ -256,6 +261,7 @@ def _begin_llm_call(pending: _PendingCalls, event: Any, operation: str) -> None:
             # The qualname says it: chat vs stream_chat vs astream_chat.
             streaming="stream" in _method_of(event.span_id),
             operation=operation,
+            model_hint=ags_context.current_model_hint(),
         ),
     )
 
@@ -313,6 +319,7 @@ def _end_llm_call(pending: _PendingCalls, event: Any, operation: str) -> None:
         # whenever ``raw`` resolved it to something else, exactly as the
         # provider patches do.
         requested_model=call.model,
+        model_hint=call.model_hint,
         start_time_ns=call.start_time_ns,
         end_time_ns=now_ns(),
         extra=extra,
@@ -343,6 +350,7 @@ def _fail_llm_call(
         call.system or _UNKNOWN_SYSTEM,
         call.model,
         operation=call.operation,
+        model_hint=call.model_hint,
         start_time_ns=call.start_time_ns,
         end_time_ns=now_ns(),
         extra={LLMAttributes.STREAMING: True} if call.streaming else None,

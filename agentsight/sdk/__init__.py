@@ -22,7 +22,7 @@ from agentsight.sdk.api import (
 )
 from agentsight.sdk.core import flush, init, is_enabled, shutdown
 from agentsight.sdk.decorators import task, tool
-from agentsight.sdk.scopes import turn
+from agentsight.sdk.scopes import model_hint, turn
 from agentsight.sdk.uploads import upload_attachments
 
 __all__ = [
@@ -34,6 +34,8 @@ __all__ = [
     # scopes
     "conversation",
     "turn",
+    # the model to fall back on when a call resolves none of its own
+    "model_hint",
     # lifetime — for work that outlives the block that started it
     "wrap",
     "end_turn",

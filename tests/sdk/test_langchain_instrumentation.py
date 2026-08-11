@@ -479,6 +479,80 @@ def test_no_alias_attribute_when_the_two_agree(spans):
     assert LLMAttributes.REQUESTED_MODEL not in llm.attributes
 
 
+class NamelessChat(BaseChatModel):
+    """No ``model``/``model_name`` attribute and nothing reported back — the
+    genuinely nameless wrapper ``model_hint`` exists for. Core cannot fill
+    ``ls_model_name`` from a field that is not there, and the response
+    carries no metadata to resolve one from."""
+
+    chunks: Optional[List[Any]] = None
+
+    @property
+    def _llm_type(self) -> str:
+        return "nameless"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        message = AIMessage(
+            content="hello",
+            usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+        )
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        for item in self.chunks or []:
+            yield item
+
+
+def test_a_model_hint_names_a_model_nothing_else_could(spans):
+    """The declared name lands where the backend prices, stamped as an
+    assertion — without it this row would be permanently unpriceable."""
+    with ags.conversation("c-hint"):
+        with ags.turn():
+            with ags.model_hint("llama3.1:8b-local"):
+                NamelessChat().invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "llama3.1:8b-local"
+    assert llm.attributes[LLMAttributes.MODEL_DECLARED] is True
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 7
+
+
+def test_a_model_hint_never_overrides_a_detected_model(spans):
+    with ags.conversation("c-hint-detected"):
+        with ags.turn():
+            with ags.model_hint("wrong-model"):
+                FakeChat(usage=LC_USAGE).invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1"
+    assert LLMAttributes.MODEL_DECLARED not in llm.attributes
+
+
+def test_the_hint_survives_a_stream_drained_after_its_block(spans):
+    """The hint reads at call start, not at record time: ``on_llm_end`` fires
+    when the stream is exhausted, which with ``wrap()`` is after the hint
+    block has exited."""
+    model = NamelessChat(
+        chunks=[
+            chunk("a", input_tokens=10, output_tokens=1, total_tokens=11),
+            chunk("b", input_tokens=0, output_tokens=2, total_tokens=2),
+        ]
+    )
+
+    with ags.conversation("c-hint-drain"):
+        with ags.turn():
+            with ags.model_hint("stream-model"):
+                stream = model.stream("hi")
+                next(stream)  # the run starts here, inside the block
+            drained = [c.content for c in stream if c.content]
+
+    assert drained == ["b"]
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "stream-model"
+    assert llm.attributes[LLMAttributes.MODEL_DECLARED] is True
+    assert llm.attributes[LLMAttributes.STREAMING] is True
+
+
 def test_usage_metadata_wins_over_llm_output(spans):
     model = FakeChat(
         usage={"input_tokens": 11, "output_tokens": 3, "total_tokens": 14},

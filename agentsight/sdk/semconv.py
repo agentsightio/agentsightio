@@ -187,6 +187,13 @@ class LLMAttributes:
     #: a caller actually uses is unrecoverable, and "which of my model
     #: aliases is expensive" cannot be answered.
     REQUESTED_MODEL = "agentsight.llm.requested_model"
+    #: ``True`` when REQUEST_MODEL came from ``agentsight.model_hint(...)``
+    #: rather than from the call or its response — an assertion, not a
+    #: measurement, and the archive must keep the two distinguishable (the
+    #: same reasoning as USAGE_REPORTED). Present only when the hint was
+    #: consumed; a call that resolved its own model never carries it, however
+    #: many hint blocks it ran inside.
+    MODEL_DECLARED = "agentsight.llm.model_declared"
     #: GenAI standard: "chat", "text_completion", "embeddings". Distinguishes an
     #: embedding call from a chat call without having to infer it from which
     #: token fields happen to be set.

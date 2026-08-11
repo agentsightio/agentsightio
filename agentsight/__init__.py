@@ -64,6 +64,7 @@ from agentsight.sdk import (
     flush,
     init,
     is_enabled,
+    model_hint,
     open_conversation,
     record_attachments,
     shutdown,
@@ -85,6 +86,8 @@ __all__ = [
     # scopes
     "conversation",
     "turn",
+    # the model to fall back on when a call resolves none of its own
+    "model_hint",
     # lifetime — for work that outlives the block that started it
     "wrap",
     "end_turn",

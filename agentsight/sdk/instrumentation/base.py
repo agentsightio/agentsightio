@@ -131,6 +131,7 @@ def record_llm_call(
     *,
     operation: Optional[str] = None,
     requested_model: Optional[str] = None,
+    model_hint: Optional[str] = None,
     start_time_ns: Optional[int] = None,
     end_time_ns: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
@@ -151,6 +152,15 @@ def record_llm_call(
     the caller asked for as ``requested_model`` and it is recorded alongside
     whenever the two differ — otherwise the alias people actually write in
     their code is lost the moment a provider answers with a dated snapshot.
+
+    ``model_hint`` is the caller's snapshot of ``agentsight.model_hint(...)``
+    at *call start*, for integrations that record after their block may have
+    exited — a stream records when it drains. Callers that record while the
+    call is still in flight need not pass it; the ambient hint is read here
+    as the fallback, and at that moment the two are the same value. Either
+    way it is consumed only when ``model`` resolved to nothing, and the span
+    it fills is stamped ``MODEL_DECLARED`` — a hint is the user's assertion,
+    and the archive must keep assertions distinguishable from measurements.
 
     No cost is computed here, deliberately. Cost is a pure function of the
     token counts, the model and the date, and all three are recorded — so the
@@ -182,6 +192,11 @@ def record_llm_call(
     if error is not None and isinstance(error, (GeneratorExit, asyncio.CancelledError)):
         error = None
 
+    declared = None
+    if not model:
+        declared = model_hint or ags_context.current_model_hint()
+        model = declared or None
+
     attributes = dict(ags_context.conversation_attributes())
     attributes.update(
         {
@@ -194,6 +209,8 @@ def record_llm_call(
     )
     if model:
         attributes[LLMAttributes.REQUEST_MODEL] = model
+    if declared:
+        attributes[LLMAttributes.MODEL_DECLARED] = True
     if requested_model and requested_model != model:
         # Only on the difference. ``model`` is the resolved id, which is what
         # cost and usage are keyed on and must not move; this preserves the
