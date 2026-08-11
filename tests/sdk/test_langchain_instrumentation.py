@@ -70,6 +70,10 @@ class FakeChat(BaseChatModel):
     #: What the response reports it actually ran, which outranks the requested
     #: model. None for the providers that report nothing.
     reported_model: Optional[str] = "fake-1"
+    #: Which key ``response_metadata`` reports it under. ``model_name`` is
+    #: core's standardised spelling; Ollama says ``model``, Bedrock
+    #: ``model_id``, and the handler must read all three.
+    reported_model_key: str = "model_name"
     usage: Optional[dict] = None
     output: Optional[dict] = None
     chunks: Optional[List[Any]] = None
@@ -91,7 +95,9 @@ class FakeChat(BaseChatModel):
             content="hello",
             usage_metadata=self.usage,
             response_metadata=(
-                {"model_name": self.reported_model} if self.reported_model else {}
+                {self.reported_model_key: self.reported_model}
+                if self.reported_model
+                else {}
             ),
         )
         return ChatResult(
@@ -405,6 +411,74 @@ def test_an_unpatched_provider_keeps_the_tokens_in_its_llm_output(spans):
     assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 40
 
 
+def test_a_resolved_model_spelled_model_is_still_found(spans):
+    """Ollama puts the resolved id under ``model``, not core's standardised
+    ``model_name`` — and the unpatched providers this handler is the only
+    recorder for are exactly the ones still on their own spelling."""
+    model = FakeChat(
+        provider="ollama",
+        reported_model="llama3.1:8b",
+        reported_model_key="model",
+        usage=LC_USAGE,
+    )
+
+    with ags.conversation("c-model-key"):
+        with ags.turn():
+            model.invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "llama3.1:8b"
+
+
+def test_a_bedrock_model_id_in_llm_output_is_still_found(spans):
+    """Bedrock's spelling, in ``llm_output`` — the platform-flavoured id the
+    backend needs to see to have any chance of pricing the call."""
+    model = FakeChat(
+        reported_model=None,
+        output={
+            "model_id": "anthropic.claude-sonnet-5-20250929-v1:0",
+            "token_usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        },
+    )
+
+    with ags.conversation("c-model-id"):
+        with ags.turn():
+            model.invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert (
+        llm.attributes[LLMAttributes.REQUEST_MODEL]
+        == "anthropic.claude-sonnet-5-20250929-v1:0"
+    )
+
+
+def test_the_alias_the_caller_typed_survives_the_resolved_id(spans):
+    """Parity with the provider patches: the resolved id is what was billed
+    and keeps ``request_model``; the alias the caller configured rides
+    alongside so "which of my model aliases is expensive" has an answer on
+    the handler path too."""
+    model = FakeChat(reported_model="fake-1-20250101", usage=LC_USAGE)
+
+    with ags.conversation("c-alias"):
+        with ags.turn():
+            model.invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1-20250101"
+    assert llm.attributes[LLMAttributes.REQUESTED_MODEL] == "fake-1"
+
+
+def test_no_alias_attribute_when_the_two_agree(spans):
+    """Present only on the difference, exactly as the patches record it."""
+    with ags.conversation("c-agree"):
+        with ags.turn():
+            FakeChat(usage=LC_USAGE).invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1"
+    assert LLMAttributes.REQUESTED_MODEL not in llm.attributes
+
+
 def test_usage_metadata_wins_over_llm_output(spans):
     model = FakeChat(
         usage={"input_tokens": 11, "output_tokens": 3, "total_tokens": 14},
@@ -463,6 +537,55 @@ def test_a_non_streamed_call_is_not_flagged_as_streaming(spans):
 
     (llm,) = llm_spans(spans)
     assert LLMAttributes.STREAMING not in llm.attributes
+
+
+def test_a_stream_that_reported_no_usage_is_marked_unknown(spans):
+    """Not every provider streams its counts, and the handler is the only
+    recorder for all of them: this is Bedrock, Vertex, Ollama, LiteLLM.
+
+    A stream that ends without any usage leaves 0/0 on the span, which the
+    backend would otherwise price as an authoritative $0 — spend that never
+    happened, indistinguishable from a call that genuinely billed nothing.
+    """
+    model = FakeChat(chunks=[chunk("a"), chunk("b")])
+
+    with ags.conversation("c-stream-silent"):
+        with ags.turn():
+            assert [c.content for c in model.stream("hi") if c.content] == ["a", "b"]
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 0
+    assert llm.attributes[LLMAttributes.USAGE_REPORTED] is False
+
+
+def test_a_stream_that_reported_usage_carries_no_unknown_marker(spans):
+    model = FakeChat(
+        chunks=[chunk("a", input_tokens=10, output_tokens=1, total_tokens=11)]
+    )
+
+    with ags.conversation("c-stream-counted"):
+        with ags.turn():
+            list(model.stream("hi"))
+
+    (llm,) = llm_spans(spans)
+    assert LLMAttributes.USAGE_REPORTED not in llm.attributes
+
+
+def test_a_blocking_call_that_billed_nothing_is_not_marked_unknown(spans):
+    """The marker is scoped to streaming on purpose.
+
+    A blocking call that reports no usage is, in LangChain, almost always a
+    cache hit — and a cache hit really did cost nothing. Marking those unknown
+    would turn the one field that means "do not trust these counts" into
+    noise on the calls where the counts are exactly right.
+    """
+    with ags.conversation("c-cache-hit"):
+        with ags.turn():
+            FakeChat().invoke("hi")
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.OUTPUT_TOKENS] == 0
+    assert LLMAttributes.USAGE_REPORTED not in llm.attributes
 
 
 # ---------------------------------------------------------------------------

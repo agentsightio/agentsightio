@@ -426,6 +426,35 @@ def test_the_alias_the_caller_asked_for_survives_the_resolved_id(spans, client, 
     assert llm.attributes[LLMAttributes.REQUESTED_MODEL] == "gpt-4o"
 
 
+def test_a_streamed_call_keeps_the_alias_too(spans, client, api):
+    """The same guarantee on the path that carries most of an agent's traffic.
+
+    A streamed span is emitted by the recorder at the end of the stream, from
+    the model it last saw on a chunk — which is the resolved snapshot. The
+    requested id has to be carried separately to survive that, and it used to
+    not be: every streamed call lost the alias while every blocking one kept
+    it.
+    """
+    api.reply = stream_reply(
+        dict(chat_chunk("a"), model="gpt-4o-2024-08-06"),
+        dict(
+            chat_chunk(usage={"prompt_tokens": 3, "completion_tokens": 1}),
+            model="gpt-4o-2024-08-06",
+        ),
+    )
+
+    with ags.conversation("c-alias-stream"):
+        with ags.turn():
+            stream = client.chat.completions.create(
+                model="gpt-4o", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+            assert user_loop(stream) == ["a"]
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.REQUEST_MODEL] == "gpt-4o-2024-08-06"
+    assert llm.attributes[LLMAttributes.REQUESTED_MODEL] == "gpt-4o"
+
+
 def test_no_requested_model_attribute_when_the_two_agree(spans, client, api):
     """Present only on the difference — its absence is the statement that the
     provider answered with exactly what was asked for."""
@@ -542,10 +571,18 @@ async def test_an_async_raw_response_is_recorded_too(spans, aclient, api):
     assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
 
 
-def test_a_raw_response_wrapping_a_stream_is_still_left_alone(spans, client, api):
-    """`stream=True` through `with_raw_response` hands back a body nobody has
-    read. Touching it would consume the caller's stream."""
-    api.reply = stream_reply(chat_chunk("a"), chat_chunk("b"))
+def test_a_raw_wrapped_stream_is_recorded_and_the_chunk_still_swallowed(
+    spans, client, api
+):
+    """`stream=True` through `with_raw_response` — what `langchain-openai`
+    sends when `include_response_headers=True`, and until now a call that
+    recorded nothing at all. `parse()` on a streamed request reads no bytes:
+    it builds the lazy Stream, memoised, so the caller iterates the very
+    object the patch instrumented — which is also why the usage chunk the
+    patch asked for can be taken back out of their loop."""
+    api.reply = stream_reply(
+        chat_chunk("a"), chat_chunk("b"), chat_chunk(usage=CHAT_USAGE)
+    )
 
     with ags.conversation("c-raw-streaming"):
         with ags.turn():
@@ -554,11 +591,33 @@ def test_a_raw_response_wrapping_a_stream_is_still_left_alone(spans, client, api
                 messages=[{"role": "user", "content": "hi"}],
                 stream=True,
             )
-            chunks = list(raw.parse())
+            stream = raw.parse()
+            assert raw.parse() is stream
+            assert user_loop(stream) == ["a", "b"]
 
-    assert [c.choices[0].delta.content for c in chunks] == ["a", "b"]
-    assert llm_spans(spans) == []
-    assert "stream_options" not in api.bodies()[0]
+    assert api.bodies()[0]["stream_options"] == {"include_usage": True}
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
+    assert llm.attributes[LLMAttributes.STREAMING] is True
+
+
+@pytest.mark.asyncio
+async def test_an_async_raw_wrapped_stream_is_recorded_too(spans, aclient, api):
+    api.reply = stream_reply(chat_chunk("a"), chat_chunk(usage=CHAT_USAGE))
+
+    with ags.conversation("c-raw-streaming-async"):
+        with ags.turn():
+            raw = await aclient.chat.completions.with_raw_response.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+            chunks = [chunk async for chunk in raw.parse()]
+            assert [c.choices[0].delta.content for c in chunks] == ["a"]
+
+    (llm,) = llm_spans(spans)
+    assert llm.attributes[LLMAttributes.INPUT_TOKENS] == 60
+    assert llm.attributes[LLMAttributes.STREAMING] is True
 
 
 def test_streaming_response_helper_still_streams(spans, client, api):
@@ -958,6 +1017,37 @@ def test_injection_safety_is_decided_before_the_first_request():
 
     assert openai_patch._injection_is_safe(Renamed, Renamed) is False
     assert openai_patch._injection_is_safe(openai.Stream, openai.AsyncStream) is True
+
+
+def test_the_injection_latch_says_so_once():
+    """Losing streamed token counts must not be silent.
+
+    The latch closes when a release stops exposing the internals the patch
+    reads, and everything downstream still works — spans, durations, errors,
+    every non-streamed call. What stops is token capture on streams, and its
+    symptom is indistinguishable from an agent that stopped making calls. At
+    DEBUG that is unanswerable in production; once at WARNING, it is a
+    one-line answer.
+    """
+
+    class Recorder:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, message, *args, **kwargs):
+            self.warnings.append(message)
+
+        def debug(self, *args, **kwargs):
+            pass
+
+    recorder = Recorder()
+    # The `injection_safe` fixture guarantees the latch is open here, and puts
+    # it back afterwards.
+    assert openai_patch._iterator_of(object(), recorder) is None
+    assert openai_patch._iterator_of(object(), recorder) is None
+
+    assert recorder.warnings == [openai_patch._INTERNALS_CHANGED]
+    assert openai_patch._INJECTION_SAFE is False
 
 
 def test_nothing_is_injected_when_it_could_not_be_swallowed(spans, client, api):

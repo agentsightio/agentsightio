@@ -34,22 +34,44 @@ class Usage(Resource):
         was kept rather than booking zero. This SDK no longer produces such
         rows; the value remains for older clients and for historical data.
 
+    ``cost_source`` says nothing about whether the *tokens* were known. A
+    streamed call that closed without the provider reporting usage is priced
+    from the zeros it contributed, so it books ``$0`` under ``backend`` —
+    authoritative arithmetic on an incomplete input. ``unreported_calls`` is
+    the only field that distinguishes it from a call that genuinely cost
+    nothing; see :meth:`list`.
+
     Only the five billable token categories are priced. ``reasoning_tokens``
     and the audio counts are subsets of prompt/completion that are already
     priced through them, so pricing them again would double-count.
     """
 
     def list(self, **filters: Any) -> PageIterator:
-        """Per-call token usage, one record per LLM call.
+        """Token usage, one row per (turn, model).
+
+        Not one row per LLM call: a turn's calls are aggregated by the model
+        that served them, because counts from two models are not the same unit
+        and a row that summed them could never be priced. ``calls`` says how
+        many went into the row — a turn that used one model, which is almost
+        all of them, still gets exactly one.
 
         Filters: ``conversation`` (pk), ``conversation_id`` (string),
         ``cost_source``, ``environment``, ``incomplete``, ``model``,
         ``ordering``, ``started_at_after``, ``started_at_before``, ``turn_id``.
 
-        ``incomplete`` selects the calls whose usage never arrived — a stream
-        that closed without a usage event, most often. Their token counts are
-        unknowns rather than zeros, and averaging over them without excluding
-        them understates every per-call figure.
+        ``incomplete`` is about the **turn**, not the tokens: true when the
+        exchange ended in an error, was abandoned mid-stream, hit its deadline
+        or was cut off by shutdown (``incomplete_reason`` says which). The
+        spend on such a turn was really spent; what is missing is the rest of
+        the exchange.
+
+        ``unreported_calls`` is the different thing it is easy to mistake this
+        for — calls whose stream closed without the provider ever reporting
+        usage. Those contributed 0 to every token column as an *unknown*, not
+        a zero, and their share of ``cost_usd`` is 0 for the same reason. A
+        row with ``unreported_calls > 0`` understates both, so any per-call
+        average that includes it is low. It is returned on every row but
+        cannot be filtered on server-side; select on it after reading.
 
         ``cost_usd`` and ``cost_usd_reported`` arrive here as **strings**
         (``"0.00201250"``) — the serializer keeps the stored decimal exact

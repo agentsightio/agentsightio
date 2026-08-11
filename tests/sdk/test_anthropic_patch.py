@@ -744,9 +744,9 @@ def test_disabled_tracking_records_nothing(fake_anthropic, spans):
     assert llm_spans(spans) == []
 
 
-def test_raw_response_wrapper_is_left_alone(fake_anthropic, spans):
-    """An APIResponse has neither a usage nor an iterator; reading it would
-    consume the body the user has not read yet."""
+def test_an_unmarked_opaque_body_is_left_alone(fake_anthropic, spans):
+    """No raw marker, no usage, no iterator: a result shape the patch does not
+    know records nothing rather than a zero it would have to make up."""
     install_anthropic(LOGGER)
     client = fake_anthropic.Messages()
     client.reply = SimpleNamespace(status_code=200, headers={})
@@ -757,3 +757,36 @@ def test_raw_response_wrapper_is_left_alone(fake_anthropic, spans):
     assert result is client.reply
     assert not hasattr(result, "_iterator")
     assert llm_spans(spans) == []
+
+
+def test_a_marked_raw_response_is_opened_and_recorded(fake_anthropic, spans):
+    """``with_raw_response`` stamps the Stainless header on the call before it
+    reaches ``create``; the patch opens the wrapper through its memoising
+    ``parse()`` and records the body — a call that used to leave no trace at
+    all — while the caller still receives the wrapper untouched."""
+    install_anthropic(LOGGER)
+
+    class RawResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def parse(self):
+            return self._body
+
+    message = SimpleNamespace(model="claude-sonnet-5", usage=usage(10, 5))
+    wrapper = RawResponse(message)
+    client = fake_anthropic.Messages()
+    client.reply = wrapper
+
+    with ags.conversation("c"):
+        result = client.create(
+            model="claude-sonnet-5",
+            max_tokens=1,
+            messages=[],
+            extra_headers={"X-Stainless-Raw-Response": "true"},
+        )
+
+    assert result is wrapper
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["input"] == 10
+    assert tokens(llm)["output"] == 5

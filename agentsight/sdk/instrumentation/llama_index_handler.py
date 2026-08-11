@@ -39,6 +39,7 @@ from agentsight.sdk.instrumentation.base import (
     from_anthropic,
     from_openai,
     mark_patched,
+    nothing_reported,
     now_ns,
     provider_patch_covers,
     record_llm_call,
@@ -294,12 +295,27 @@ def _end_llm_call(pending: _PendingCalls, event: Any, operation: str) -> None:
     tokens = normalize(usage, _field(raw, "model") or call.model)
     tokens["system"] = system
 
+    extra: Optional[Dict[str, Any]] = None
+    if call.streaming:
+        extra = {LLMAttributes.STREAMING: True}
+        if nothing_reported(tokens):
+            # The stream ended and LlamaIndex surfaced no counts at all. The
+            # 0/0 on this span is an unknown, not a zero — without the marker
+            # the backend prices it as an authoritative $0. Only on the
+            # streamed path: a blocking call that reports nothing is a
+            # provider that never reports, which is a different gap.
+            extra[LLMAttributes.USAGE_REPORTED] = False
+
     record_llm_call(
         **tokens,
         operation=operation,
+        # ``model_dict`` holds the id the caller configured; recorded alongside
+        # whenever ``raw`` resolved it to something else, exactly as the
+        # provider patches do.
+        requested_model=call.model,
         start_time_ns=call.start_time_ns,
         end_time_ns=now_ns(),
-        extra={LLMAttributes.STREAMING: True} if call.streaming else None,
+        extra=extra,
     )
 
 

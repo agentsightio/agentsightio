@@ -33,6 +33,7 @@ from agentsight.sdk.instrumentation.base import (
     end_tool_span,
     from_anthropic,
     from_openai,
+    nothing_reported,
     now_ns,
     provider_patch_covers,
     record_llm_call,
@@ -175,6 +176,24 @@ def _final_generation(response: Any) -> Any:
         return None
 
 
+def _model_of(*sources: Dict[str, Any]) -> Optional[str]:
+    """The resolved model id, whichever spelling the integration chose.
+
+    ``model_name`` is core's standardised key, but the standard is recent and
+    adoption tracks the mainstream providers — which are the ones the patches
+    cover. The providers this handler is the *only* recorder for are exactly
+    the ones still on their own spelling: Ollama reports ``model``, Bedrock
+    ``model_id``. Three known names, in order of trust, rather than a sweep of
+    whatever is present — ``model`` on some payloads is an object, not an id.
+    """
+    for source in sources:
+        for key in ("model_name", "model", "model_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def _usage_and_model(
     response: Any, system: str
 ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -193,10 +212,9 @@ def _usage_and_model(
 
     message = getattr(_final_generation(response), "message", None)
     usage = getattr(message, "usage_metadata", None)
-    model = (getattr(message, "response_metadata", None) or {}).get("model_name")
 
     llm_output = getattr(response, "llm_output", None) or {}
-    model = model or llm_output.get("model_name")
+    model = _model_of(getattr(message, "response_metadata", None) or {}, llm_output)
 
     if usage:
         return model, _tokens_from_usage_metadata(usage)
@@ -453,15 +471,32 @@ class AgentSightCallbackHandler(BaseCallbackHandler):
         if run is None:
             return
         model, tokens = _usage_and_model(response, run.system)
-        if only_if_billed and not any(tokens.values()):
+        if only_if_billed and nothing_reported(tokens):
             return
+
+        extra: Optional[Dict[str, Any]] = None
+        if run.streaming:
+            extra = {LLMAttributes.STREAMING: True}
+            if nothing_reported(tokens):
+                # The stream closed and nothing ever said what it billed. The
+                # 0/0 counts are unknowns, not zeros — without the marker the
+                # backend prices them as an authoritative $0. Scoped to the
+                # streamed path on purpose: a non-streamed call reporting
+                # nothing is usually a cache hit, which really did cost
+                # nothing.
+                extra[LLMAttributes.USAGE_REPORTED] = False
+
         record_llm_call(
             run.system,
             model or run.model,
             operation=run.operation,
+            # ``ls_model_name`` is the id the caller configured; recorded
+            # alongside whenever the response resolved it to something else,
+            # exactly as the provider patches do.
+            requested_model=run.model,
             start_time_ns=run.start_time_ns,
             end_time_ns=now_ns(),
-            extra={LLMAttributes.STREAMING: True} if run.streaming else None,
+            extra=extra,
             error=error,
             **tokens,
         )

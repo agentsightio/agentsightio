@@ -93,7 +93,7 @@ ACTION_FILTERS = frozenset(
     }
 )
 
-#: ``/api/token-usage/`` — what an LLM call cost, per call.
+#: ``/api/token-usage/`` — what spend cost, one row per (turn, model).
 #:
 #: ``environment`` here accepts any slug the agent owns, unlike the fixed
 #: ``production|development|prod|dev`` choice list the conversation and feedback

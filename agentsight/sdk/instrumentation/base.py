@@ -30,6 +30,31 @@ from agentsight.sdk.serialization import to_json, to_text
 #: than a patch stacked on a patch — which would double every token count.
 PATCH_MARKER = "_agentsight_patched"
 
+#: Every token counter :func:`record_llm_call` accepts. Written down once so a
+#: caller can ask "did the provider report anything at all" without keeping a
+#: second copy of the list that drifts when a category is added.
+TOKEN_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "audio_input_tokens",
+    "audio_output_tokens",
+    "embedding_tokens",
+)
+
+
+def nothing_reported(tokens: Dict[str, Any]) -> bool:
+    """True when a normalized usage mapping carries no counts at all.
+
+    The question the framework handlers ask before deciding whether a streamed
+    call's 0/0 is an *unknown* or a real zero. Reads only the counters, so it
+    is the same answer whether the mapping still carries ``system``/``model``
+    (the LlamaIndex shape) or has had them stripped (the LangChain one).
+    """
+    return not any(tokens.get(name) for name in TOKEN_FIELDS)
+
 
 def already_patched(target: Any) -> bool:
     return bool(getattr(target, PATCH_MARKER, False))

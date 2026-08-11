@@ -424,6 +424,52 @@ def test_a_derived_streaming_chat_is_billed_once(spans):
     assert llm_span.attributes[LLMAttributes.INPUT_TOKENS] == 60
 
 
+class SilentStreamLLM(FakeLLM):
+    """Streams to the end without ever reporting usage.
+
+    Which is most non-OpenAI integrations: LlamaIndex surfaces whatever the
+    provider handed it, and for a stream that is often nothing at all.
+    """
+
+    @llm_chat_callback()
+    def stream_chat(
+        self, messages: Sequence[ChatMessage], **kwargs: Any
+    ) -> ChatResponseGen:
+        def generate() -> ChatResponseGen:
+            yield response("he", raw=Raw(usage=None))
+            yield response("hello", raw=Raw(usage=None))
+
+        return generate()
+
+
+def test_a_stream_that_reported_no_usage_is_marked_unknown(spans):
+    """0/0 from a silent stream is an unknown, not a zero.
+
+    Without the marker the backend prices the row as an authoritative $0 and
+    ``unreported_calls`` stays at zero — so nothing anywhere says the counts
+    on this call were never reported.
+    """
+    with ags.conversation("c-stream-silent"):
+        with ags.turn():
+            assert [c.delta for c in SilentStreamLLM().stream_chat(HI)] == ["he", "hello"]
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.INPUT_TOKENS] == 0
+    assert llm_span.attributes[LLMAttributes.USAGE_REPORTED] is False
+
+
+def test_a_stream_that_reported_usage_carries_no_unknown_marker(spans):
+    """FakeLLM's stream reports nothing until the last chunk, which is the
+    normal shape — the marker's absence is the statement that it arrived."""
+    with ags.conversation("c-stream-counted"):
+        with ags.turn():
+            list(FakeLLM().stream_chat(HI))
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.INPUT_TOKENS] == 60
+    assert LLMAttributes.USAGE_REPORTED not in llm_span.attributes
+
+
 def test_a_derived_call_leaves_nothing_behind(spans, pending):
     llm = CompletionOnlyLLM()
 
@@ -481,6 +527,36 @@ def test_openai_cached_tokens_are_subtracted_from_the_input(spans):
     assert llm_span.attributes[LLMAttributes.INPUT_TOKENS] == 60
     assert llm_span.attributes[LLMAttributes.CACHE_READ_TOKENS] == 40
     assert llm_span.attributes[LLMAttributes.OUTPUT_TOKENS] == 40
+
+
+def test_the_alias_the_caller_typed_survives_the_resolved_id(spans):
+    """Parity with the provider patches: ``model_dict`` is what the caller
+    configured, ``raw.model`` what the provider says it ran. The resolved id
+    keys the span; the alias rides alongside."""
+
+    class ResolvedLLM(FakeLLM):
+        @llm_chat_callback()
+        def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+            return response(raw=Raw(model="fake-1-20250101"))
+
+    with ags.conversation("c-alias"):
+        with ags.turn():
+            ResolvedLLM().chat(HI)
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1-20250101"
+    assert llm_span.attributes[LLMAttributes.REQUESTED_MODEL] == "fake-1"
+
+
+def test_no_alias_attribute_when_the_two_agree(spans):
+    """Present only on the difference, exactly as the patches record it."""
+    with ags.conversation("c-agree"):
+        with ags.turn():
+            FakeLLM().chat(HI)
+
+    (llm_span,) = llm_spans(spans)
+    assert llm_span.attributes[LLMAttributes.REQUEST_MODEL] == "fake-1"
+    assert LLMAttributes.REQUESTED_MODEL not in llm_span.attributes
 
 
 def test_anthropic_cache_counts_are_left_disjoint(spans):

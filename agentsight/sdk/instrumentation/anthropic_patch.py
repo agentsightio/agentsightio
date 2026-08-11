@@ -55,6 +55,11 @@ _COUNTERS = (
     "cache_creation_input_tokens",
 )
 
+#: Set by ``with_raw_response`` / ``with_streaming_response`` before they call
+#: the very same ``create`` we patched — the same Stainless plumbing, and the
+#: same header name, as the OpenAI SDK.
+_RAW_RESPONSE_HEADER = "X-Stainless-Raw-Response"
+
 
 def _record(
     usage: Any,
@@ -106,6 +111,11 @@ class _StreamRecorder:
 
     def __init__(self, model: Optional[str], start_time_ns: int, logger: Any):
         self._model = model
+        #: Kept separately because ``_model`` is overwritten by the resolved id
+        #: the moment ``message_start`` arrives. Without a second slot the alias
+        #: the caller typed is lost on every streamed call, which is most of an
+        #: agent's traffic.
+        self._requested_model = model
         self._start_time_ns = start_time_ns
         self._logger = logger
         self._usage: Dict[str, int] = {}
@@ -149,13 +159,18 @@ class _StreamRecorder:
             return
         self._finished = True
         _record(
-            self._usage,
+            # Empty means no usage event ever arrived. It has to reach _record
+            # as None, not as {}, or the stream is recorded as a complete call
+            # that really did bill 0/0 — and the backend prices that as an
+            # authoritative $0 instead of counting it unreported.
+            self._usage or None,
             self._model,
             self._start_time_ns,
             now_ns(),
             True,
             self._logger,
             error=self._error,
+            requested_model=self._requested_model,
         )
 
 
@@ -175,11 +190,11 @@ def _iterator_of(stream: Any, logger: Any) -> Any:
     returns True only for ``MessageStream``.
 
     ``None`` means leave this object alone. Either it is already instrumented,
-    or it is a ``with_raw_response`` APIResponse — whose body the user has not
-    read yet, and reading it here would consume it — or a stream from a release
-    that renamed the attribute. The last two record nothing at all rather than
-    zero: a span reporting no tokens would be indistinguishable from a real
-    call that cost nothing.
+    or it is a ``with_streaming_response`` body the user has not entered yet —
+    ``with_raw_response`` no longer lands here, :func:`_unwrap_raw` opens it
+    first — or a stream from a release that renamed the attribute. The last two
+    record nothing at all rather than zero: a span reporting no tokens would be
+    indistinguishable from a real call that cost nothing.
     """
     if already_patched(stream):
         # Two patch points can reach one stream: ``create(stream=True)`` and
@@ -324,6 +339,46 @@ def _watching(logger: Any) -> bool:
         return False
 
 
+def _raw_marker(kwargs: dict) -> Optional[str]:
+    """``"true"`` for ``with_raw_response``, ``"stream"`` for
+    ``with_streaming_response``, ``None`` for an ordinary call.
+
+    The provider sets the same header for both wrappers and distinguishes them
+    by value, which matters here because only one of the two is safe to open
+    (see :func:`_unwrap_raw`).
+    """
+    return (kwargs.get("extra_headers") or {}).get(_RAW_RESPONSE_HEADER)
+
+
+def _unwrap_raw(result: Any, kwargs: dict, logger: Any) -> Any:
+    """The parsed body behind a ``with_raw_response`` result.
+
+    An APIResponse has neither a ``usage`` nor an ``_iterator``, so before this
+    unwrap a raw-wrapped call recorded nothing at all — no span, no tokens, no
+    cost, no error. ``parse()`` makes it visible without changing anything the
+    caller can observe: it memoises, so their own ``parse()`` returns the
+    identical object, and on a ``stream=True`` request it reads no bytes — it
+    builds the lazy ``Stream`` over the still-unread response, which is exactly
+    the shape :func:`_watch_stream` instruments.
+
+    ``"raw"`` is the successor wrapper generation's spelling of ``"true"``,
+    with the same ``parse()`` contract; unused by the resources today, accepted
+    now so a release that migrates does not reopen this hole silently.
+    ``with_streaming_response`` (``"stream"``) stays untouched: reading that
+    body belongs to the user, and its ``parse()`` reads a JSON body whole —
+    the exact thing that wrapper exists to let them avoid.
+
+    Anything unexpected leaves the result alone and costs only the telemetry.
+    """
+    if _raw_marker(kwargs) not in ("true", "raw"):
+        return result
+    try:
+        return result.parse()
+    except Exception:
+        logger.debug("agentsight: could not read raw response body", exc_info=True)
+        return result
+
+
 def _capture(
     result: Any,
     kwargs: dict,
@@ -335,8 +390,10 @@ def _capture(
     """A Message reports its usage on the spot; a Stream reports it as it goes.
 
     Keyed on the result rather than on ``stream=``, which defaults to the
-    ``Omit`` sentinel and is absent from ``parse`` altogether.
+    ``Omit`` sentinel and is absent from ``parse`` altogether. Raw wrappers are
+    opened first, so both branches see the body they expect.
     """
+    result = _unwrap_raw(result, kwargs, logger)
     model = _requested_model(kwargs)
     usage = getattr(result, "usage", None)
     if usage is None:

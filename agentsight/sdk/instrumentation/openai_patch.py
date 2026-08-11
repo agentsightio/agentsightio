@@ -41,6 +41,16 @@ _RAW_RESPONSE_HEADER = "X-Stainless-Raw-Response"
 #: tokens, which is the correct thing to lose.
 _INJECTION_SAFE = True
 
+#: Said once, at WARNING, whenever the latch above closes. Streamed calls keep
+#: their span, their duration and their errors; what they lose is the token
+#: counts, and a silent loss of those is a bill that stops being explainable.
+_INTERNALS_CHANGED = (
+    "agentsight: this openai release does not expose the stream internals the "
+    "SDK reads, so streamed calls will report no token usage. Their spans, "
+    "durations and errors are unaffected, as is every non-streamed call. "
+    "Upgrading agentsight is the fix; please report it if there is not one yet."
+)
+
 
 # ---------------------------------------------------------------------------
 # Where the usage lives, per endpoint family
@@ -176,6 +186,11 @@ class _StreamRecorder:
     ):
         self._surface = surface
         self._model = model
+        #: Kept separately because ``_model`` is overwritten by the resolved id
+        #: as soon as a chunk carries one. Without a second slot the alias the
+        #: caller typed is lost on every streamed call, which is most of an
+        #: agent's traffic.
+        self._requested_model = model
         self._start_time_ns = start_time_ns
         self._logger = logger
         self._usage: Any = None
@@ -229,6 +244,7 @@ class _StreamRecorder:
             True,
             self._logger,
             error=self._error,
+            requested_model=self._requested_model,
         )
 
 
@@ -285,9 +301,14 @@ def _iterator_of(stream: Any, logger: Any) -> Any:
     global _INJECTION_SAFE
 
     source = getattr(stream, "_iterator", None)
-    if source is None:
+    if source is None and _INJECTION_SAFE:
+        # The latch is one-way, so this branch is the transition and the
+        # warning is therefore once per process. It is a warning rather than a
+        # debug line because the symptom — every streamed call reporting zero
+        # tokens — is otherwise indistinguishable from an agent that stopped
+        # making calls, and nothing else in the process will ever mention it.
         _INJECTION_SAFE = False
-        logger.debug("agentsight: openai stream internals changed; not instrumented")
+        logger.warning(_INTERNALS_CHANGED)
     return source
 
 
@@ -419,34 +440,40 @@ def _raw_marker(kwargs: dict) -> Optional[str]:
 def _deferred_body(kwargs: dict) -> bool:
     """Whether the response body is one we must not touch.
 
-    ``with_streaming_response`` hands back a response the user has not read
-    yet, and injecting ``stream_options`` into a stream we never get to see
-    would leak the usage chunk into their loop. Those we leave alone entirely.
+    Only ``with_streaming_response`` qualifies. It hands back a body whose
+    reading belongs to the user — its ``parse()`` reads a JSON body whole,
+    eagerly, which is the exact thing that wrapper exists to let them avoid —
+    and injecting ``stream_options`` into a stream we never get to instrument
+    would leak the usage chunk into their loop. Those we leave alone entirely,
+    and they are the one raw surface still invisible to telemetry.
 
-    ``with_raw_response`` on a non-streaming call is *not* that case: by the
-    time we see the result the body is already in memory, and ``parse()``
-    caches, so reading it changes nothing the caller can observe. Treating it
-    as untouchable was silent and expensive — ``langchain-openai`` routes
-    every chat call through ``with_raw_response``, and the LangChain handler
-    stands down on LLM spans for a provider this patch is supposed to cover,
-    so the default configuration recorded neither. No span, no tokens, no
+    ``with_raw_response`` is not deferred, ``stream=True`` included. A
+    non-streaming body is already in memory by the time we see it, and on a
+    streamed request ``parse()`` reads no bytes — it builds the lazy ``Stream``
+    over the unread response, memoised, so the caller's own ``parse()``
+    returns the identical object with our instrumentation already on it.
+    Treating either as untouchable was silent and expensive —
+    ``langchain-openai`` routes every chat call through ``with_raw_response``,
+    streamed ones too when ``include_response_headers=True``, and the
+    LangChain handler stands down on LLM spans for a provider this patch is
+    supposed to cover, so those calls recorded neither. No span, no tokens, no
     cost, no error: exactly the invisible loss the failure channel exists to
     prevent.
     """
-    marker = _raw_marker(kwargs)
-    if marker is None:
-        return False
-    return marker == "stream" or bool(kwargs.get("stream"))
+    return _raw_marker(kwargs) == "stream"
 
 
 def _unwrap_raw(result: Any, kwargs: dict, logger: Any) -> Any:
     """The parsed body behind a ``with_raw_response`` result.
 
     ``parse()`` memoises, so the caller's own ``parse()`` returns the identical
-    object afterwards — this is a read, not a consumption. Anything unexpected
-    leaves the result untouched and costs only the usage numbers.
+    object afterwards — this is a read, not a consumption. ``"raw"`` is the
+    successor wrapper generation's spelling of ``"true"``, with the same
+    ``parse()`` contract; unused by the resources today, accepted now so a
+    release that migrates does not silently reopen this hole. Anything
+    unexpected leaves the result untouched and costs only the usage numbers.
     """
-    if _raw_marker(kwargs) != "true":
+    if _raw_marker(kwargs) not in ("true", "raw"):
         return result
     try:
         return result.parse()
@@ -497,11 +524,15 @@ def _wrap_create(original: Callable, surface: _Surface, stream_type, logger: Any
 
         try:
             model = _requested_model(kwargs)
-            if isinstance(result, stream_type):
+            # Unwrapped before the dispatch, not inside the non-stream branch:
+            # a raw-wrapped stream is a Stream in an APIResponse coat, and
+            # dispatching on the coat would send it below — a "blocking" span
+            # with zero tokens for a call that streamed.
+            body = _unwrap_raw(result, kwargs, logger)
+            if isinstance(body, stream_type):
                 recorder = _StreamRecorder(surface, model, start_time_ns, logger)
-                _watch_stream(result, recorder, injected, logger)
+                _watch_stream(body, recorder, injected, logger)
             else:
-                body = _unwrap_raw(result, kwargs, logger)
                 _record_usage(
                     getattr(body, "usage", None),
                     getattr(body, "model", None) or model,
@@ -555,11 +586,11 @@ def _wrap_async_create(original: Callable, surface: _Surface, stream_type, logge
 
         try:
             model = _requested_model(kwargs)
-            if isinstance(result, stream_type):
+            body = _unwrap_raw(result, kwargs, logger)
+            if isinstance(body, stream_type):
                 recorder = _StreamRecorder(surface, model, start_time_ns, logger)
-                _watch_async_stream(result, recorder, injected, logger)
+                _watch_async_stream(body, recorder, injected, logger)
             else:
-                body = _unwrap_raw(result, kwargs, logger)
                 _record_usage(
                     getattr(body, "usage", None),
                     getattr(body, "model", None) or model,
@@ -688,7 +719,11 @@ def install_openai(logger: Any) -> None:
 
     _INJECTION_SAFE = _injection_is_safe(Stream, AsyncStream)
     if not _INJECTION_SAFE:
-        logger.debug("agentsight: openai stream internals changed; not instrumented")
+        # Install runs once per process, so this is a one-shot too. Said here
+        # as well as at the runtime latch because this is the earlier and more
+        # useful moment: before the first request, while somebody is still
+        # watching the startup logs.
+        logger.warning(_INTERNALS_CHANGED)
 
     def patch_sync(owner, name, surface):
         _patch(owner, name, lambda fn: _wrap_create(fn, surface, Stream, logger))

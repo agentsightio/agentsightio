@@ -369,6 +369,27 @@ def call(**overrides):
     return dict({"model": "claude-sonnet-5", "max_tokens": 64, "messages": []}, **overrides)
 
 
+#: What ``with_raw_response`` stamps on the request before calling ``create``.
+#: A literal rather than the patch's constant on purpose: it is the wire name
+#: that has to match, not two copies of one variable agreeing with each other.
+RAW_HEADER = {"X-Stainless-Raw-Response": "true"}
+
+
+class RawResponse:
+    """``LegacyAPIResponse``, reduced to the two properties the patch relies
+    on: ``parse()`` memoises, and on a ``stream=True`` request it reads no
+    bytes — the body is built lazily on the first call."""
+
+    def __init__(self, build):
+        self._build = build
+        self._parsed = None
+
+    def parse(self):
+        if self._parsed is None:
+            self._parsed = self._build()
+        return self._parsed
+
+
 # ---------------------------------------------------------------------------
 # 1. Double counting
 # ---------------------------------------------------------------------------
@@ -509,6 +530,75 @@ def test_streamed_output_is_overwritten_not_summed(anthropic_module, spans):
 
     # deltas of 5 then 42 are cumulative totals: not 47, and not 1+5+42.
     assert tokens(llm_spans(spans)[0])["output"] == 42
+
+
+def test_a_stream_that_never_reported_usage_is_marked_unknown(anthropic_module, spans):
+    """0/0 on a stream that carried no usage event is an *unknown*, not a zero.
+
+    A stream can end without one — it died before ``message_start``, or was
+    closed before anything was read. The recorder's accumulator is a dict, so
+    the "nothing arrived" case is an empty dict rather than None, and the
+    marker has to survive that: without it the backend prices the row as an
+    authoritative $0 and ``unreported_calls`` stays at zero, which is the one
+    number that would have said the counts are not to be trusted.
+    """
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    client.reply = lambda: anthropic_module.Stream([text_delta("hi")])
+
+    with ags.conversation("c"):
+        assert [e.delta.text for e in client.create(**call(stream=True))] == ["hi"]
+
+    attributes = llm_spans(spans)[0].attributes
+    assert attributes[LLMAttributes.INPUT_TOKENS] == 0
+    assert attributes[LLMAttributes.OUTPUT_TOKENS] == 0
+    assert attributes[LLMAttributes.USAGE_REPORTED] is False
+
+
+def test_a_stream_that_reported_usage_carries_no_unknown_marker(anthropic_module, spans):
+    """The marker's absence is the statement that the counts are real."""
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    client.reply = lambda: anthropic_module.Stream(EVENTS)
+
+    with ags.conversation("c"):
+        list(client.create(**call(stream=True)))
+
+    assert LLMAttributes.USAGE_REPORTED not in llm_spans(spans)[0].attributes
+
+
+def test_a_streamed_call_keeps_the_alias_the_caller_asked_for(anthropic_module, spans):
+    """``message_start`` overwrites the model with the dated snapshot that ran.
+
+    That id is the one cost is keyed on and must not move — but overwriting it
+    used to be the end of the alias the caller actually typed, on every
+    streamed call. "Which of my model aliases is expensive" is unanswerable
+    without it, and streaming is most of an agent's traffic.
+    """
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    client.reply = lambda: anthropic_module.Stream(EVENTS)
+
+    with ags.conversation("c"):
+        list(client.create(**call(model="claude-sonnet-5", stream=True)))
+
+    attributes = llm_spans(spans)[0].attributes
+    assert attributes[LLMAttributes.REQUEST_MODEL] == "claude-sonnet-5-20250101"
+    assert attributes[LLMAttributes.REQUESTED_MODEL] == "claude-sonnet-5"
+
+
+def test_no_requested_model_on_a_stream_when_the_two_agree(anthropic_module, spans):
+    """Present only on the difference, exactly as on the non-streamed path."""
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    client.reply = lambda: anthropic_module.Stream(
+        [message_start(model="claude-sonnet-5", input_tokens=10, output_tokens=1)]
+    )
+
+    with ags.conversation("c"):
+        list(client.create(**call(model="claude-sonnet-5", stream=True)))
+
+    assert LLMAttributes.REQUESTED_MODEL not in llm_spans(spans)[0].attributes
 
 
 # ---------------------------------------------------------------------------
@@ -886,11 +976,9 @@ def test_an_event_that_cannot_be_read_does_not_break_iteration(anthropic_module,
 def test_an_unrecognised_result_produces_no_span_and_is_returned_intact(
     anthropic_module, spans
 ):
-    """A ``with_raw_response`` APIResponse has neither usage nor an iterator.
-
-    Reading it would consume a body the user has not read, and a zero-token
-    span is indistinguishable from a real call that cost nothing.
-    """
+    """No raw marker, no usage, no iterator: a result from a release this
+    patch does not know. It records nothing rather than zero — a zero-token
+    span would be indistinguishable from a real call that cost nothing."""
     install_anthropic(LOGGER)
     client = anthropic_module.Messages()
     opaque = SimpleNamespace(status_code=200, headers={})
@@ -901,6 +989,111 @@ def test_an_unrecognised_result_produces_no_span_and_is_returned_intact(
 
     assert llm_spans(spans) == []
     assert not hasattr(opaque, "_iterator")
+
+
+# ---------------------------------------------------------------------------
+# 5b. Raw response wrappers
+# ---------------------------------------------------------------------------
+
+
+def test_a_raw_response_is_recorded_and_the_caller_keeps_the_wrapper(
+    anthropic_module, spans
+):
+    """``with_raw_response`` marks the call with a header and hands back an
+    APIResponse with neither usage nor iterator — which used to record nothing
+    at all: no span, no tokens, no cost. The patch now opens it with the
+    memoising ``parse()``, so ours and the caller's are one read of one body,
+    and what the caller receives is still the wrapper they asked for."""
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    message = SimpleNamespace(model="claude-sonnet-5-20250101", usage=usage(10, 5))
+    wrapper = RawResponse(lambda: message)
+    client.reply = wrapper
+
+    with ags.conversation("c"):
+        result = client.create(**call(extra_headers=dict(RAW_HEADER)))
+
+    assert result is wrapper
+    assert result.parse() is message
+    (llm,) = llm_spans(spans)
+    assert tokens(llm)["model"] == "claude-sonnet-5-20250101"
+    assert tokens(llm)["input"] == 10
+    assert tokens(llm)["output"] == 5
+
+
+def test_a_raw_wrapped_stream_is_watched_through_the_callers_own_parse(
+    anthropic_module, spans
+):
+    """On a ``stream=True`` raw call ``parse()`` reads no bytes — it builds
+    the lazy Stream, memoised, so the object the caller eventually iterates is
+    the one the patch already instrumented."""
+    install_anthropic(LOGGER)
+    client = anthropic_module.Messages()
+    wrapper = RawResponse(lambda: anthropic_module.Stream(EVENTS))
+    client.reply = wrapper
+
+    with ags.conversation("c"):
+        result = client.create(**call(stream=True, extra_headers=dict(RAW_HEADER)))
+        assert result is wrapper
+        assert result.parse() is result.parse()
+        assert list(result.parse()) == EVENTS
+
+    assert tokens(llm_spans(spans)[0]) == STREAMED
+
+
+def test_an_async_raw_wrapped_stream_is_watched_too(anthropic_module, spans):
+    install_anthropic(LOGGER)
+    client = anthropic_module.AsyncMessages()
+    wrapper = RawResponse(lambda: anthropic_module.AsyncStream(EVENTS))
+    client.reply = wrapper
+
+    async def go():
+        with ags.conversation("c"):
+            result = await client.create(
+                **call(stream=True, extra_headers=dict(RAW_HEADER))
+            )
+            assert result is wrapper
+            assert [event async for event in result.parse()] == EVENTS
+
+    asyncio.run(go())
+    assert tokens(llm_spans(spans)[0]) == STREAMED
+
+
+def test_a_raw_wrapper_that_will_not_open_costs_only_the_telemetry(
+    anthropic_module, spans
+):
+    """A ``parse()`` that raises must never break the user's call."""
+    install_anthropic(LOGGER)
+
+    class Sealed:
+        def parse(self):
+            raise RuntimeError("no body yet")
+
+    client = anthropic_module.Messages()
+    sealed = Sealed()
+    client.reply = sealed
+
+    with ags.conversation("c"):
+        assert client.create(**call(extra_headers=dict(RAW_HEADER))) is sealed
+
+    assert llm_spans(spans) == []
+
+
+def test_a_streaming_response_wrapper_is_never_opened(anthropic_module, spans):
+    """Marker ``"stream"`` is ``with_streaming_response``: reading that body
+    belongs to the user, so it stays the one raw surface left alone."""
+    install_anthropic(LOGGER)
+    opened = []
+    wrapper = RawResponse(lambda: opened.append("opened"))
+    client = anthropic_module.Messages()
+    client.reply = wrapper
+
+    with ags.conversation("c"):
+        marker = {"X-Stainless-Raw-Response": "stream"}
+        assert client.create(**call(extra_headers=marker)) is wrapper
+
+    assert opened == []
+    assert llm_spans(spans) == []
 
 
 # ---------------------------------------------------------------------------
