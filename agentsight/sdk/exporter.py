@@ -5,6 +5,7 @@ can reach the user's call stack. It follows the rule from design §10: log and
 return ``FAILURE``, never raise.
 """
 
+import gzip
 import json
 import time
 from collections import OrderedDict
@@ -282,6 +283,15 @@ class AgentSightSpanExporter(SpanExporter):
     #: ground and somebody has to act on it. It sits below 1.0 so the warning
     #: arrives while the loss is still avoidable rather than after.
     _QUEUE_WARN_LIMIT = 0.8
+    #: Serialized batches at or under this many bytes are sent as-is. Span
+    #: batches gzip at 10-30x — most of every span is byte-identical to its
+    #: neighbours by design — but below this line the batch already fits in
+    #: a couple of TCP segments and the compression CPU, spent on the single
+    #: export thread, buys nothing that matters.
+    _COMPRESS_MIN_BYTES = 8 * 1024
+    #: Level 6 (zlib's own default). Level 9 was measured to buy almost
+    #: nothing on this data and costs visibly more CPU on that same thread.
+    _COMPRESS_LEVEL = 6
     #: Seconds between dropped-batch warnings. A down backend at a 1s flush
     #: interval would otherwise emit one warning per second for as long as
     #: the outage lasts — a log flood that says the same thing every time
@@ -414,12 +424,40 @@ class AgentSightSpanExporter(SpanExporter):
             return SpanExportResult.FAILURE
 
     def _post(self, payload: Dict[str, Any]) -> SpanExportResult:
+        # Serialized (and possibly compressed) ONCE, before the retry loop:
+        # every attempt sends the same bytes, and a retry must not pay the
+        # CPU again for an answer that did not depend on the encoding.
+        # ``allow_nan=False`` matches what ``requests``' own ``json=`` kwarg
+        # did here before — strict JSON, refused locally rather than shipped
+        # to a parser that rejects it anyway. ``Content-Type`` stays correct
+        # because it is pinned on the session headers in ``__init__``.
+        body = json.dumps(payload, allow_nan=False).encode("utf-8")
+        headers: Optional[Dict[str, str]] = None
+
+        # Compression is feature-detected, never assumed — decided
+        # deliberately (audit F-04, option 1). This SDK is published and
+        # versioned, and a self-hosted backend may lag it; a gzipped batch
+        # sent to a backend that cannot decode it is a terminal 400 in the
+        # loop below, i.e. silent, total data loss for whoever upgraded the
+        # SDK first. So the exporter compresses only after the key preflight
+        # has seen ``GET /api/me/`` advertise ``gzip-ingest``. Every fallback
+        # — preflight disabled, still in flight, unreachable, or a backend
+        # that predates the capability list — leaves batches uncompressed,
+        # which every backend accepts. The cost of that caution is only the
+        # first second or two of a process's batches travelling fat.
+        if (
+            len(body) > self._COMPRESS_MIN_BYTES
+            and _settings.has_capability(_settings.GZIP_INGEST)
+        ):
+            body = gzip.compress(body, compresslevel=self._COMPRESS_LEVEL)
+            headers = {"Content-Encoding": "gzip"}
+
         last_failure = "unknown"
         for attempt in range(self._MAX_RETRIES):
             pause: Optional[float] = None
             try:
                 response = self._session.post(
-                    self._url, json=payload, timeout=self._TIMEOUT
+                    self._url, data=body, headers=headers, timeout=self._TIMEOUT
                 )
                 if response.status_code in (200, 201):
                     self.last_response = response.json() if response.content else {}

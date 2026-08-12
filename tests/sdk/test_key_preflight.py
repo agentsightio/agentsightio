@@ -244,6 +244,44 @@ def test_a_malformed_environment_list_keeps_the_fallback_pair_quietly(
     assert [r for r in recorded.records if r.levelno > logging.DEBUG] == []
 
 
+def test_an_advertised_capability_is_learned(requests_mock):
+    # "gzip-ingest" is what lets the exporter start compressing batches
+    # (audit F-04); until the preflight has seen it, it must read as absent.
+    identity = _me_with_environments("production", "development")
+    identity["capabilities"] = ["gzip-ingest"]
+    requests_mock.get(ME, json=identity)
+    assert not _settings.has_capability(_settings.GZIP_INGEST)  # before
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.has_capability(_settings.GZIP_INGEST)
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [None, 42, {"gzip-ingest": True}, [None, 42, ""], "gzip-ingest"],
+)
+def test_a_malformed_capability_list_is_tolerated_quietly(
+    recorded, requests_mock, capabilities
+):
+    # Same contract as the environments: an older or differently-shaped
+    # backend must not turn a successful preflight into a logged failure —
+    # the exporter just keeps sending plain JSON, which always works.
+    #
+    # The dict and the bare string are the nasty ones: both ARE iterable
+    # (keys; characters), so anything but a strict shape check would learn a
+    # capability nobody advertised — and that turns into an encoding the
+    # backend cannot decode.
+    identity = _me_with_environments("production", "development")
+    identity["capabilities"] = capabilities
+    requests_mock.get(ME, json=identity)
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert not _settings.has_capability(_settings.GZIP_INGEST)
+    assert [r for r in recorded.records if r.levelno > logging.DEBUG] == []
+
+
 @pytest.mark.parametrize(
     "response",
     [

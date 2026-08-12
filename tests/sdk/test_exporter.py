@@ -7,6 +7,8 @@ separately — nothing in ``tests/api/`` covers them.
 """
 
 import email.utils
+import gzip
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -327,6 +329,97 @@ def test_server_errors_are_retried(exporter, mock, no_sleep):
 
     assert exporter._post(PAYLOAD) is SpanExportResult.SUCCESS
     assert mock.call_count == 2
+
+
+# -- gzip (audit F-04) -------------------------------------------------------
+#
+# Batches gzip 10-30x, but compression is feature-detected, never assumed: a
+# gzipped batch against a backend that cannot decode it is a terminal 400
+# above — silent data loss for whoever upgraded the SDK before the backend.
+# The exporter therefore compresses only after the key preflight has seen
+# GET /api/me/ advertise "gzip-ingest", and only above the size line where
+# the CPU is worth it.
+
+
+def _payload_of_roughly(size):
+    """A payload whose serialized form is comfortably past `size` bytes."""
+    return {
+        "sdk": PAYLOAD["sdk"],
+        "conversations": [
+            {"conversation_id": "wa-1",
+             "spans": [{"span_id": "s-1", "attributes": {"pad": "x" * size}}]}
+        ],
+    }
+
+
+@pytest.fixture
+def gzip_capable():
+    from agentsight import _settings
+
+    _settings.learn_capabilities([_settings.GZIP_INGEST])
+
+
+def test_a_large_batch_is_gzipped_once_the_backend_advertises_it(
+    exporter, mock, gzip_capable
+):
+    mock.post(INGEST, status_code=201, json={})
+    payload = _payload_of_roughly(20_000)
+
+    assert exporter._post(payload) is SpanExportResult.SUCCESS
+
+    sent = mock.last_request
+    assert sent.headers["Content-Encoding"] == "gzip"
+    assert sent.headers["Content-Type"] == "application/json"
+    # The wire actually shrank, and what travelled inflates back to exactly
+    # the dict build_payload produced — compression is transport, not format.
+    assert len(sent.body) < 20_000
+    assert json.loads(gzip.decompress(sent.body)) == payload
+
+
+def test_a_small_batch_is_not_worth_the_cpu(exporter, mock, gzip_capable):
+    mock.post(INGEST, status_code=201, json={})
+
+    exporter._post(PAYLOAD)
+
+    sent = mock.last_request
+    assert "Content-Encoding" not in sent.headers
+    assert json.loads(sent.body) == PAYLOAD
+
+
+def test_no_capability_means_no_compression_however_large(exporter, mock):
+    # The preflight has not confirmed gzip-ingest: maybe it is disabled,
+    # maybe it has not landed yet, maybe the backend predates it. All three
+    # must produce the one encoding every backend accepts.
+    mock.post(INGEST, status_code=201, json={})
+
+    exporter._post(_payload_of_roughly(20_000))
+
+    assert "Content-Encoding" not in mock.last_request.headers
+
+
+def test_retries_resend_the_same_bytes_without_recompressing(
+    exporter, mock, no_sleep, gzip_capable, monkeypatch
+):
+    # Compressing inside the retry loop would spend the CPU once per attempt
+    # for identical output; the loop must resend what it already has.
+    import agentsight.sdk.exporter as exporter_module
+
+    compressions = []
+    real_compress = exporter_module.gzip.compress
+    monkeypatch.setattr(
+        exporter_module.gzip,
+        "compress",
+        lambda data, compresslevel: compressions.append(1) or real_compress(
+            data, compresslevel=compresslevel
+        ),
+    )
+    mock.post(INGEST, [{"status_code": 502}, {"status_code": 201, "json": {}}])
+
+    assert exporter._post(_payload_of_roughly(20_000)) is SpanExportResult.SUCCESS
+
+    assert len(compressions) == 1
+    first, second = mock.request_history
+    assert first.body == second.body
 
 
 # -- block-level 400 diagnostics --------------------------------------------

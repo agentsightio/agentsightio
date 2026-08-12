@@ -34,6 +34,18 @@ def fresh_learned_environments():
     _settings._reset_environments_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def fresh_learned_capabilities():
+    """Same isolation, same reason, for the backend-capability set — a test
+    that teaches the process "gzip-ingest" must not leave every later
+    exporter test silently compressing."""
+    from agentsight import _settings
+
+    _settings._reset_capabilities_for_tests()
+    yield
+    _settings._reset_capabilities_for_tests()
+
+
 @pytest.fixture
 def valid_api_key():
     """Valid API key for testing."""

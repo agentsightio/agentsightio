@@ -109,6 +109,60 @@ def _reset_environments_for_tests() -> None:
         _allowed_environments.update(KNOWN_ENVIRONMENTS)
 
 
+#: Optional backend behaviours, learned the same way the environments are:
+#: ``GET /api/me/`` advertises them, the key preflight records them here, and
+#: nothing is assumed until it has. ``gzip-ingest`` is the one that exists
+#: today — ``POST /api/ingest/`` accepts ``Content-Encoding: gzip``.
+GZIP_INGEST = "gzip-ingest"
+
+_capabilities_lock = threading.Lock()
+_capabilities: "set[str]" = set()
+
+
+def learn_capabilities(names: Iterable[object]) -> None:
+    """Record behaviours the backend advertised on ``GET /api/me/``.
+
+    Fed by the key preflight. Additive only, and strict about shape: the
+    published wire form is a list of strings, and only that teaches anything.
+    A backend that shapes the field differently — a dict, a bare string
+    (iterable, character by character!), ``None`` — must not enrich the set,
+    because a capability learned by accident turns into an encoding some
+    backend cannot decode. Nothing here raises: this runs on a thread nobody
+    joins, and the module's contract forbids it.
+    """
+    if isinstance(names, (str, bytes, dict)):
+        return
+    try:
+        cleaned = {
+            name.strip().lower()
+            for name in names
+            if isinstance(name, str) and name.strip()
+        }
+    except Exception:
+        return
+    if not cleaned:
+        return
+    with _capabilities_lock:
+        _capabilities.update(cleaned)
+
+
+def has_capability(name: str) -> bool:
+    """Whether the preflight has seen the backend advertise ``name``.
+
+    ``False`` means *not confirmed*, not *absent*: with the preflight
+    disabled, unreachable, or talking to a backend that predates the
+    capability list, this stays ``False`` — so a caller branching on it must
+    fall back to behaviour every backend accepts.
+    """
+    with _capabilities_lock:
+        return name in _capabilities
+
+
+def _reset_capabilities_for_tests() -> None:
+    with _capabilities_lock:
+        _capabilities.clear()
+
+
 def resolve_api_key(explicit: Optional[str] = None) -> Optional[str]:
     """An explicit key wins over the environment. Blank is the same as absent."""
     key = explicit if explicit is not None else os.getenv(ENV_API_KEY)

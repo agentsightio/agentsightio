@@ -362,6 +362,16 @@ def _verify_key(api_key: str, endpoint: str) -> None:
     except Exception as exc:
         logger.debug("key preflight could not read the environments: %s", exc)
 
+    # The optional behaviours this backend advertises — "gzip-ingest" is what
+    # lets the exporter start compressing batches. Learned here rather than
+    # assumed because the SDK is published and a self-hosted backend can lag
+    # it; see AgentSightSpanExporter._post for the full reasoning. Its own
+    # try/except for the same reason as the environments above.
+    try:
+        _settings.learn_capabilities((identity or {}).get("capabilities") or ())
+    except Exception as exc:
+        logger.debug("key preflight could not read the capabilities: %s", exc)
+
     try:
         role = (identity or {}).get("role")
         agent = (identity or {}).get("agent_name") or (identity or {}).get("agent_id")
