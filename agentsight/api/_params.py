@@ -37,6 +37,7 @@ CONVERSATION_FILTERS = frozenset(
         "env",
         "environment",
         "feedback_sentiment",
+        "has_action",
         "has_feedback",
         "has_messages",
         "include_deleted",

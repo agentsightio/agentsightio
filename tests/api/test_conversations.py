@@ -41,10 +41,11 @@ def test_list_full_asks_for_the_transcripts(ags, requests_mock):
 def test_booleans_are_sent_the_way_django_reads_them(ags, requests_mock):
     requests_mock.get(CONVERSATIONS, json=envelope([]))
 
-    list(ags.conversations.list(is_marked=True, has_feedback=False))
+    list(ags.conversations.list(is_marked=True, has_feedback=False, has_action=True))
 
     assert requests_mock.last_request.qs["is_marked"] == ["true"]
     assert requests_mock.last_request.qs["has_feedback"] == ["false"]
+    assert requests_mock.last_request.qs["has_action"] == ["true"]
 
 
 def test_datetimes_are_sent_as_iso_8601(ags, requests_mock):

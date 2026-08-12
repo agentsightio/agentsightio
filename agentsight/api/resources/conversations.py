@@ -51,7 +51,8 @@ class Conversations(Resource):
         Filters mirror the backend's: ``action_name``, ``conversation_id``,
         ``customer_id``, ``customer_id__icontains``, ``customer_ip_address``,
         ``device``, ``environment`` (or ``env``), ``feedback_sentiment``,
-        ``has_feedback``, ``has_messages``, ``include_deleted``, ``is_marked``,
+        ``has_action``, ``has_feedback``, ``has_messages``,
+        ``include_deleted``, ``is_marked``,
         ``language``, ``message_contains``, ``metadata``, ``metadata_key``,
         ``metadata_value``, ``name``, ``ordering``, ``search``,
         ``started_at_after``, ``started_at_before``. Datetimes and booleans are
