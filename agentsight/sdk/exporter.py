@@ -47,7 +47,9 @@ def _duration_ms(span: ReadableSpan) -> Optional[float]:
     return None
 
 
-def span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
+def span_to_dict(
+    span: ReadableSpan, resource: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """One span, complete, in the shape ``POST /api/ingest/`` expects.
 
     Everything the OpenTelemetry span carries is serialized — not just the
@@ -58,6 +60,13 @@ def span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
 
     Fields the projectors use are hoisted to the top level; the rest live under
     ``otel`` so the two never collide as either side evolves.
+
+    ``resource`` is the span's resource attributes, already as a dict. The
+    resource is process-wide and immutable, so ``build_payload`` builds the
+    dict once per export call and passes it in rather than paying the copy per
+    span; spans sharing a resource then share one dict object, which is safe
+    because the payload is serialized to JSON and never mutated. Left unset,
+    the dict is built here — same output, one copy per call.
     """
     ctx = span.get_span_context()
     # ReadableSpan types the context as Optional because one can be built
@@ -96,7 +105,11 @@ def span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
         "is_remote": bool(ctx.is_remote),
         "status_description": status_description,
         "links": links,
-        "resource": dict(getattr(span.resource, "attributes", {}) or {}),
+        "resource": (
+            dict(getattr(span.resource, "attributes", {}) or {})
+            if resource is None
+            else resource
+        ),
         "dropped": {
             "attributes": getattr(span, "dropped_attributes", 0),
             "events": getattr(span, "dropped_events", 0),
@@ -163,6 +176,17 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
     inside it. The wire block is ours to shape, so it is shaped here.
     """
     conversations: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    #: conversation_id -> the raw metadata value last parsed for that block.
+    #: Every span in a conversation carries the same serialized document, so
+    #: without this the same string is parsed once per span. A local dict, not
+    #: a key on ``block``: the block is serialized straight to JSON and ingest
+    #: rejects fields it does not know.
+    last_raw: Dict[str, Any] = {}
+    #: id(resource) -> its attributes as a dict, built once per export call.
+    #: In practice one process has one resource, so this is one entry. Keyed
+    #: by identity, which is safe here because the spans in hand keep their
+    #: resources alive for the duration of the call.
+    resources: Dict[int, Dict[str, Any]] = {}
 
     for span in spans:
         attributes = span.attributes or {}
@@ -178,12 +202,23 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
         for kwarg, attribute in ConversationAttributes.BY_KWARG.items():
             if attribute in attributes:
                 block[kwarg] = attributes[attribute]
-        if ConversationAttributes.METADATA in attributes:
-            block["metadata"] = _as_object(
-                attributes[ConversationAttributes.METADATA]
-            )
+        # Compared by raw value, not truthiness: `{}` is a real instruction
+        # ("clear it") and must still travel, while a *changed* document —
+        # richer metadata supplied mid-conversation — must still re-parse and
+        # overwrite so later spans win. Attribute values are never None, so
+        # None from .get() can only mean the attribute is absent.
+        raw = attributes.get(ConversationAttributes.METADATA)
+        if raw is not None and last_raw.get(conversation_id) != raw:
+            block["metadata"] = _as_object(raw)
+            last_raw[conversation_id] = raw
 
-        block["spans"].append(span_to_dict(span))
+        resource_key = id(span.resource)
+        resource = resources.get(resource_key)
+        if resource is None:
+            resource = dict(getattr(span.resource, "attributes", {}) or {})
+            resources[resource_key] = resource
+
+        block["spans"].append(span_to_dict(span, resource))
 
     for block in conversations.values():
         block["spans"].sort(key=lambda s: s["started_at"] or "")

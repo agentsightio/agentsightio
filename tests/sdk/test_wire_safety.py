@@ -241,6 +241,65 @@ def test_metadata_leaves_as_an_object_not_a_json_string(spans):
     assert stored == {"tier": "gold", "seats": 4}
 
 
+def test_metadata_is_parsed_once_per_distinct_document_not_once_per_span(
+    spans, monkeypatch
+):
+    """Every span carries the same serialised document by design — the
+    conversation outlives any single process, so no span can own it. Parsing
+    it back once per span cost the export thread about a quarter of its
+    payload-build budget (audit F-06); it is memoised per conversation now,
+    keyed on the raw string."""
+    from agentsight.sdk import exporter
+
+    parsed = []
+    real = exporter._as_object
+
+    def counting(value):
+        parsed.append(value)
+        return real(value)
+
+    monkeypatch.setattr(exporter, "_as_object", counting)
+
+    with ags.conversation("c-parse-once", metadata={"tier": "gold"}):
+        for _ in range(10):
+            with ags.turn():
+                ags.user_message("hi")
+
+    assert blocks(spans)["c-parse-once"]["metadata"] == {"tier": "gold"}
+    assert len(parsed) == 1
+
+
+def test_a_mid_conversation_metadata_change_still_updates_the_block(
+    spans, monkeypatch
+):
+    """The path the parse memo could break. Later spans win — a scope that
+    supplies different metadata mid-conversation must still update the block —
+    and clearing to `{}` is a real instruction that must still travel, not be
+    skipped by a truthiness test. A changed document is a changed string, so
+    each distinct document parses exactly once, whatever the span count."""
+    from agentsight.sdk import exporter
+
+    parsed = []
+    real = exporter._as_object
+
+    def counting(value):
+        parsed.append(value)
+        return real(value)
+
+    monkeypatch.setattr(exporter, "_as_object", counting)
+
+    with ags.conversation("c-meta-change", metadata={"plan": "trial"}):
+        with ags.turn():
+            ags.user_message("hi")
+        ags.update_metadata({"plan": "enterprise", "escalated": True})
+        with ags.turn():
+            ags.user_message("hello again")
+        ags.update_metadata(remove=["plan", "escalated"])
+
+    assert blocks(spans)["c-meta-change"]["metadata"] == {}
+    assert len(parsed) == 3
+
+
 def test_cutting_values_is_preferred_to_dropping_keys(spans):
     """Forty 4 KB values fit once each is cut, so nothing is lost but length.
     Shedding a key is the last resort, not the first."""
