@@ -159,7 +159,25 @@ def test_an_unknown_environment_is_dropped_so_the_batch_survives(spans, supplied
                 ags.user_message("hi")
 
     assert "environment" not in blocks(spans)["c-env-bad"]
-    assert any("is not one this agent has" in r.message for r in caplog.records)
+    assert any(
+        "is not one the SDK has been able to confirm" in r.message
+        for r in caplog.records
+    )
+
+
+def test_a_learned_custom_environment_reaches_the_wire(spans):
+    """The F-02 fix: what the key preflight learns from /api/me/ is what
+    conversation(environment=...) may send. Learned directly here — the
+    preflight path itself is covered in test_key_preflight.py."""
+    from agentsight import _settings
+
+    _settings.learn_environments(["local"])
+
+    with ags.conversation("c-env-custom", environment="local"):
+        with ags.turn():
+            ags.user_message("hi")
+
+    assert blocks(spans)["c-env-custom"]["environment"] == "local"
 
 
 def test_init_refuses_an_unknown_environment_loudly(caplog, valid_api_key):

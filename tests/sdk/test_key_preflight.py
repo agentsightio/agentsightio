@@ -14,10 +14,13 @@ thing in the suite.
 """
 
 import logging
+import threading
 
 import pytest
+import requests
 
 import agentsight as ags
+from agentsight import _settings
 from agentsight.sdk import core
 from tests.conftest import VALID_API_KEY
 
@@ -164,6 +167,179 @@ def test_a_junk_identity_body_does_not_raise(requests_mock):
     requests_mock.get(ME, json=["not", "a", "dict"])
 
     core._verify_key(VALID_API_KEY, BASE)
+
+
+# ---------------------------------------------------------------------------
+# What a successful preflight teaches the SDK (F-02)
+# ---------------------------------------------------------------------------
+
+
+def _me_with_environments(*slugs):
+    return {
+        "agent_id": 7,
+        "agent_name": "Support bot",
+        "role": "write",
+        "environments": [
+            {"id": index, "slug": slug} for index, slug in enumerate(slugs, start=1)
+        ],
+    }
+
+
+def test_a_custom_environment_from_the_backend_becomes_acceptable(requests_mock):
+    requests_mock.get(
+        ME, json=_me_with_environments("production", "development", "local")
+    )
+    assert _settings.normalize_environment("local") is None  # before it lands
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.normalize_environment("local") == "local"
+
+
+def test_an_unlearned_slug_is_still_refused_after_learning(requests_mock):
+    # Learning "local" must not open the door to everything else: an unknown
+    # slug still 400s the whole batch, so it still has to be dropped locally.
+    requests_mock.get(
+        ME, json=_me_with_environments("production", "development", "local")
+    )
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.normalize_environment("staging") is None
+
+
+def test_the_shorthand_still_normalizes_after_learning(requests_mock):
+    requests_mock.get(
+        ME, json=_me_with_environments("production", "development", "local")
+    )
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.normalize_environment("prod") == "production"
+    assert _settings.normalize_environment("dev") == "development"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"role": "write"},                                # list absent entirely
+        {"role": "write", "environments": None},
+        {"role": "write", "environments": "production"},  # wrong type
+        {"role": "write", "environments": 42},            # not even iterable
+        {"role": "write", "environments": [{"id": 1}]},   # rows without slugs
+        {"role": "write", "environments": [None, 42, "x"]},
+        ["not", "a", "dict"],
+    ],
+)
+def test_a_malformed_environment_list_keeps_the_fallback_pair_quietly(
+    recorded, requests_mock, identity
+):
+    # A backend that shapes /api/me/ differently must not turn a successful
+    # preflight into a logged failure, and must not corrupt the allowed set.
+    requests_mock.get(ME, json=identity)
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.allowed_environments() == ("development", "production")
+    assert [r for r in recorded.records if r.levelno > logging.DEBUG] == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"exc": requests.ConnectionError},
+        {"status_code": 404, "json": {"detail": "not found"}},
+        {"status_code": 500, "text": "<html>gateway</html>"},
+        {"status_code": 401, "json": {"detail": "unknown key"}},
+    ],
+)
+def test_a_preflight_that_never_answers_keeps_the_fallback_pair(
+    requests_mock, response
+):
+    requests_mock.get(ME, **response)
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _settings.allowed_environments() == ("development", "production")
+
+
+def test_a_custom_default_environment_starts_working_when_the_preflight_lands(
+    recorded, requests_mock, monkeypatch
+):
+    """The race, handled honestly: init(environment="local") resolves before
+    the preflight has answered, so init() stores the slug raw and
+    default_environment() re-resolves on every read. Early conversations fall
+    back to the agent's default; everything after the preflight carries the
+    real slug instead of it having been thrown away at startup."""
+    requests_mock.get(
+        ME, json=_me_with_environments("production", "development", "local")
+    )
+    core._state.enabled = False
+    # The test drives _verify_key itself so there is no thread to race.
+    monkeypatch.setattr(core, "_start_key_preflight", lambda *args: None)
+
+    assert ags.init(api_key=VALID_API_KEY, endpoint=BASE, environment="local",
+                    auto_instrument=False) is True
+    try:
+        # Not confirmed yet — and the startup message says what the SDK could
+        # confirm, not what the agent has.
+        assert core.default_environment() is None
+        assert any(
+            "confirm" in m and "local" in m
+            for m in recorded.messages(logging.ERROR)
+        )
+
+        core._verify_key(VALID_API_KEY, BASE)  # the preflight lands
+
+        assert core.default_environment() == "local"
+    finally:
+        ags.shutdown()
+
+
+def test_verify_key_false_keeps_the_fallback_pair(monkeypatch):
+    # No preflight means no discovery: the documented cost of disabling it.
+    core._state.enabled = False
+
+    assert ags.init(api_key=VALID_API_KEY, endpoint=BASE, auto_instrument=False,
+                    verify_key=False) is True
+    try:
+        assert _settings.allowed_environments() == ("development", "production")
+    finally:
+        ags.shutdown()
+
+
+def test_normalize_is_safe_while_the_preflight_widens_the_set():
+    """No mocks — hammer normalize_environment() from reader threads while
+    learn_environments() grows the set. The failure modes are an exception
+    ("set changed size during iteration") or the fallback pair transiently
+    disappearing mid-update."""
+    stop = threading.Event()
+    failures = []
+
+    def reader():
+        while not stop.is_set():
+            try:
+                if _settings.normalize_environment("production") != "production":
+                    failures.append("production stopped normalizing")
+                    return
+                _settings.normalize_environment("env-42")
+            except Exception as exc:
+                failures.append(repr(exc))
+                return
+
+    readers = [threading.Thread(target=reader) for _ in range(4)]
+    for thread in readers:
+        thread.start()
+    try:
+        for round_number in range(500):
+            _settings.learn_environments(["env-%d" % (round_number % 50)])
+    finally:
+        stop.set()
+        for thread in readers:
+            thread.join(timeout=5)
+
+    assert failures == []
+    assert _settings.normalize_environment("env-42") == "env-42"
 
 
 # ---------------------------------------------------------------------------

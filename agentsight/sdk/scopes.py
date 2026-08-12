@@ -54,6 +54,11 @@ def _resolve_environment(value: Optional[str]) -> Optional[str]:
     Warned and dropped rather than sent: an unknown slug 400s the whole
     payload, which costs every other conversation in the batch. Dropped, this
     conversation still lands — against the agent's default environment.
+
+    "Unknown" is the learned set — the fallback pair plus whatever the key
+    preflight has confirmed from ``/api/me/`` — so a custom slug starts
+    resolving the moment the preflight lands. The warning is worded around
+    that: the SDK can only say what it has confirmed, not what the agent has.
     """
     if not value:
         return None
@@ -61,10 +66,11 @@ def _resolve_environment(value: Optional[str]) -> Optional[str]:
     if resolved is None:
         warn_once(
             "environment:%s" % value,
-            "AgentSight: environment %r is not one this agent has (%s); "
-            "recording this conversation without one.",
+            "AgentSight: environment %r is not one the SDK has been able to "
+            "confirm this agent has (confirmed: %s); recording this "
+            "conversation without one.",
             value,
-            ", ".join(_settings.KNOWN_ENVIRONMENTS),
+            ", ".join(_settings.allowed_environments()),
         )
     return resolved
 

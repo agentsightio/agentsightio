@@ -85,8 +85,15 @@ def api_credentials() -> "tuple[Optional[str], str]":
 def default_environment() -> Optional[str]:
     """The deployment-wide environment from ``init(environment=...)`` or
     ``AGENTSIGHT_ENVIRONMENT``. Conversations that don't name their own
-    environment inherit it; one that does always wins."""
-    return _state.environment
+    environment inherit it; one that does always wins.
+
+    Resolved on every read rather than once in ``init()``, deliberately:
+    ``_state.environment`` holds the *raw* value, and the key preflight can
+    widen the allowed set after ``init()`` returns. A custom slug is ``None``
+    here — conversations fall back to the agent's default — until the
+    preflight confirms it, and the real slug from then on.
+    """
+    return _settings.normalize_environment(_state.environment)
 
 
 def init(
@@ -138,6 +145,12 @@ def init(
     never blocks ``init()``, never raises, and its failure changes nothing:
     tracking stays on, because a preflight that could not reach the backend is
     not evidence the key is bad. Pass ``False`` to skip it entirely.
+
+    The same response names the agent's environments, and the SDK learns them:
+    it is how a custom slug — anything beyond ``production``/``development`` —
+    becomes acceptable to ``init(environment=...)`` and
+    ``conversation(environment=...)``. Passing ``False`` therefore also
+    disables custom environment discovery, leaving only the built-in pair.
     """
     with _state.lock:
         if _state.enabled:
@@ -217,7 +230,11 @@ def init(
             _state.provider = provider
             _state.exporter = exporter
             _state.tracer = otel_trace.get_tracer(_TRACER_NAME, SDK_VERSION, provider)
-            _state.environment = _resolve_environment(
+            # Stored raw, not resolved: the preflight started below may widen
+            # the allowed set after init() returns, so resolution happens on
+            # every read in default_environment(). _check_environment() only
+            # vets the value for an early, loud warning.
+            _state.environment = _check_environment(
                 environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
             )
             _state.turn_timeout_ms = turn_timeout_ms
@@ -332,6 +349,19 @@ def _verify_key(api_key: str, endpoint: str) -> None:
         except Exception:  # pragma: no cover
             pass
 
+    # The same response carries the authoritative environment list; learning
+    # it is what lets a custom slug pass normalize_environment(). Its own
+    # try/except, like the role read below, because a backend that shapes
+    # this part differently must not turn a successful preflight into a
+    # logged failure.
+    try:
+        rows = (identity or {}).get("environments") or ()
+        _settings.learn_environments(
+            row.get("slug") for row in rows if isinstance(row, dict)
+        )
+    except Exception as exc:
+        logger.debug("key preflight could not read the environments: %s", exc)
+
     try:
         role = (identity or {}).get("role")
         agent = (identity or {}).get("agent_name") or (identity or {}).get("agent_id")
@@ -353,30 +383,40 @@ def _verify_key(api_key: str, endpoint: str) -> None:
         logger.debug("key preflight could not read the identity: %s", exc)
 
 
-def _resolve_environment(raw: Optional[str]) -> Optional[str]:
-    """The deployment-wide environment, checked before anything is sent.
+def _check_environment(raw: Optional[str]) -> Optional[str]:
+    """Vet the deployment-wide environment at startup — and keep it raw.
 
     Loud, and at startup, because the alternative is silent: ingest rejects an
     unknown environment with a 400, the exporter treats a 4xx as terminal, and
     the drop warning is rate-limited — so a typo in ``AGENTSIGHT_ENVIRONMENT``
     loses every batch for the life of the process while looking healthy. An
     error here happens while someone is still watching the logs.
+
+    Returns the raw (stripped) value rather than the resolved slug — this is
+    the subtle half of custom-environment support. What counts as allowed can
+    change after init() returns, when the key preflight learns the agent's
+    real environment list, so resolution belongs to default_environment(),
+    which normalizes on every read. Resolving eagerly here would throw a
+    custom slug away moments before the preflight confirmed it.
     """
     if not raw:
         return None
-    resolved = _settings.normalize_environment(raw)
-    if resolved is None:
+    raw = str(raw).strip()
+    if not raw:
+        return None
+    if _settings.normalize_environment(raw) is None:
         logger.error(
-            "AgentSight: environment %r is not one this agent is assumed to "
-            "have (%s). It has been ignored — conversations will be recorded "
-            "against the agent's default environment. If this slug was added "
-            "server-side, confirm it with AgentSight().environments(); that "
-            "list is authoritative and this one is only what the tracking "
-            "plane assumes without making a network call.",
+            "AgentSight: environment %r is not one the SDK can confirm this "
+            "agent has (confirmed so far: %s). Conversations will be recorded "
+            "against the agent's default environment unless the key preflight "
+            "learns this slug from the backend — if it exists server-side, "
+            "that happens moments from now and it is honoured from then on; "
+            "if it is a typo, nothing will ever be recorded against it. "
+            "AgentSight().environments() is the authoritative list.",
             raw,
-            ", ".join(_settings.KNOWN_ENVIRONMENTS),
+            ", ".join(_settings.allowed_environments()),
         )
-    return resolved
+    return raw
 
 
 def _install_instrumentation(selection: Union[bool, Sequence[str]]) -> None:

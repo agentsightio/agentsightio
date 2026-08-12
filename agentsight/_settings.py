@@ -12,7 +12,8 @@ them out again and the two drift.
 
 import os
 import re
-from typing import Optional
+import threading
+from typing import Iterable, Optional
 
 #: ``ags_`` + 32 hex + ``_`` + a 6-hex checksum. The backend rejects anything
 #: else before it touches the database, so matching here saves a round trip.
@@ -45,12 +46,14 @@ USER_AGENT = f"{SDK_NAME}/{SDK_VERSION}"
 #: the whole batch down with it, so validating locally is what keeps a typo in
 #: ``AGENTSIGHT_ENVIRONMENT`` from silently costing every batch.
 #:
-#: ``AgentSight().environments()`` is the authoritative list, and is what to
-#: check against when a custom slug might exist. It is deliberately not
-#: consulted from here: this module performs no I/O and ``init()`` must never
-#: raise into user code, so the tracking plane cannot make a network call to
-#: find out what it is allowed to send. The pair below is what it assumes when
-#: it cannot ask.
+#: Agents can carry more than the pair: custom ``AgentEnvironment`` rows exist
+#: server-side, and ``GET /api/me/`` lists them. This module still performs no
+#: I/O and ``init()`` must never raise into user code, so the tracking plane
+#: cannot make a network call to find out what it is allowed to send. Instead
+#: the key preflight — which already makes that call — feeds what it learns
+#: into :func:`learn_environments`; until it has, the pair below is what the
+#: tracking plane assumes when it cannot ask. ``AgentSight().environments()``
+#: remains the authoritative list for anyone checking by hand.
 #:
 #: The shorthand is a convenience the backend accepts on query params but
 #: never stores.
@@ -58,6 +61,52 @@ PRODUCTION = "production"
 DEVELOPMENT = "development"
 KNOWN_ENVIRONMENTS = (PRODUCTION, DEVELOPMENT)
 ENVIRONMENT_ALIASES = {"prod": PRODUCTION, "dev": DEVELOPMENT}
+
+#: The slugs the SDK will currently put on the wire: the fallback pair plus
+#: whatever the preflight has confirmed. It only ever widens. Locked because
+#: the preflight writes from its own thread while every request thread reads
+#: through :func:`normalize_environment`.
+_environments_lock = threading.Lock()
+_allowed_environments = set(KNOWN_ENVIRONMENTS)
+
+
+def learn_environments(slugs: Iterable[object]) -> None:
+    """Widen the allowed set with slugs the backend confirmed exist.
+
+    Fed by the key preflight from ``/api/me/``. Additive only — nothing is
+    ever removed, so the fallback pair keeps working whatever the backend
+    reports. Junk input (a wrong shape, ``None``, empty strings) is dropped
+    without raising: this runs on a thread nobody joins, and the module's
+    contract is that nothing in it raises.
+    """
+    try:
+        cleaned = {
+            str(slug).strip().lower()
+            for slug in slugs
+            if slug is not None and str(slug).strip()
+        }
+    except Exception:
+        return
+    if not cleaned:
+        return
+    with _environments_lock:
+        _allowed_environments.update(cleaned)
+
+
+def allowed_environments() -> "tuple[str, ...]":
+    """A sorted snapshot of what :func:`normalize_environment` accepts now.
+
+    For log lines that name the set. A snapshot rather than a view, because
+    the live set can grow between the read and the print.
+    """
+    with _environments_lock:
+        return tuple(sorted(_allowed_environments))
+
+
+def _reset_environments_for_tests() -> None:
+    with _environments_lock:
+        _allowed_environments.clear()
+        _allowed_environments.update(KNOWN_ENVIRONMENTS)
 
 
 def resolve_api_key(explicit: Optional[str] = None) -> Optional[str]:
@@ -94,6 +143,12 @@ def normalize_environment(value: Optional[str]) -> Optional[str]:
     and map the ``prod``/``dev`` shorthand onto the stored long form. Returning
     ``None`` for an unrecognised value is what lets the callers refuse to put
     it on the wire — ingest would 400 the entire payload over it.
+
+    "Unrecognised" means absent from the *learned* set: the fallback pair plus
+    whatever the key preflight has confirmed via :func:`learn_environments`.
+    The answer for a custom slug therefore changes from ``None`` to the slug
+    once the preflight lands — a caller that caches it caches the pessimistic
+    answer.
     """
     if value is None:
         return None
@@ -101,7 +156,8 @@ def normalize_environment(value: Optional[str]) -> Optional[str]:
     if not slug:
         return None
     slug = ENVIRONMENT_ALIASES.get(slug, slug)
-    return slug if slug in KNOWN_ENVIRONMENTS else None
+    with _environments_lock:
+        return slug if slug in _allowed_environments else None
 
 
 def is_valid_api_key(api_key: Optional[str]) -> bool:

@@ -20,6 +20,20 @@ def isolated_env(monkeypatch):
     monkeypatch.delenv("AGENTSIGHT_ENVIRONMENT", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def fresh_learned_environments():
+    """The learned-environment set is process-wide by design; tests are not.
+
+    Any test that runs the key preflight against a mock naming custom
+    environments would otherwise leak them into every test after it.
+    """
+    from agentsight import _settings
+
+    _settings._reset_environments_for_tests()
+    yield
+    _settings._reset_environments_for_tests()
+
+
 @pytest.fixture
 def valid_api_key():
     """Valid API key for testing."""
