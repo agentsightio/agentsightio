@@ -86,6 +86,24 @@ markers = [
     "unit: marks tests as unit tests",
 ]
 
+[tool.mypy]
+# Matches the CI lint job, not requires-python: the installed OTel SDK uses
+# 3.10+ `match` syntax, which mypy refuses to parse under python_version 3.9.
+# Runtime 3.9 compatibility is the test matrix's job.
+python_version = "3.11"
+# check_untyped_defs is deliberately off for now: several function bodies in
+# watchdog.py and core.py are currently unchecked (mypy notes them), and
+# turning it on surfaces new errors — worthwhile, but its own piece of work.
+# Flip it in a change that also clears what it finds.
+
+# mypy 1.16 crashes with an INTERNAL ERROR while analysing the provider SDKs
+# (anthropic/_client.py, openai/_client.py). They are installed by the `test`
+# extra so they are always found — the problem is analysing them, hence
+# follow_imports = "skip" rather than ignore_missing_imports.
+[[tool.mypy.overrides]]
+module = ["anthropic.*", "openai.*", "langchain_core.*", "llama_index.*"]
+follow_imports = "skip"
+
 [tool.ruff]
 line-length = 100
 # Matches requires-python. Was py37, which let ruff accept syntax

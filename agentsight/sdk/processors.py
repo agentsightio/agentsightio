@@ -7,7 +7,12 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from agentsight.sdk import context as ags_context
-from agentsight.sdk.semconv import SpanAttributes, SpanKind, TurnAttributes
+from agentsight.sdk.semconv import (
+    SpanAttributes,
+    SpanKind,
+    TurnAttributes,
+    string_attribute,
+)
 
 
 class TurnBufferingProcessor(SpanProcessor):
@@ -69,7 +74,11 @@ class TurnBufferingProcessor(SpanProcessor):
             attributes = span.attributes or {}
 
             if attributes.get(SpanAttributes.KIND) == SpanKind.TURN:
-                own_id = format(span.get_span_context().span_id, "016x")
+                ctx = span.get_span_context()
+                # Optional only for bare-built spans; a failure here lands in
+                # the except below and the span still goes downstream.
+                assert ctx is not None
+                own_id = format(ctx.span_id, "016x")
                 with self._lock:
                     buffered = self._open.pop(own_id, None)
 
@@ -81,7 +90,7 @@ class TurnBufferingProcessor(SpanProcessor):
                 self._downstream.on_end(span)
                 return
 
-            turn_id = attributes.get(TurnAttributes.ID)
+            turn_id = string_attribute(attributes, TurnAttributes.ID)
             if turn_id:
                 overflow: Optional[List[ReadableSpan]] = None
                 with self._lock:

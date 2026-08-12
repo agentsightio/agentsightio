@@ -10,6 +10,21 @@ under the standard names, spans produced by any GenAI-instrumented library
 already carry the attributes our ingest projectors read.
 """
 
+from typing import Any, Mapping, Optional
+
+
+def string_attribute(attributes: Mapping[str, Any], key: str) -> Optional[str]:
+    """An identity attribute the SDK wrote as a string, read back as one.
+
+    OTel types attribute values as a wide union, but every attribute named in
+    this module that gets used as a key — conversation id, turn id — is only
+    ever written as a string. Anything else reads as absent, which downstream
+    treats the same as the attribute not being there. Shared by the exporter
+    and the buffering processor so the two reads cannot drift.
+    """
+    value = attributes.get(key)
+    return value if isinstance(value, str) else None
+
 
 class SpanKind:
     """Value of ``agentsight.span.kind``.

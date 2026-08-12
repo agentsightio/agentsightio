@@ -11,7 +11,8 @@ import functools
 import inspect
 import threading
 import uuid
-from typing import Any, Callable, Dict, Optional
+from contextvars import Token
+from typing import Any, Callable, Dict, Literal, Optional
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
@@ -116,7 +117,7 @@ class ConversationScope:
         #: to. The decorator form rebuilds a scope per invocation from these,
         #: so ``None`` here has to stay ``None`` — see __call__.
         self._explicit_id = conversation_id
-        self._kwargs = {
+        self._kwargs: Dict[str, Any] = {
             "customer_id": customer_id,
             "customer_ip_address": customer_ip_address,
             "device": device,
@@ -250,9 +251,9 @@ class ConversationScope:
         self._token = ags_context.set_conversation(self)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if self._token is None:
-            return False
+            return
         # Only unwind if this scope is still the active one. A streaming turn
         # closes its conversation from inside the consumer's context, which is
         # not the context that opened it — resetting there would clear whatever
@@ -260,13 +261,12 @@ class ConversationScope:
         if ags_context.current_conversation() is self:
             ags_context.reset_conversation(self._token)
         self._token = None
-        return False
 
     async def __aenter__(self) -> "ConversationScope":
         return self.__enter__()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-        return self.__exit__(exc_type, exc_val, exc_tb)
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
 
     # -- decorator ----------------------------------------------------------
 
@@ -325,20 +325,22 @@ class TurnScope:
 
     def __init__(self, name: Optional[str] = None):
         self.name = name or "turn"
-        self.span = None
-        self._otel_token = None
-        self._ctx_token = None
+        #: ``None`` is a real state, not just "not started yet": a turn that
+        #: could not start has no span, and every method here handles that.
+        self.span: Optional[otel_trace.Span] = None
+        self._otel_token: Optional["Token[otel_context.Context]"] = None
+        self._ctx_token: Optional[Any] = None
         self._complete = False
         self._deferred = False
         self._ended = False
-        self._watchdog = None
+        self._watchdog: Optional[int] = None
         #: Guards the end-once transition. A deferred turn really can be raced:
         #: the watchdog fires on its own thread while the iterator is finishing
         #: on the consumer's, and ending a span twice corrupts the export.
         self._lock = threading.Lock()
         #: Captured at start() so a wrapped iterator can re-attach it while it
         #: drains — see _enter_step().
-        self._conversation = None
+        self._conversation: Optional[ConversationScope] = None
         self.turn_id: Optional[str] = None
 
     # -- lifecycle ----------------------------------------------------------
@@ -356,15 +358,16 @@ class TurnScope:
             attributes[SpanAttributes.KIND] = SpanKind.TURN
             attributes[SpanAttributes.ENTITY_NAME] = self.name
 
-            self.span = tracer.start_span(self.name, attributes=attributes)
+            span = tracer.start_span(self.name, attributes=attributes)
+            self.span = span
             # Tag the turn with its own span id so every descendant can carry
             # it; a ReadableSpan exposes only its immediate parent, so the
             # buffering processor cannot walk a chain at export time.
-            self.turn_id = format(self.span.get_span_context().span_id, "016x")
-            self.span.set_attribute(TurnAttributes.ID, self.turn_id)
+            self.turn_id = format(span.get_span_context().span_id, "016x")
+            span.set_attribute(TurnAttributes.ID, self.turn_id)
 
             self._otel_token = otel_context.attach(
-                otel_trace.set_span_in_context(self.span)
+                otel_trace.set_span_in_context(span)
             )
             self._ctx_token = ags_context.set_turn(self)
         except Exception as exc:
@@ -387,24 +390,26 @@ class TurnScope:
         """
         self._cancel_watchdog()
         with self._lock:
-            if self._ended or self.span is None:
-                already_done = True
+            # `span` doubles as the already-done flag: it stays None when the
+            # turn never started or someone else already won the race.
+            span = self.span
+            if self._ended or span is None:
+                span = None
             else:
-                already_done = False
                 self._ended = True
-        if already_done:
+        if span is None:
             self._detach_context()
             return
         self._complete = complete
         try:
-            self.span.set_attribute(TurnAttributes.COMPLETE, complete)
+            span.set_attribute(TurnAttributes.COMPLETE, complete)
             if not complete:
-                self.span.set_attribute(
+                span.set_attribute(
                     TurnAttributes.INCOMPLETE_REASON,
                     reason or TurnAttributes.REASON_ABANDONED,
                 )
-            self.span.set_status(Status(StatusCode.OK if complete else StatusCode.ERROR))
-            self.span.end()
+            span.set_status(Status(StatusCode.OK if complete else StatusCode.ERROR))
+            span.end()
         except Exception as exc:  # pragma: no cover - never reach user code
             _log().debug("failed to end turn span: %s", exc)
         finally:
@@ -752,24 +757,23 @@ class TurnScope:
     def __enter__(self) -> "TurnScope":
         return self.start()
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if self._deferred and exc_type is None:
             # wrap() took ownership; whatever it bound to closes the span. The
             # block still gives up being the ambient turn on its way out.
             self._detach_context()
-            return False
+            return
         if exc_type is not None:
             self._record_failure(exc_val)
             self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
         else:
             self.finish(complete=True)
-        return False
 
     async def __aenter__(self) -> "TurnScope":
         return self.__enter__()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-        return self.__exit__(exc_type, exc_val, exc_tb)
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
 
 
 class _TurnSpec:
@@ -815,17 +819,20 @@ class _TurnFactory:
             self._scopes.append(scope)
         return scope
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> "Literal[False]":
+        # ``Literal[False]`` rather than ``None``: returning False here is
+        # public, tested behaviour, and the literal type still tells mypy this
+        # can never suppress an exception.
         with self._lock:
             scope = self._scopes.pop() if self._scopes else None
-        if scope is None:
-            return False
-        return scope.__exit__(exc_type, exc_val, exc_tb)
+        if scope is not None:
+            scope.__exit__(exc_type, exc_val, exc_tb)
+        return False
 
     async def __aenter__(self) -> TurnScope:
         return self.__enter__()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> "Literal[False]":
         return self.__exit__(exc_type, exc_val, exc_tb)
 
 
@@ -1071,17 +1078,16 @@ class ModelHintScope:
         self._token = ags_context.set_model_hint(self._model or None)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         if self._token is not None:
             ags_context.reset_model_hint(self._token)
             self._token = None
-        return False
 
     async def __aenter__(self) -> "ModelHintScope":
         return self.__enter__()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-        return self.__exit__(exc_type, exc_val, exc_tb)
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
 
     # -- decorator ----------------------------------------------------------
 

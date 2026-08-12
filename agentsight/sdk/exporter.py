@@ -18,7 +18,11 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from agentsight import _settings
 from agentsight._transport import retry_after
-from agentsight.sdk.semconv import ConversationAttributes, SpanAttributes
+from agentsight.sdk.semconv import (
+    ConversationAttributes,
+    SpanAttributes,
+    string_attribute,
+)
 
 #: Re-exported: this module was where they lived before both planes needed
 #: them, and ``sdk.uploads`` still imports them from here.
@@ -56,6 +60,9 @@ def span_to_dict(span: ReadableSpan) -> Dict[str, Any]:
     ``otel`` so the two never collide as either side evolves.
     """
     ctx = span.get_span_context()
+    # ReadableSpan types the context as Optional because one can be built
+    # bare; every span the tracer hands the exporter carries one.
+    assert ctx is not None
     attributes = dict(span.attributes or {})
 
     events = [
@@ -159,7 +166,7 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
 
     for span in spans:
         attributes = span.attributes or {}
-        conversation_id = attributes.get(ConversationAttributes.ID)
+        conversation_id = string_attribute(attributes, ConversationAttributes.ID)
         if not conversation_id:
             continue  # every AgentSight span carries one; anything else is not ours
 

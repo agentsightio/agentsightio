@@ -176,4 +176,7 @@ def _require_sentiment(sentiment: Any) -> str:
         raise ValidationError(
             f"sentiment is required and must be one of {', '.join(_params.SENTIMENTS)}"
         )
-    return _params.check_sentiment(sentiment)
+    checked = _params.check_sentiment(sentiment)
+    # check_sentiment returns None only for a None input, ruled out above.
+    assert checked is not None
+    return checked

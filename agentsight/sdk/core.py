@@ -206,6 +206,9 @@ def init(
                     destination,
                 )
             else:
+                # This branch is exactly the one the key check above ran for,
+                # so the key is present and well-formed here.
+                assert resolved_key is not None
                 exporter = AgentSightSpanExporter(
                     resolved_endpoint, resolved_key, logger
                 )
@@ -437,9 +440,12 @@ def _install_instrumentation(selection: Union[bool, Sequence[str]]) -> None:
     """
     from agentsight.sdk import instrumentation
 
-    targets: List[str] = (
-        list(instrumentation.ALL_TARGETS) if selection is True else list(selection)
-    )
+    if selection is True:
+        targets: List[str] = list(instrumentation.ALL_TARGETS)
+    elif selection is False:
+        return  # init() only calls this when auto_instrument is truthy
+    else:
+        targets = list(selection)
     for target in targets:
         try:
             instrumentation.install(target, logger)
