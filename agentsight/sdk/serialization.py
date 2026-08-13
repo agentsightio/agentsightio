@@ -11,6 +11,7 @@ every small key beside it, silently. Truncation happens per value, and the
 document that comes back is always valid JSON saying what it dropped.
 """
 
+import functools
 import inspect
 import ipaddress
 import json
@@ -261,6 +262,14 @@ def to_text(value: Any) -> str:
         return "<unrepresentable>"
 
 
+#: Bounded, not ``maxsize=None``: the cache holds strong references to its
+#: keys, and a caller decorating lambdas or closures in a loop would otherwise
+#: pin every one of them alive for the process.
+@functools.lru_cache(maxsize=1024)
+def _signature_of(func: Any) -> inspect.Signature:
+    return inspect.signature(func)
+
+
 def bind_arguments(
     func: Any,
     args: Tuple[Any, ...],
@@ -276,7 +285,14 @@ def bind_arguments(
     only they know whether the wrapped callable is a method.
     """
     try:
-        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        try:
+            signature = _signature_of(func)
+        except TypeError:
+            # Unhashable callables cannot pass through lru_cache; inspect
+            # uncached so they still get real parameter names rather than
+            # the positional fallback below.
+            signature = inspect.signature(func)
+        bound = signature.bind_partial(*args, **kwargs)
         bound.apply_defaults()
         return dict(bound.arguments)
     except Exception:
