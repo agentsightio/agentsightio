@@ -480,15 +480,21 @@ def test_the_sync_is_silent_without_the_tracking_sdk(ags, resolved,
     assert ags.conversations.update("wa-3859", customer_id="user-42") == {"ok": True}
 
 
-def test_soft_delete_and_hard_delete_are_different_routes(ags, requests_mock):
+def test_delete_uses_the_soft_delete_route(ags, requests_mock):
     soft = requests_mock.delete(f"{DETAIL}delete/", json={})
-    hard = requests_mock.delete(DETAIL, json={})
 
     ags.conversations.delete(42)
-    ags.conversations.purge(42)
 
     assert soft.call_count == 1
-    assert hard.call_count == 1
+
+
+def test_there_is_no_hard_delete(ags):
+    # Deletion is soft only, on every plane: the row survives with
+    # is_deleted=True and a customer integration cannot destroy a transcript,
+    # its messages, its attachments or its spans by reaching for the obvious
+    # verb. Permanent removal is an operator action against the database.
+    assert not hasattr(ags.conversations, "purge")
+    assert not hasattr(ags.conversations, "hard_delete")
 
 
 def test_a_read_key_hitting_a_write_route_gets_permission_denied(ags, requests_mock):

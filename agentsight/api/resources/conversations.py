@@ -264,24 +264,17 @@ class Conversations(Resource):
         """Soft-delete a conversation. *Write role.*
 
         The row survives with ``is_deleted=True`` and is hidden from listings
-        unless you pass ``include_deleted=True``. Use :meth:`purge` to destroy
-        it outright.
+        unless you pass ``include_deleted=True``, so this is reversible.
+
+        It is also the only delete there is. Nothing on this API destroys a
+        conversation — the plain ``DELETE /api/conversations/{pk}/`` does the
+        same soft delete as the route used here — and permanent removal is an
+        operator action against the database. If you need one, ask; it is not
+        something an integration should be able to reach by accident.
         """
         pk = self._client._resolve(conversation)
         response = self._request("DELETE", f"/api/conversations/{pk}/delete/")
         self._client.forget(conversation)
-        return response
-
-    def purge(self, conversation: ConversationRef) -> Dict[str, Any]:
-        """Permanently delete a conversation and everything on it. *Write role.*
-
-        Unrecoverable — the row, its messages, its attachments and its spans
-        are gone. :meth:`delete` is the reversible one.
-        """
-        pk = self._client._resolve(conversation)
-        response = self._request("DELETE", f"/api/conversations/{pk}/")
-        self._client.forget(conversation)
-        self._client.forget(pk)
         return response
 
     # -- internals ---------------------------------------------------------

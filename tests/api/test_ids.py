@@ -117,12 +117,14 @@ def test_soft_delete_forgets_the_mapping(ags, requests_mock):
     assert "wa-3859" not in ags._cache_snapshot()
 
 
-def test_purge_forgets_the_mapping_given_only_a_pk(ags, requests_mock):
+def test_delete_forgets_the_mapping_given_only_a_pk(ags, requests_mock):
+    # forget()'s reverse branch: the caller named the pk, so the string key it
+    # was cached under has to be found by value rather than looked up.
     requests_mock.get(CONVERSATIONS, json=envelope([conversation(42, "wa-3859")]))
-    requests_mock.delete(f"{BASE}/api/conversations/42/", json={})
+    requests_mock.delete(f"{BASE}/api/conversations/42/delete/", json={})
 
     ags.conversations.resolve("wa-3859")
-    ags.conversations.purge(42)
+    ags.conversations.delete(42)
 
     assert ags._cache_snapshot() == {}
 
