@@ -68,6 +68,10 @@ That's it! Your conversation is now tracked in AgentSight.
 Conversations are uniquely identified to help you maintain context across multiple interactions. Once you create a conversation with your ID, use that same ID to reference your tracking methods with that conversation.
 :::
 
+:::warning Message content is transmitted
+Everything you track — message text, tool arguments, tool responses — is sent to AgentSight and stored. Nothing is scraped or inferred, but you should know exactly what leaves your process before you ship. [What the SDK sends](/getting-started/what-the-sdk-sends) lists every field, and shows you how to dump the payload locally without sending it.
+:::
+
 ## What Can You Track?
 
 - **Messages** - User questions and AI responses

@@ -74,6 +74,7 @@ export default defineConfig({
           // { text: 'Examples', link: '/getting-started/examples' },
           { text: 'Metrics', link: '/getting-started/metrics' },
           { text: 'Configuration', link: '/getting-started/configuration' },
+          { text: 'What the SDK sends', link: '/getting-started/what-the-sdk-sends' },
           { text: 'Environments', link: '/getting-started/environments' },
           { text: 'API reference', link: '/getting-started/api-reference' }
         ]
