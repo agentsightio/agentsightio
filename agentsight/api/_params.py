@@ -115,6 +115,33 @@ USAGE_FILTERS = frozenset(
     }
 )
 
+#: ``/api/spans/`` — the raw span archive.
+#:
+#: Small on purpose. The route's filters are built around the three indexes the
+#: span table has, so what is offered is what the database can serve; there is
+#: no substring match on ``name`` and no way to filter inside ``attributes``.
+#: ``environment`` follows the token-usage spelling, not the ``env`` alias.
+#:
+#: No ``kind`` allowlist here on purpose either: the backend stores whatever
+#: kind an SDK sends rather than rejecting unknown ones, so a fixed tuple in
+#: this release would refuse data a newer release legitimately produces.
+SPAN_FILTERS = frozenset(
+    {
+        "conversation",
+        "conversation_id",
+        "environment",
+        "kind",
+        "name",
+        "ordering",
+        "parent_span_id",
+        "span_id",
+        "started_at_after",
+        "started_at_before",
+        "status",
+        "trace_id",
+    }
+)
+
 #: How spend was priced, as reported on every usage row.
 COST_SOURCES = ("backend", "reported", "unpriced")
 

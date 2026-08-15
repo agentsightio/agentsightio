@@ -47,7 +47,9 @@ class AgentSight:
     records clicks to the span archive, but nothing currently projects them
     into a table this client could read, so a ``buttons.list()`` here would
     return an empty page for every caller and look like "no clicks" rather
-    than "not surfaced yet". See :func:`agentsight.button`.
+    than "not surfaced yet". See :func:`agentsight.button`. The clicks
+    themselves are readable as what they are —
+    ``ags.spans.list(kind="button")``.
     """
 
     def __init__(
@@ -77,12 +79,14 @@ class AgentSight:
         from agentsight.api.resources.actions import Actions
         from agentsight.api.resources.conversations import Conversations
         from agentsight.api.resources.feedbacks import Feedbacks
+        from agentsight.api.resources.spans import Spans
         from agentsight.api.resources.usage import Usage
 
         self.conversations = Conversations(self)
         self.feedbacks = Feedbacks(self)
         self.actions = Actions(self)
         self.usage = Usage(self)
+        self.spans = Spans(self)
 
         self._identity: Optional[Dict[str, Any]] = None
         self._identity_lock = threading.Lock()

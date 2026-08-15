@@ -15,6 +15,8 @@ FEEDBACKS = f"{BASE}/api/feedbacks/"
 ACTIONS = f"{BASE}/api/actions/"
 USAGE = f"{BASE}/api/token-usage/"
 USAGE_SUMMARY = f"{USAGE}summary/"
+SPANS = f"{BASE}/api/spans/"
+TRACES = f"{BASE}/api/traces/"
 ME = f"{BASE}/api/me/"
 
 def environment(slug, pk=1, is_production=False):
@@ -71,5 +73,32 @@ def envelope(results, **extra):
 
 def conversation(pk=1, conversation_id="wa-3859", **fields):
     record = {"id": pk, "conversation_id": conversation_id, "name": "Refund"}
+    record.update(fields)
+    return record
+
+
+def span(pk=1, span_id="aaaa0001", **fields):
+    """One span row exactly as ``IngestSpanSerializer`` sends it.
+
+    No ``payload`` key, because the list route never sends one — a fixture
+    that carried it would let a test pass against a shape the server does not
+    produce.
+    """
+    record = {
+        "id": pk,
+        "conversation": 4412,
+        "conversation_id": "wa-3859",
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "span_id": span_id,
+        "parent_span_id": None,
+        "kind": "turn",
+        "name": "turn",
+        "started_at": "2026-01-01T00:00:00Z",
+        "ended_at": "2026-01-01T00:00:01Z",
+        "duration_ms": 1000.0,
+        "status": "ok",
+        "attributes": {"agentsight.span.kind": "turn"},
+        "events": [],
+    }
     record.update(fields)
     return record
