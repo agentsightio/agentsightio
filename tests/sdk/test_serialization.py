@@ -1,4 +1,4 @@
-"""``bind_arguments`` and its signature cache (audit F-09).
+"""``bind_arguments`` and its signature cache.
 
 The cache exists so ``inspect.signature()`` runs once per function instead of
 once per call. These tests pin the behaviours the cache must not change: the

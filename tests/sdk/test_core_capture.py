@@ -1,9 +1,9 @@
 """What the SDK captures, and what it refuses to capture.
 
-The parity contract (design §6) says every row written by the span path has the
-same shape as the row `track_*` writes today. These tests hold the SDK end of
-that: the right spans, the right attributes, and — just as important — nothing
-at all when there is nothing to record.
+The parity contract says every row written by the span path has the same shape
+as the row `track_*` writes today. These tests hold the SDK end of that: the
+right spans, the right attributes, and — just as important — nothing at all
+when there is nothing to record.
 """
 
 import json
@@ -67,7 +67,7 @@ def messages(span):
 
 
 # ---------------------------------------------------------------------------
-# Messages have no rules (design §4.1)
+# Messages have no rules
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +302,7 @@ class _Detail:
 
 
 class OpenAIUsage:
-    """prompt_tokens INCLUDES cached — the trap from design §5."""
+    """prompt_tokens INCLUDES cached — the trap this normalizes away."""
 
     def __init__(self, prompt, completion, cached=0, reasoning=0):
         self.prompt_tokens = prompt
@@ -391,7 +391,7 @@ def test_nothing_is_recorded_outside_a_conversation(spans):
 
 
 def test_enabled_false_disables_a_single_conversation(spans):
-    """`webtasy` has both a save=False flag and a testing mode."""
+    """Applications commonly have both a save=False flag and a testing mode."""
     with ags.conversation("c-not-real", enabled=False):
         with ags.turn():
             ags.user_message("this is a test run")
@@ -574,7 +574,7 @@ def test_every_span_is_serialized_whole(spans):
 
 
 # ---------------------------------------------------------------------------
-# Failure isolation (design §10)
+# Failure isolation
 # ---------------------------------------------------------------------------
 
 
@@ -696,7 +696,7 @@ def test_init_environment_is_inherited_by_conversations(spans, monkeypatch):
 
 
 def test_export_failure_warnings_are_rate_limited():
-    """Design §10: a down backend warns once a minute, not once a second."""
+    """A down backend warns once a minute, not once a second."""
 
     class CountingLogger:
         def __init__(self):

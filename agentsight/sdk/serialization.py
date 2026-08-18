@@ -2,7 +2,7 @@
 
 Every function here obeys one rule: **it never raises**. Serialization runs
 inside the user's call stack, so an un-encodable argument must degrade to a
-placeholder rather than propagate out of a decorated function (design §10).
+placeholder rather than propagate out of a decorated function.
 
 The second rule is newer and just as load-bearing: **whatever ``to_json``
 returns parses**. Ingest stores metadata in a JSON column, so a truncated

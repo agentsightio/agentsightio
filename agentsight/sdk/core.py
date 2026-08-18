@@ -1,9 +1,9 @@
 """SDK lifecycle: ``init()``, the tracer, flushing and shutdown.
 
-``init()`` must never raise into user code (design §10), so nothing on this
-path may import a module that validates on construction. The constants and
-resolvers both planes need live in ``agentsight._settings``, which holds
-nothing but literals and pure functions.
+``init()`` must never raise into user code, so nothing on this path may import
+a module that validates on construction. The constants and resolvers both
+planes need live in ``agentsight._settings``, which holds nothing but literals
+and pure functions.
 """
 
 import atexit
@@ -44,7 +44,7 @@ class _State:
         self.provider: Optional[TracerProvider] = None
         #: Typed to the OTel interface, not our concrete class: the exporter
         #: is the transport seam, and nothing outside it may depend on which
-        #: transport is behind it (design §13, transport question).
+        #: transport is behind it.
         self.exporter: Optional[SpanExporter] = None
         self.tracer = None
         self.environment: Optional[str] = None

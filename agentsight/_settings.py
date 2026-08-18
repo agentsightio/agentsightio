@@ -3,11 +3,11 @@
 Nothing in this module raises, performs I/O, or imports anything from the
 package. That is the whole point of its existence.
 
-It exists because ``init()`` must never raise into user code (design §10), so
-the tracking plane cannot import anything that validates on construction. Both
-planes need the same key pattern, default hosts, auth header, URL joiner and
-environment slugs; without a shared home that cannot raise, each side writes
-them out again and the two drift.
+It exists because ``init()`` must never raise into user code, so the tracking
+plane cannot import anything that validates on construction. Both planes need
+the same key pattern, default hosts, auth header, URL joiner and environment
+slugs; without a shared home that cannot raise, each side writes them out again
+and the two drift.
 """
 
 import os

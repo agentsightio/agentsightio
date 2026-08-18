@@ -170,7 +170,7 @@ def test_a_junk_identity_body_does_not_raise(requests_mock):
 
 
 # ---------------------------------------------------------------------------
-# What a successful preflight teaches the SDK (F-02)
+# What a successful preflight teaches the SDK
 # ---------------------------------------------------------------------------
 
 
@@ -245,8 +245,8 @@ def test_a_malformed_environment_list_keeps_the_fallback_pair_quietly(
 
 
 def test_an_advertised_capability_is_learned(requests_mock):
-    # "gzip-ingest" is what lets the exporter start compressing batches
-    # (audit F-04); until the preflight has seen it, it must read as absent.
+    # "gzip-ingest" is what lets the exporter start compressing batches;
+    # until the preflight has seen it, it must read as absent.
     identity = _me_with_environments("production", "development")
     identity["capabilities"] = ["gzip-ingest"]
     requests_mock.get(ME, json=identity)

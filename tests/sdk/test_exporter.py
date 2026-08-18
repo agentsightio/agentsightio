@@ -331,7 +331,7 @@ def test_server_errors_are_retried(exporter, mock, no_sleep):
     assert mock.call_count == 2
 
 
-# -- gzip (audit F-04) -------------------------------------------------------
+# -- gzip -------------------------------------------------------------------
 #
 # Batches gzip 10-30x, but compression is feature-detected, never assumed: a
 # gzipped batch against a backend that cannot decode it is a terminal 400

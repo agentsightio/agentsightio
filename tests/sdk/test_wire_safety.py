@@ -166,7 +166,7 @@ def test_an_unknown_environment_is_dropped_so_the_batch_survives(spans, supplied
 
 
 def test_a_learned_custom_environment_reaches_the_wire(spans):
-    """The F-02 fix: what the key preflight learns from /api/me/ is what
+    """What the key preflight learns from /api/me/ is what
     conversation(environment=...) may send. Learned directly here — the
     preflight path itself is covered in test_key_preflight.py."""
     from agentsight import _settings
@@ -247,8 +247,8 @@ def test_metadata_is_parsed_once_per_distinct_document_not_once_per_span(
     """Every span carries the same serialised document by design — the
     conversation outlives any single process, so no span can own it. Parsing
     it back once per span cost the export thread about a quarter of its
-    payload-build budget (audit F-06); it is memoised per conversation now,
-    keyed on the raw string."""
+    payload-build budget; it is memoised per conversation now, keyed on the
+    raw string."""
     from agentsight.sdk import exporter
 
     parsed = []

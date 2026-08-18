@@ -24,12 +24,12 @@ class TurnBufferingProcessor(SpanProcessor):
     interval later, possibly in a different payload. Holding the family until
     the turn's outcome is known lets ingest see turn and children in one
     payload and decide archive-vs-project atomically, inside its
-    one-transaction-per-conversation (design §7.2).
+    one-transaction-per-conversation.
 
     Nothing is discarded here. An incomplete turn goes downstream like any
     other, marked ``agentsight.turn.complete=false`` plus a reason; keeping
-    half-exchanges out of the transcript is ingest's job (design §4.3), and
-    dropping the spans instead would erase token spend that was really spent.
+    half-exchanges out of the transcript is ingest's job, and dropping the
+    spans instead would erase token spend that was really spent.
 
     Grouping uses an explicit ``agentsight.turn.id`` attribute rather than the
     parent chain, because a ReadableSpan exposes only its immediate parent —
@@ -123,7 +123,7 @@ class TurnBufferingProcessor(SpanProcessor):
         # thread. Its turn span cannot be exported (it never ended), but the
         # children are real spans for real work: release them rather than
         # discard the spend. They arrive carrying a turn id whose turn never
-        # shows up, which ingest archives rather than rejects (design §7.2).
+        # shows up, which ingest archives rather than rejects.
         with self._lock:
             orphans = [s for buf in self._open.values() if buf for s in buf]
             self._open.clear()

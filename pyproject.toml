@@ -144,9 +144,14 @@ exclude = [
     "docs/*",
     "node_modules/*",
     "venv/*",
-    "examples/*", 
+    "examples/*",
     "tests/*",
     ".github/*",
+    # Local-only. Both are kept out of git as well, but hatchling does not read
+    # the global gitignore, so without these the sdist ships them.
+    "design/*",
+    ".claude/*",
+    ".playwright-mcp/*",
     "*.gif",
     "*.png",
     "dist/*",

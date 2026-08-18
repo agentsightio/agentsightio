@@ -800,12 +800,12 @@ def test_tool_arguments_are_the_ones_the_model_chose(spans):
 def test_tools_registered_through_a_tool_spec_are_captured(spans):
     """The shape this whole integration exists for.
 
-    ``webtasy`` registers its tools as ``BaseToolSpec`` methods turned into
-    tools by ``to_tool_list()``, which introspects each method's signature and
-    docstring to build the schema the model sees. Decorating them with
-    ``@agentsight.tool`` would mean editing 15+ classes *and* changing what the
-    model is shown — so if the handler does not capture these, a real LlamaIndex
-    agent has no tool tracking at all.
+    A common LlamaIndex shape registers its tools as ``BaseToolSpec`` methods
+    turned into tools by ``to_tool_list()``, which introspects each method's
+    signature and docstring to build the schema the model sees. Decorating them
+    with ``@agentsight.tool`` would mean editing every tool class *and* changing
+    what the model is shown — so if the handler does not capture these, a real
+    LlamaIndex agent has no tool tracking at all.
     """
     from llama_index.core.tools.tool_spec.base import BaseToolSpec
 

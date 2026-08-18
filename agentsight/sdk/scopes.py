@@ -319,8 +319,8 @@ class TurnScope:
 
     A turn that does not finish is still exported — marked incomplete, with
     the reason — so ingest can keep it out of the transcript while the token
-    spend stays recoverable (design §4.3). Completion is therefore tracked
-    explicitly rather than inferred from the span ending.
+    spend stays recoverable. Completion is therefore tracked explicitly rather
+    than inferred from the span ending.
     """
 
     def __init__(self, name: Optional[str] = None):
@@ -371,8 +371,8 @@ class TurnScope:
             )
             self._ctx_token = ags_context.set_turn(self)
         except Exception as exc:
-            # §10: a turn that cannot be started is a turn that records
-            # nothing. It is not a reason for the user's handler to fail.
+            # A turn that cannot be started is a turn that records nothing.
+            # It is not a reason for the user's handler to fail.
             _log().debug("could not start turn span: %s", exc)
             self.span = None
         return self

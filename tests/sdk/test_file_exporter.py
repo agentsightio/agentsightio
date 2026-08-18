@@ -145,8 +145,8 @@ def test_a_batch_with_nothing_of_ours_in_it_writes_no_file(tmp_path, logger):
 
 def test_a_destination_that_vanishes_fails_without_raising(tmp_path, logger):
     """Exporters run on the batch processor's thread, where an exception has
-    nowhere to go (design §10). Someone clearing the trace directory mid-run
-    must cost a batch, not the process."""
+    nowhere to go. Someone clearing the trace directory mid-run must cost a
+    batch, not the process."""
     exporter = FileSpanExporter(str(tmp_path / "traces"), logger)
     os.rmdir(exporter.directory)
 

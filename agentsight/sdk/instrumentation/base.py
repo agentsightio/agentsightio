@@ -143,9 +143,9 @@ def record_llm_call(
     for why that needs normalizing on one provider and not the other.
 
     ``start_time_ns``/``end_time_ns`` make the span cover the real call rather
-    than being an instant. Without them "how much of the turn was the LLM" —
-    the question §4.2 of the design promises is answerable for free — has no
-    answer, because every LLM span would have zero duration.
+    than being an instant. Without them "how much of the turn was the LLM" — a
+    question the trace should answer for free — has no answer, because every
+    LLM span would have zero duration.
 
     ``model`` is the *resolved* id when the provider reported one, because
     that is what was billed and what the backend prices against. Pass the id
@@ -168,12 +168,11 @@ def record_llm_call(
     instead of on whichever one their pinned release shipped with, and makes
     historical spend restatable when a rate turns out to have been wrong.
 
-    ``error`` is the failure channel (design §13, question 5 — closed): a
-    call that raised is recorded as an ERROR span rather than dropped or
-    disguised as success, which is what makes an error-rate metric possible
-    and a failed call distinguishable from one that never happened. Pass any
-    tokens that were billed before the failure — a stream that died halfway
-    still spent them.
+    ``error`` is the failure channel: a call that raised is recorded as an
+    ERROR span rather than dropped or disguised as success, which is what makes
+    an error-rate metric possible and a failed call distinguishable from one
+    that never happened. Pass any tokens that were billed before the failure —
+    a stream that died halfway still spent them.
 
     Disconnects are normalized away *here*, at the one choke point every
     integration shares, rather than at each of the eight-and-counting call

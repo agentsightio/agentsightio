@@ -14,11 +14,11 @@ handler. The handler deliberately does not emit LLM spans for providers we
 already patch — see ``langchain_handler.py``.
 
 Framework handlers emitting **tool** spans is not an optimisation, it is the
-only thing that works for some users. In ``webtasy`` the tools are
-``BaseToolSpec`` methods registered through ``to_tool_list()``, which
-introspects each method's signature and docstring to build the schema the LLM
-sees — decorating them means editing 15+ classes and risking the agent's own
-behaviour.
+only thing that works for some users. A common LlamaIndex shape registers its
+tools as ``BaseToolSpec`` methods turned into tools by ``to_tool_list()``,
+which introspects each method's signature and docstring to build the schema the
+LLM sees — decorating them means editing every tool class and risking the
+agent's own behaviour.
 """
 
 from typing import Any, Callable, Dict

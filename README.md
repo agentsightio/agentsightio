@@ -3,11 +3,11 @@
 
 Unlike traditional observability platforms built for developers, AgentSight focuses on **client visibility** and meaningful insights, not just logs or traces.
 
-Besides the client-facing platform, you also get a **fully managed database solution** for you conversation AI, meaning you do not need to build or maintain any infrstructure or dashboard which allows you to focus on your AI.
+Besides the client-facing platform, you also get a **fully managed database backend** for your conversational AI, so you do not need to build or maintain any infrastructure or dashboards, which lets you focus on your AI.
 
-The **Python SDK** makes this integration possible. You will be passing your metrics and tracking in just few lines of code.
+The **Python SDK** makes this integration possible. You will be sending your metrics and tracking in just a few lines of code.
 
-Visit [landing page](https://agentsight.io) from more information.
+Visit the [landing page](https://agentsight.io) for more information.
 
 ## What It's Used For
 AgentSight’s core purpose is to help you **share real-time conversation data, transcripts, and analytics directly with your clients**.
@@ -33,17 +33,25 @@ Clients gain direct access to:
 | White-Label Support | ✅ | ❌ | ❌ |
 | Usage Metrics Tracking | ✅ | ❌ | ❌ |
 | Usage Analytics & Reports | ✅ | ❌ | ❌ |
-| Token Usage Tracking | ✅ | ✅ | ✅ |
-| Developer Debugging Tools¹ | ❌ | ✅ | ✅ |
-| LLM Performance Tracing | ❌ | ✅ | ✅ |
-| Data Export & Migration | ✅ | ✅ | ✅ |
+| Automatic Token & Cost Tracking | ✅ | ✅ | ✅ |
+| Raw Trace Data via API | ✅ | ✅ | ✅ |
+| Trace Debugging UI¹ | ❌ | ✅ | ✅ |
+| Data Export | ✅ | ✅ | ✅ |
 
-¹ AgentSight focuses on client visibility, not internal debugging.
+¹ AgentSight records complete OpenTelemetry spans and makes them readable through its API, but its dashboards are built for client visibility, not internal debugging.
 
-AgentSight complements observability platforms. It’s not built for tracing or debugging, but for **giving clients insight into their own AI systems** *and* **providing developers a simple database and API for conversation persistence**.
+AgentSight complements observability platforms. It’s not built for debugging, but for **giving clients insight into their own AI systems** *and* **providing developers a simple database and API for conversation persistence**.
+
+## Installation
+
+```bash
+pip install agentsight
+```
+
+Or with your package manager of choice — `poetry add agentsight`, `uv add agentsight`.
 
 ## Quick start
-Get up and running with just a few lines of code to track complete conversations:
+Track complete conversations in a few lines of code:
 ```python
 import agentsight
 

@@ -69,8 +69,8 @@ class FileSpanExporter(SpanExporter):
                 return SpanExportResult.SUCCESS
             return self._write(payload)
         except Exception as exc:
-            # Same contract as the HTTP transport (design §10): an exporter
-            # runs on the batch processor's thread and must never raise there.
+            # Same contract as the HTTP transport: an exporter runs on the
+            # batch processor's thread and must never raise there.
             self._logger.error("span export to file failed: %s", exc)
             return SpanExportResult.FAILURE
 

@@ -2,8 +2,8 @@
 
 Two rules govern what belongs here:
 
-* The tracking surface never raises into user code (design §10). Nothing in
-  ``sdk/`` outside :mod:`agentsight.sdk.uploads` should be constructing these.
+* The tracking surface never raises into user code. Nothing in ``sdk/`` outside
+  :mod:`agentsight.sdk.uploads` should be constructing these.
 * The data plane always raises, because it moves customer data and returns
   answers the caller is going to act on. Silence would be the bug.
 

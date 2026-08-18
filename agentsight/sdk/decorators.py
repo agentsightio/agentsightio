@@ -38,7 +38,7 @@ def _start_span(operation: str, kind: str):
         attributes[ToolAttributes.NAME] = operation
         return get_tracer().start_as_current_span(operation, attributes=attributes)
     except Exception:
-        # §10: no span is a fine outcome. Not running the user's function is not.
+        # No span is a fine outcome. Not running the user's function is not.
         return None
 
 

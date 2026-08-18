@@ -91,7 +91,7 @@ class TurnAttributes:
     abandoned mid-stream, or one that raised, is archived and never projected
     into the transcript. The half-exchange guarantee is enforced at ingest,
     not by withholding the data — the token spend on a failed turn was real,
-    and dropping the span would make it unrecoverable. See design §4.3.
+    and dropping the span would make it unrecoverable.
 
     ``INCOMPLETE_REASON`` says *why*, because an unhandled exception and a
     user closing the tab are different product signals. Set only when
@@ -231,7 +231,7 @@ class LLMAttributes:
     #: ignored the option). Present only in that case. The duration on such a
     #: span is real; the 0/0 token counts are *unknowns*, not zeros — ingest
     #: must not read them as "the model returned nothing", and no rollup may
-    #: treat their absence of tokens as free (design §13, question 4).
+    #: treat their absence of tokens as free.
     USAGE_REPORTED = "agentsight.llm.usage_reported"
 
     #: Billable input, *excluding* anything served from or written to cache.

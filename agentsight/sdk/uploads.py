@@ -7,8 +7,8 @@ existing ``/api/attachments/`` route instead, synchronously, on the caller's
 thread.
 
 That placement changes the failure contract. Tracking must never raise into
-user code (design §10); an upload is the opposite — silently dropping a file
-the caller believes was delivered is the one unacceptable outcome. So
+user code; an upload is the opposite — silently dropping a file the caller
+believes was delivered is the one unacceptable outcome. So
 :func:`upload_attachments` raises: ``ValueError`` for caller mistakes,
 :class:`~agentsight.exceptions.UploadError` when the backend refuses or the
 network fails.

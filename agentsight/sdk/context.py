@@ -84,8 +84,8 @@ def reset_model_hint(token) -> None:
 def tracking_enabled() -> bool:
     """False when there is no scope, or the scope was opened ``enabled=False``.
 
-    The second case exists for traffic the application knows is not real —
-    ``webtasy`` has both a ``save=False`` flag and a testing mode.
+    The second case exists for traffic the application knows is not real — it
+    is common to have both a ``save=False`` flag and a testing mode.
     """
     scope = current_conversation()
     return scope is not None and scope.enabled

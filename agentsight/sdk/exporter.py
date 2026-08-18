@@ -1,8 +1,8 @@
 """Translating finished spans into AgentSight ingest payloads.
 
 The exporter runs on the batch processor's background thread, so nothing here
-can reach the user's call stack. It follows the rule from design §10: log and
-return ``FAILURE``, never raise.
+can reach the user's call stack. It follows the standing rule: log and return
+``FAILURE``, never raise.
 """
 
 import gzip
@@ -336,10 +336,9 @@ class AgentSightSpanExporter(SpanExporter):
     _COMPRESS_LEVEL = 6
     #: Seconds between dropped-batch warnings. A down backend at a 1s flush
     #: interval would otherwise emit one warning per second for as long as
-    #: the outage lasts — a log flood that says the same thing every time
-    #: (design §10 promises this is rate-limited). Dropped batches between
-    #: warnings are counted and reported in the next one, so nothing is lost
-    #: from the record, only from the noise.
+    #: the outage lasts — a log flood that says the same thing every time.
+    #: Dropped batches between warnings are counted and reported in the next
+    #: one, so nothing is lost from the record, only from the noise.
     _WARN_INTERVAL = 60.0
 
     def __init__(self, endpoint: str, api_key: str, logger):
@@ -477,16 +476,16 @@ class AgentSightSpanExporter(SpanExporter):
         headers: Optional[Dict[str, str]] = None
 
         # Compression is feature-detected, never assumed — decided
-        # deliberately (audit F-04, option 1). This SDK is published and
-        # versioned, and a self-hosted backend may lag it; a gzipped batch
-        # sent to a backend that cannot decode it is a terminal 400 in the
-        # loop below, i.e. silent, total data loss for whoever upgraded the
-        # SDK first. So the exporter compresses only after the key preflight
-        # has seen ``GET /api/me/`` advertise ``gzip-ingest``. Every fallback
-        # — preflight disabled, still in flight, unreachable, or a backend
-        # that predates the capability list — leaves batches uncompressed,
-        # which every backend accepts. The cost of that caution is only the
-        # first second or two of a process's batches travelling fat.
+        # deliberately. This SDK is published and versioned, and a self-hosted
+        # backend may lag it; a gzipped batch sent to a backend that cannot
+        # decode it is a terminal 400 in the loop below, i.e. silent, total
+        # data loss for whoever upgraded the SDK first. So the exporter
+        # compresses only after the key preflight has seen ``GET /api/me/``
+        # advertise ``gzip-ingest``. Every fallback — preflight disabled, still
+        # in flight, unreachable, or a backend that predates the capability
+        # list — leaves batches uncompressed, which every backend accepts. The
+        # cost of that caution is only the first second or two of a process's
+        # batches travelling fat.
         if (
             len(body) > self._COMPRESS_MIN_BYTES
             and _settings.has_capability(_settings.GZIP_INGEST)

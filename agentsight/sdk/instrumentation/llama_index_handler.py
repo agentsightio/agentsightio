@@ -10,8 +10,8 @@ older ``callbacks`` system, and in 0.12.47 that is not a preference:
   ``agentsight.init()`` runs, so a callback manager installed afterwards
   reaches nothing.
 * ``CBEventType.FUNCTION_CALL`` is emitted only by the legacy agents. The
-  ``agent.workflow`` agents — what ``webtasy`` and every current LlamaIndex app
-  uses — emit none of it.
+  ``agent.workflow`` agents — what every current LlamaIndex app uses — emit
+  none of it.
 
 The dispatcher is a module-level singleton, and every module dispatcher
 propagates up to it, so one event handler and one span handler on the root see
@@ -21,8 +21,8 @@ at all.
 Tool spans come from the *span* handler, not from an event. ``ToolCall`` and
 ``ToolCallResult`` are workflow stream events written with
 ``ctx.write_event_to_stream()``; they only ever reach a caller iterating
-``handler.stream_events()`` itself and never reach the dispatcher, so the
-design's §8 note that they are the tool signal does not hold for this path.
+``handler.stream_events()`` itself and never reach the dispatcher, so treating
+them as the tool signal does not hold for this path.
 What does reach it is the ``dispatcher.span`` that ``DispatcherSpanMixin``
 wraps around ``FunctionTool.call`` / ``.acall`` — a real bracket, with the
 arguments on the way in and the ``ToolOutput`` on the way out.

@@ -164,5 +164,11 @@ docs/.vitepress/cache
 # Example trace output (regenerated on every run)
 examples/traces/
 
-# Internal working notes. This repository is public; these documents are not.
+# Local working notes
 design/
+
+# Local tooling state and scratch output. Root-level images only — the docs
+# assets under docs/public/images/ are tracked on purpose.
+.claude/
+.playwright-mcp/
+/*.png
