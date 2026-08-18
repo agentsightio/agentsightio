@@ -279,15 +279,16 @@ any other instrumentation you have installed.
 
 ## Sent outside spans
 
-Three requests do not carry spans, listed for completeness:
+Four requests do not carry spans, listed for completeness:
 
 | What | When | What it carries |
 |---|---|---|
 | Key verification | once at `init()`, on a background thread | your API key only, no conversation data. Skip it with `init(verify_key=False)` |
 | Span batches | every 5 seconds by default | the payload above, gzipped above 8 KB where the server supports it |
+| Conversation upsert | before an `upload_attachments()` batch | the conversation id and environment, so the files have a conversation to land on |
 | Attachment upload | only on `upload_attachments()` | **the file contents**, base64-encoded, with their filenames and MIME types |
 
-`attachments()` records that files were shared without sending them.
+`record_attachments()` records that files were shared without sending them.
 `upload_attachments()` sends them. They are separate calls so the choice is
 explicit.
 
@@ -298,7 +299,7 @@ Everything goes to `https://api.agentsight.io` over HTTPS, or to whatever
 
 | Limit | Value | Effect |
 |---|---|---|
-| Message content, tool responses, error strings | 16 384 characters | truncated, marked `…[truncated]` |
+| Message content, tool responses, error strings | 16 384 characters | truncated, marked `...[truncated]` |
 | Conversation string fields | 255 characters | clamped |
 | Metadata JSON | 16 KB budget | oversized entries dropped largest-first; the payload always stays valid JSON |
 | `customer_ip` | must parse as an IP | otherwise dropped entirely |

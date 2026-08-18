@@ -5,172 +5,107 @@ outline: deep
 <CopyMarkdownButton />
 
 # Quickstart
-Get started with AgentSight in seconds. With just a few lines of code, you can start monitoring your AI agent's conversations, questions, answers, and more. No setup or infrastructure required.
 
-AgentSight is designed to be lightweight and developer-friendly. Instantiate the client with your API key, and you're ready to track your data.
+AgentSight records what your agent did — the exchanges, the answer latency, the
+tool calls, the LLM spend — from the smallest amount of code that can honestly
+capture it. No infrastructure, no collector to run.
 
 ## Installation
-First, install the AgentSight SDK. We also recommend installing python-dotenv to manage your API key securely via environment variables.
 
 :::tabs
 == pip
 ```bash
-pip install agentsight python-dotenv
+pip install agentsight
 ```
 == poetry
 ```bash
-poetry add agentsight python-dotenv
+poetry add agentsight
 ```
 == uv
 ```bash
-uv add agentsight python-dotenv
+uv add agentsight
 ```
 :::
 
+Installing [python-dotenv](https://pypi.org/project/python-dotenv/) alongside it
+is worth it: with it present, importing `agentsight` picks up a `.env` file, so
+your key never has to be in code.
+
 ## Setup
 
-1. Get your API key from the [AgentSight Dashboard](https://app.agentsight.io/)
-2. Add it to a `.env` file:
+Get an API key from the [AgentSight dashboard](https://app.agentsight.io/) and put
+it in `.env`:
 
 ```bash
 AGENTSIGHT_API_KEY="your_api_key_here"
 ```
 
-## Basic Usage
-
-```python
-from agentsight import conversation_tracker
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# 1. Create a conversation
-conversation_tracker.get_or_create_conversation(
-    conversation_id="chat-123",
-    customer_id="user-456",
-    name="Support Chat"
-)
-
-# 2. Track user message
-conversation_tracker.track_human_message("How do I reset my password?")
-
-# 3. Track AI response
-conversation_tracker.track_agent_message("Click 'Forgot Password' on the login page.")
-
-# 4. Send all tracked data
-response = conversation_tracker.send_tracked_data()
-print(f"✅ Sent {response['summary']['questions']} questions and {response['summary']['answers']} answers")
-```
-
-That's it! Your conversation is now tracked in AgentSight.
-
-:::info Conversation tracking
-Conversations are uniquely identified to help you maintain context across multiple interactions. Once you create a conversation with your ID, use that same ID to reference your tracking methods with that conversation.
-:::
-
 :::warning Message content is transmitted
-Everything you track — message text, tool arguments, tool responses — is sent to AgentSight and stored. Nothing is scraped or inferred, but you should know exactly what leaves your process before you ship. [What the SDK sends](/getting-started/what-the-sdk-sends) lists every field, and shows you how to dump the payload locally without sending it.
+Everything you track — message text, tool arguments, tool responses — is sent to
+AgentSight and stored. Nothing is scraped or inferred, but you should know exactly
+what leaves your process before you ship.
+[What the SDK sends](/getting-started/what-the-sdk-sends) lists every field, and
+shows you how to dump the payload locally without sending it.
 :::
 
-## What Can You Track?
-
-- **Messages** - User questions and AI responses
-- **Actions** - Tool usage, database queries, API calls
-- **Attachments** - Files, images, documents
-- **Buttons** - User interactions and clicks
-- **Tokens** - LLM token usage for cost tracking
-
-## Three SDK Clients
-
-AgentSight provides three clients for different needs:
-
-| Client | Purpose | Import |
-|--------|---------|--------|
-| **ConversationTracker** | Track conversations in real-time | `from agentsight import conversation_tracker` |
-| **ConversationManager** | Manage conversations (rename, feedback, delete...) | `from agentsight import conversation_manager` |
-| **AgentSightAPI** | Fetch and query conversation data | `from agentsight import agentsight_api` |
-
-All clients are automatically initialized and ready to use.
-
-## Example: Complete Conversation
+## Quickstart
 
 ```python
-from agentsight import conversation_tracker
-from dotenv import load_dotenv
+import agentsight
 
-load_dotenv()
+agentsight.init()
 
-# Create conversation
-conversation_tracker.get_or_create_conversation(
-    conversation_id="support-123",
-    name="Password Reset"
-)
-
-# User asks
-conversation_tracker.track_human_message("I can't log in")
-
-# AI performs action
-conversation_tracker.track_action(
-    action_name="check_database",
-    duration_ms=150,
-    response="User found"
-)
-
-# AI responds
-conversation_tracker.track_agent_message("I found your account. Let me help reset your password.")
-
-# Track token usage
-conversation_tracker.track_token_usage(
-    prompt_tokens=45,
-    completion_tokens=32,
-    total_tokens=77
-)
-
-# User clicks button
-conversation_tracker.track_button(
-    button_event="password_reset",
-    label="Send Reset Email",
-    value="confirmed"
-)
-
-# Send everything
-conversation_tracker.send_tracked_data()
+@agentsight.turn(id_from="session_id", infer=True)
+def handle_message(session_id: str, text: str) -> str:
+    return my_agent.run(text)
 ```
 
-## Next Steps
-Now that you’ve set up the basics, let’s continue with looking into Core Concepts
-<!-- ## Next Steps
-Now that you’ve set up the basics, let’s look at how to fully leverage AgentSight’s capabilities: 
-<div class="feature-grid">
-  <div class="feature-card">
-    <div class="feature-icon">🔧</div>
-    <h3 class="feature-title">Integrations</h3>
-    <p class="feature-description">
-      See how AgentSight automatically instruments popular LLM and agent frameworks.
-    </p>
-  </div>
-  
-  <div class="feature-card">
-    <div class="feature-icon">📖</div>
-    <h3 class="feature-title">Examples</h3>
-    <p class="feature-description">
-      Explore detailed examples for various use cases and integrations.
-    </p>
-  </div>
-  
-  <div class="feature-card">
-    <div class="feature-icon">📚</div>
-    <h3 class="feature-title">SDK Reference</h3>
-    <p class="feature-description">
-      Dive deeper into the AgentSight SDK capabilities and API.
-    </p>
-  </div>
-  
-  <div class="feature-card">
-    <div class="feature-icon">🎯</div>
-    <h3 class="feature-title">Trace Decorator</h3>
-    <p class="feature-description">
-      Learn how to group operations and create custom traces using the @trace decorator.
-    </p>
-  </div>
-</div> -->
+That's a complete integration. Every call records a conversation, both messages
+and the answer latency — plus every LLM call made inside it, with token usage and
+cost, and every tool call the SDK can see: the functions you decorate with
+`@agentsight.tool` and the tools your framework reports.
+
+:::info When this shortcut applies
+`infer=True` reads the user message from the first string argument and the agent
+message from the return value. It fits handlers shaped like `(text) -> str`.
+
+Most production handlers aren't — they take a framework request object, or the id
+is nested in a payload, or the text is rewritten before the agent sees it. For
+those, see [Turns & Messages](/tracking/turns-and-messages), which is a few more
+lines and works everywhere.
+:::
+
+`id_from` names the parameter holding your conversation id. When the id is nested
+somewhere less convenient, it also takes a callable:
+
+```python
+@agentsight.turn(id_from=lambda args: json.loads(args["data"])["conversation_id"])
+def chat(request: Request, data: str = Form(...)):
+    ...
+```
+
+## Seeing it land
+
+Your conversations appear in the [dashboard](https://app.agentsight.io/) within a
+few seconds.
+
+If you would rather look before anything is transmitted, point the SDK at a
+directory instead of the network — no key, no account, no requests:
+
+```bash
+AGENTSIGHT_FILE_EXPORTER=./agentsight-traces python your_app.py
+```
+
+You get the exact JSON the API would have received.
+
+## Next steps
+
+- [Core Concepts](./core-concepts.md) — the four things you model, and how they
+  nest
+- [Turns & Messages](/tracking/turns-and-messages) — the explicit form, for real
+  handlers
+- [Streaming](/tracking/streaming) — required reading before you ship a streaming
+  endpoint
+- [Configuration](./configuration.md) — every `init()` parameter
+- [Deployment & limitations](./deployment.md) — graceful shutdown, and the gaps
+  worth knowing about

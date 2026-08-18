@@ -61,7 +61,7 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Quick Start', link: '/getting-started/quick-start' },
-      { text: 'API reference', link: '/getting-started/api-reference' }
+      { text: 'REST API reference', link: '/getting-started/api-reference' }
     ],
 
     sidebar: [
@@ -71,65 +71,65 @@ export default defineConfig({
         items: [
           { text: 'Quickstart', link: '/getting-started/quick-start' },
           { text: 'Core Concepts', link: '/getting-started/core-concepts' },
-          // { text: 'Examples', link: '/getting-started/examples' },
           { text: 'Metrics', link: '/getting-started/metrics' },
           { text: 'Configuration', link: '/getting-started/configuration' },
+          { text: 'What gets traced & why', link: '/getting-started/what-gets-traced' },
           { text: 'What the SDK sends', link: '/getting-started/what-the-sdk-sends' },
           { text: 'Environments', link: '/getting-started/environments' },
-          { text: 'API reference', link: '/getting-started/api-reference' }
+          { text: 'Deployment & limitations', link: '/getting-started/deployment' },
+          { text: 'REST API reference', link: '/getting-started/api-reference' }
         ]
       },
       {
-        text: 'Clients',
+        text: 'Tracking',
         collapsed: false,
         items: [
-          { text: 'ConversationTracker', link: '/clients/tracker' },
-          { text: 'ConversationManager', link: '/clients/manager' },
-          { text: 'AgentSightAPI', link: '/clients/api' },
+          { text: 'Conversations', link: '/tracking/conversations' },
+          { text: 'Turns & Messages', link: '/tracking/turns-and-messages' },
+          { text: 'Streaming', link: '/tracking/streaming' },
+          { text: 'Tools & Actions', link: '/tracking/tools-and-actions' },
+          { text: 'Tokens & Cost', link: '/tracking/tokens-and-cost' },
+          { text: 'Buttons', link: '/tracking/buttons' },
+          { text: 'Attachments', link: '/tracking/attachments' },
+        ]
+      },
+      {
+        text: 'Integrations',
+        collapsed: false,
+        items: [
+          { text: 'OpenAI', link: '/integrations/openai' },
+          { text: 'Anthropic', link: '/integrations/anthropic' },
+          { text: 'LlamaIndex', link: '/integrations/llamaindex' },
+          { text: 'LangChain', link: '/integrations/langchain' },
+          { text: 'Other providers', link: '/integrations/other-providers' },
+          { text: 'FastAPI', link: '/integrations/fastapi' },
         ]
       },
       {
         text: 'Examples',
         collapsed: false,
         items: [
-          { text: 'OpenAI', link: '/examples/openai/openai' },
-          { text: 'Anthropic', link: '/examples/anthropic/anthropic' },
-          { text: 'LlamaIndex-Fastapi', link: '/examples/llamaindex/llama-index-fastapi' },
-          { text: 'Langchain-Fastapi', link: '/examples/langchain/langchain-fastapi' },
+          { text: 'Overview', link: '/examples/' },
+          { text: 'The SDK on its own', link: '/examples/plain' },
+          { text: 'OpenAI', link: '/examples/openai' },
+          { text: 'Anthropic', link: '/examples/anthropic' },
+          { text: 'LlamaIndex', link: '/examples/llamaindex' },
+          { text: 'LangChain', link: '/examples/langchain' },
+          { text: 'Streaming & wrap()', link: '/examples/streaming' },
         ]
       },
       {
-        text: 'Tracking',
-        collapsed: true,
+        text: 'API Client',
+        collapsed: false,
         items: [
-          { text: 'Track Conversation', link: '/tracking/track-conversations' },
-          { text: 'Track Usage Tokens', link: '/tracking/track-tokens' },
-          { text: 'Track Interactions', link: '/tracking/track-interaction' },
-          { text: 'Track Human Message', link: '/tracking/track-question' },
-          { text: 'Track Agent Message', link: '/tracking/track-answer' },
-          { text: 'Track Attachments', link: '/tracking/track-attachments' },
-          { text: 'Track Actions', link: '/tracking/track-actions' },
-          { text: 'Track Buttons', link: '/tracking/track-buttons' },
-        ]
-      },
-      {
-        text: 'Managing',
-        collapsed: true,
-        items: [
-          { text: 'Add Feedback', link: '/managing/feedback' },
-          { text: 'Rename Conversation', link: '/managing/rename' },
-          { text: 'Mark Conversation', link: '/managing/mark' },
-          { text: 'Delete Conversation', link: '/managing/delete' },
-          { text: 'Update Conversation', link: '/managing/update' },
-        ]
-      },
-      {
-        text: 'Fetching',
-        collapsed: true,
-        items: [
-          { text: 'Fetch All Conversations', link: '/fetching/conversations' },
-          { text: 'Fetch Single Conversation', link: '/fetching/conversation' },
-          { text: 'Fetch Conversation Attachments', link: '/fetching/attachments' },
+          { text: 'The API client', link: '/api/' },
+          { text: 'Conversations', link: '/api/conversations' },
+          { text: 'Feedbacks', link: '/api/feedbacks' },
+          { text: 'Actions', link: '/api/actions' },
+          { text: 'Usage', link: '/api/usage' },
+          { text: 'Spans', link: '/api/spans' },
+          { text: 'Pagination', link: '/api/pagination' },
+          { text: 'Errors & retries', link: '/api/errors' },
         ]
       }
     ],

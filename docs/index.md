@@ -6,33 +6,33 @@ outline: deep
 
 # Introduction
 
-**AgentSight** is a conversation tracking, analytics, and **database platform** built to provide your **clients** with access to their conversational AI data, including **dashboards, transcripts, and analytics overviews**.
+**AgentSight** is a conversation tracking, analytics, and **database platform** for conversational AI. It gives your **clients** an elegant window into their AI — **dashboards, transcripts, and analytics** — on top of a **managed conversation backend** you can query via API.
 
 Unlike traditional observability platforms built for developers, AgentSight focuses on both **client visibility** and **developer utility**. It provides a persistent, queryable **database backend** for your conversation data, not just logs or traces.
 
-The **Python SDK** simplifies integration, enabling you to instrument tracking, token usage, and event capture with minimal effort, **storing it all in a managed database you can query via API**.
+The **Python SDK** works on one principle: **maximum information for minimum code**. What can be captured without your help — LLM calls, token usage, cost, timings — is captured automatically. What only your code can know — which conversation this is, what the user said, what the agent replied — is one explicit call each, and each has a reason.
 
 ## What It's Used For
 
-AgentSight’s core purpose is two-fold:
+AgentSight's core purpose is two-fold:
 
 1.  To **help you share real-time conversation data, transcripts, and analytics directly with your clients** in an easy-to-use dashboard.
 2.  To **provide a fully managed database backend** for your conversational AI, saving you from building and maintaining your own database for transcripts, messages, and long-term memory.
 
 ### As a **client-facing platform**, your clients gain direct access to:
   - **Conversation transcripts** - see exactly how users interact
-  - **Usage analytics** - engagement trends, token usage, performance metrics
+  - **Usage analytics** - engagement trends, token usage and cost, response times
   - **Custom reports** - build reports based on filters, metrics, timeframes
   - **Data export** - download or integrate the raw data for internal use
   > See all [available metrics to track](/getting-started/metrics)
 
 ::: tip Provide Value
-Offering client-facing platform transforms your offering from just building AI solutions to delivering a full, data-driven solution with a persistent backend and a UI your clients can actively use.
+Offering a client-facing platform transforms your offering from just building AI solutions to delivering a full, data-driven solution with a persistent backend and a UI your clients can actively use — without you building them a portal.
 :::
 
 ### As a **database and API solution**, developers can:
-  - **Store all conversation data** (transcripts, messages, attachments, user actions) without setting up or managing their own database.
-  - **Retrieve full conversation transcripts via simple API endpoints** for use in other applications.
+  - **Store all conversation data** (transcripts, messages, attachments, tool activity) without setting up or managing their own database.
+  - **Read everything back through one client** — conversations and transcripts, feedback, tool and task activity, token usage and spend, and the raw spans behind it all.
   - **Use AgentSight as a long-term memory store** for their AI agents.
   - **Integrate as an add-on** to an existing system (like a separate database or observability platform) or use it as the **primary, all-in-one database** for a new conversational system.
 
@@ -44,12 +44,12 @@ It can be used as an add-on to your existing system (e.g., just for the client p
 
 ![Dashboard preview](/images/dashboard.png)
 
-The **AgentSight Dashboard** is the web interface where your clients explore their conversational data and insights.
+The **AgentSight Dashboard** is where the data lands: the web interface where your clients explore their conversational data and insights.
 
 It offers:
 
   - Full access to all conversation transcripts
-  - Analytics for token usage, message volumes, response times
+  - Analytics for token usage and cost, message volumes, response times
   - Custom report generation and export capabilities
   - White-labeled, client-specific dashboard views under your branding
 
@@ -61,9 +61,17 @@ There are two ways your clients can access the dashboard:
 
 1.  **Via Direct Invitation:** you can invite your clients to view the dashboard hosted on your specific subdomain under our main domain.
 
-> Example: yourcompany.agentsight.com
+> Example: yourcompany.agentsight.io
 
-2.  **Via Embedded Dashboard:** you can embed the dashboard directly into your own or your clients platforms such as WordPress sites or custom-built applications using our embeddable code snippet. (This one is not available yet but we are working on it)
+2.  **Via Embedded Dashboard:** you can embed the dashboard directly into your own or your clients' platforms, such as WordPress sites or custom-built applications.
+
+## Feedback and Tickets
+
+The dashboard is not just a window — it closes the loop between your end users and the people running the AI:
+
+- **Feedback** is end-user sentiment — `positive`, `neutral` or `negative`, with an optional comment — attached to a single conversation or to the agent as a whole. You can record it from your own UI through the API client, read it back the same way, and filter conversations by it; on the dashboard it sits alongside the conversation it belongs to.
+
+- **Tickets** are the follow-up workflow built on top of feedback. A conversation or a piece of feedback that needs action can be turned into a ticket and worked on the dashboard — triaged, tracked, resolved — so acting on what your clients see happens on the same surface they already use. Tickets are a dashboard workflow; they are not part of the API surface.
 
 ## Who It's For
 
@@ -75,24 +83,16 @@ AgentSight is built for:
 
 It makes internal performance data useful to **you (via API)** and accessible to your **clients (via the dashboard)**.
 
-### Migrate
-
-AgentSight supports seamless migration from your current transcription or monitoring system via JSON data imports.
-
-> Learn how to [migrate your data]()
-
 ## What You Can Track
 
-AgentSight allows developers to track various types of activity and store it for client analysis or internal use:
+  - **Conversations, turns, and messages** — the transcript your client reads, and the answer latency behind every exchange.
+  - **Tools and tasks** — units of work with measured durations, shown as actions on the dashboard.
+  - **LLM calls, tokens, and cost** — counted automatically for every call inside a conversation, priced server-side.
+  - **Button interactions** — clicks from your UI, recorded as events in the conversation.
+  - **File attachments** — recorded, or uploaded and stored.
+  - **Custom metadata** — business context attached to conversations and messages.
 
-  - **Conversation Data:** track full question–answer pairs with automatic threading and metadata.
-  - **User Actions:** monitor execution times, tool usage, and error rates for performance insights.
-  - **Button Interactions:** capture engagement metrics for UI-based actions.
-  - **File Attachments:** track uploads, downloads, and file usage.
-  - **Token Usage:** manually pass token data or use one of our automatic token handlers.
-  - **Custom Metadata:** attach contextual or business-relevant information to any event.
-
-All this data is stored in the AgentSight database, ready to be analyzed in the client dashboard or **fetched via API for your own applications (e.g., for long-term memory)**.
+Each of these is captured in a deliberate shape. **[What gets traced & why](/getting-started/what-gets-traced)** walks through every one — and explains why it is captured the way it is.
 
 ## Comparison with Observability Platforms
 
@@ -107,36 +107,31 @@ All this data is stored in the AgentSight database, ready to be analyzed in the 
 | White-Label Support | ✅ | ❌ | ❌ |
 | Usage Metrics Tracking | ✅ | ❌ | ❌ |
 | Usage Analytics & Reports | ✅ | ❌ | ❌ |
-| Token Usage Tracking | ✅ | ✅ | ✅ |
-| Developer Debugging Tools¹ | ❌ | ✅ | ✅ |
-| LLM Performance Tracing | ❌ | ✅ | ✅ |
-| Data Export & Migration | ✅ | ✅ | ✅ |
+| Automatic Token & Cost Tracking | ✅ | ✅ | ✅ |
+| Raw Trace Data via API | ✅ | ✅ | ✅ |
+| Trace Debugging UI¹ | ❌ | ✅ | ✅ |
+| Data Export | ✅ | ✅ | ✅ |
 
-¹ AgentSight focuses on client visibility, not internal debugging.
+¹ AgentSight records complete OpenTelemetry spans and makes them readable through its API, but its dashboards are built for client visibility, not internal debugging.
 
-AgentSight complements observability platforms. It’s not built for tracing or debugging, but for **giving clients insight into their own AI systems** *and* **providing developers a simple database and API for conversation persistence**.
+AgentSight complements observability platforms. It's not built for debugging, but for **giving clients insight into their own AI systems** *and* **providing developers a simple database and API for conversation persistence**.
 
 ## Quick start
 
-Get up and running with just a few lines of code to track complete conversations:
+Instrumenting a handler is a conversation, a turn, and the two messages:
 
 ```python
-from agentsight import ConversationTracker
+import agentsight
 
-# Initialize tracker
-tracker = ConversationTracker(
-    api_key="your_api_key_here"
-)
-tracker.get_or_create_conversation(
-    conversation_id="your_conversation_id"
-)
-tracker.track_human_message(
-    message="What's the weather like today?",
-)
-tracker.track_agent_message(
-    message="It's sunny with clear skies."
-)
-tracker.send_tracked_data()
+agentsight.init()
+
+with agentsight.conversation("wa-3859"):
+    with agentsight.turn():
+        agentsight.user_message("Where is my order?")
+        response = agent.run(...)
+        agentsight.agent_message(str(response))
 ```
 
-Once tracked, this data is instantly available in the client dashboard and can be retrieved using our API endpoints, allowing you to use AgentSight as your primary conversation database.
+Everything inside — tool calls, LLM calls, token counts, cost, latency — is captured without being mentioned. Once tracked, the data is live in the client dashboard and readable through the API, allowing you to use AgentSight as your primary conversation database.
+
+Continue with the [Quickstart](/getting-started/quick-start), and see [What the SDK sends](/getting-started/what-the-sdk-sends) for the complete disclosure of what goes over the wire.
