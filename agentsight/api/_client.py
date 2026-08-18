@@ -38,10 +38,13 @@ class AgentSight:
     ``conversation_id`` you passed to ``agentsight.conversation(...)`` or the
     backend's integer primary key. Strings are resolved once and remembered.
 
-    This client only reads and manages. It cannot create conversations,
-    messages, buttons, action logs or attachments — those belong to the
-    tracking SDK, and having two ways to write the same row would mean two
-    sets of semantics for how it projects into the dashboards.
+    This client reads and manages; it does not record. It cannot create
+    conversations, messages, buttons, action logs or attachments — those belong
+    to the tracking SDK, and having two ways to write the same row would mean
+    two sets of semantics for how it projects into the dashboards. The two
+    things it does create are not records of a run: feedback, which no span
+    could ever observe, and an action *definition*, which declares a capability
+    tracking then adopts by name.
 
     There is deliberately no ``buttons`` namespace. ``agentsight.button()``
     records clicks to the span archive, but nothing currently projects them

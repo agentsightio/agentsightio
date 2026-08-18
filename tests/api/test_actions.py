@@ -21,12 +21,56 @@ def test_action_logs_come_back_as_a_bare_array(ags, requests_mock):
     assert ags.actions.logs(1) == [{"id": 9}, {"id": 10}]
 
 
-def test_actions_cannot_be_created_or_destroyed_here(ags):
-    # Ingest upserts an Action by name from the first tool span that carries
-    # it, so the tracking plane is the only thing that brings one into being.
-    # A create() here would be a second set of semantics for the same row, and
-    # a delete() would destroy the definition every ActionLog hangs off.
-    assert not hasattr(ags.actions, "create")
+def test_create_declares_an_action_ahead_of_its_first_run(ags, requests_mock):
+    # The point of the method: the capability shows in the dashboard before
+    # anything has performed it, and the first span carrying the name is then
+    # adopted by this row rather than creating a second one beside it.
+    requests_mock.post(ACTIONS, json={"id": 1})
+
+    ags.actions.create("refund", display_name="Issue refund", description="…")
+
+    assert requests_mock.last_request.json() == {
+        "name": "refund",
+        "display_name": "Issue refund",
+        "description": "…",
+    }
+
+
+def test_create_sends_only_the_name_when_that_is_all_it_has(ags, requests_mock):
+    # display_name is defaulted to the name server-side, the same way tracking
+    # defaults it — so omitting it must not send a null and override that.
+    requests_mock.post(ACTIONS, json={"id": 1})
+
+    ags.actions.create("  refund  ")
+
+    assert requests_mock.last_request.json() == {"name": "refund"}
+
+
+@pytest.mark.parametrize("bad", ["", "   ", None, 7])
+def test_create_needs_a_name(ags, bad):
+    with pytest.raises(ValidationError):
+        ags.actions.create(bad)
+
+
+def test_a_duplicate_name_comes_back_as_a_validation_error(ags, requests_mock):
+    # The one error a caller actually hits. The backend refuses rather than
+    # returning the existing row, so this must not look like a success.
+    requests_mock.post(
+        ACTIONS,
+        status_code=400,
+        json={"name": ['An action named "refund" already exists for this agent.']},
+    )
+
+    with pytest.raises(ValidationError) as excinfo:
+        ags.actions.create("refund")
+
+    assert "already exists" in str(excinfo.value)
+
+
+def test_there_is_no_delete(ags):
+    # Every recorded invocation hangs off the definition — ActionLog.action
+    # cascades — so a delete() here would destroy an action's whole history
+    # through the most obvious verb on the route. The backend refuses it too.
     assert not hasattr(ags.actions, "delete")
 
 
