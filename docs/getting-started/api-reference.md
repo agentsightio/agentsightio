@@ -238,11 +238,14 @@ sometimes a string and sometimes a list of them, so read both:
 { "group_by": "Must be one of: model, conversation, day." }
 ```
 
-:::info Another agent's row answers `404` or `403`
-An id that belongs to another agent is refused: spans and usage answer `404`,
-indistinguishable from a row that does not exist, while the other detail routes
-answer `403`. You will only see either if you are handling ids that did not
-come from your own key.
+:::info Another agent's row answers `404`
+An id that belongs to another agent answers `404`, indistinguishable from a row
+that does not exist — which is the point. This holds on every detail route.
+You will only see it if you are handling ids that did not come from your own
+key.
+
+A `403` is about you rather than about the row: a `read` key attempting a
+write, or asking for something this plane does not serve at all.
 :::
 
 ### Rate limiting
@@ -1015,8 +1018,10 @@ An invalid sentiment is a `400` on either kind:
 { "sentiment": ["\"meh\" is not a valid choice."] }
 ```
 
-There is a third kind, `product`, which is not on this plane; requesting it
-answers `403`.
+There is a third kind, `product`, which is not on this plane. Naming it —
+`?kind=product` on the list, or `"kind": "product"` in a payload — answers
+`403`. A product row reached by id is a `404` like any other row this key
+cannot see.
 
 ### Update
 
