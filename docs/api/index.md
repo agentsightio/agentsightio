@@ -182,11 +182,16 @@ deleted conversation's primary key is not something to keep handing out.
 
 ## What it deliberately cannot do
 
-This client reads and manages. **It cannot create a conversation, a message, an
-action log, a button click or an attachment** — those belong to the tracking
-SDK, and two ways to write the same row would mean two sets of semantics for
-how that row reaches the dashboards. Feedback is the single exception, for a
-reason [its own page](./feedbacks.md) explains.
+This client reads and manages; it does not record. **It cannot create a
+conversation, a message, an action log, a button click or an attachment** —
+those belong to the tracking SDK, and two ways to write the same row would mean
+two sets of semantics for how that row reaches the dashboards.
+
+The two things it does create are not records of a run. Feedback, for a reason
+[its own page](./feedbacks.md) explains. And an action **definition** — note
+that this is the definition, not the action *log*: `actions.create()` declares
+that a capability exists, and the tracking SDK adopts that declaration the first
+time the capability actually runs. See [Actions](./actions.md).
 
 There is also no `buttons` namespace. `agentsight.button()` records clicks and
 they are archived complete, but nothing currently projects them into a table
@@ -203,7 +208,7 @@ ags.spans.list(kind="button")
 | Namespace | What it covers |
 |---|---|
 | [`conversations`](./conversations.md) | reading, filtering and managing them |
-| [`feedbacks`](./feedbacks.md) | the feedback surface, and the one place this writes |
+| [`feedbacks`](./feedbacks.md) | the feedback surface, and the one place this records |
 | [`actions`](./actions.md) | action definitions, their logs, their labels |
 | [`usage`](./usage.md) | tokens spent and what they cost |
 | [`spans`](./spans.md) | the raw archive everything else is projected from |

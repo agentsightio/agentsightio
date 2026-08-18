@@ -44,8 +44,10 @@ for creating them, and that is a design decision rather than a gap — two ways 
 write the same row would mean two sets of semantics for how it reaches your
 dashboards, and only one of them could be the one that is tested.
 
-Feedback is the single exception, for the reason its
-[own section](#feedbacks) explains.
+Two things you *can* create here are not recordings of a run: feedback, for the
+reason its [own section](#feedbacks) explains, and an action **definition** —
+declaring that a capability exists, which the SDK then adopts the first time it
+actually runs.
 :::
 
 ## Authentication
@@ -1048,10 +1050,13 @@ than hidden. Asking for it afterwards is a `404`.
 ## Actions
 
 An action is a **definition, not an event** — `lookup_order` the capability,
-rather than the eleven times it ran this morning. The tracking SDK creates them:
-the first `@tool` or `@task` span carrying a name brings that action into being.
-Create and delete are not part of this contract — actions come into being by
-tracking, and a delete would take every recorded invocation with it.
+rather than the eleven times it ran this morning. The tracking SDK creates them
+as it goes: the first `@tool` or `@task` span carrying a name brings that action
+into being. You can also declare one here, ahead of its first run.
+
+Deleting one is not part of this contract, on any plane. Every recorded
+invocation hangs off the definition, so a delete would take that history with
+it; `DELETE /api/actions/{id}/` answers `405`.
 
 ### List and get
 
@@ -1080,6 +1085,59 @@ curl "https://api.agentsight.io/api/actions/?name__icontains=order" \
 | `display_name` | part of the dashboard label |
 | `search` | across name, display name and description |
 | `ordering` | `name`, `display_name`, `id` |
+
+### Declare an action
+
+<span class="api-method post">POST</span> `/api/actions/` — *write role*
+
+For a capability you want visible in analytics before — or without — anything
+ever performing it.
+
+```bash
+curl -X POST "https://api.agentsight.io/api/actions/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "lookup_order",
+    "display_name": "Look up an order",
+    "description": "Fetches recent orders by customer id."
+  }'
+```
+
+```json
+{
+  "id": 7,
+  "name": "lookup_order",
+  "display_name": "Look up an order",
+  "description": "Fetches recent orders by customer id.",
+  "agent": 20
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | the name spans are matched on — use the one your `@tool` will carry |
+| `display_name` | no | defaults to `name`, exactly as tracking defaults it |
+| `description` | no | free text |
+
+The agent comes from your key and is not part of the payload.
+
+:::info The first real invocation adopts this row
+Tracking resolves an action by its name, so the first `@tool` or `@task` span
+carrying `lookup_order` attaches to the action you declared rather than creating
+a second one beside it — and it leaves your `display_name` and `description`
+alone. Declare it, ship the tool, and there is still exactly one action.
+:::
+
+A name this agent already has answers `400`:
+
+```json
+{ "name": ["An action named \"lookup_order\" already exists for this agent."] }
+```
+
+It is refused rather than returned, so a client cannot mistake somebody else's
+row for the one it just made. Uniqueness is **per agent**: the same name is
+accepted for a different agent of yours, and that is the normal case.
 
 ### Invocations
 
@@ -1639,7 +1697,7 @@ absence is a decision:
 
 | | Why |
 |---|---|
-| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. |
+| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run. |
 | **Tickets** | Internal workflow state. No routes, no nested objects, and the ticket filters are refused rather than ignored. |
 | **Buttons** | Recorded completely, but nothing projects them into a readable table yet — a list here would answer "no clicks" to everyone. Read them as [spans](#what-spans-are-good-for). |
 | **Message and action-log writes** | Same rule as recording: they belong to the SDK. |

@@ -121,7 +121,7 @@ functions you call directly, and anything that happens outside the agent loop.
 An action's `display_name` and `description` are how it reads on the dashboard,
 and neither travels with a tool call — the call carries what happened, not how it
 should be labelled. They are set through the API client instead, once the action
-has been seen at least once:
+exists:
 
 ```python
 from agentsight.api import AgentSight
@@ -130,9 +130,15 @@ ags = AgentSight()
 ags.actions.update(action_id, display_name="Order lookup")
 ```
 
-Actions are brought into being by tracking — the client offers no `create()` to
-make one ahead of time and no `delete()` to remove one. See
-[Actions](/api/actions) for the full surface.
+Tracking is what usually brings an action into being — the first decorated call
+carrying the name. You can also declare one up front with
+`ags.actions.create("lookup_order", display_name="Order lookup")`, which is
+useful when you want the capability on the dashboard before the tool ships. The
+first call that runs then adopts that row rather than making a second one, so
+you end up with one action either way.
+
+There is no `delete()`: the definition is what every recorded invocation hangs
+off. See [Actions](/api/actions) for the full surface.
 
 ## Next
 

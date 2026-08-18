@@ -6,10 +6,11 @@ outline: deep
 
 # Feedbacks
 
-`ags.feedbacks` is **the one place this client creates rows**, and the exception
-proves the rule everywhere else. Conversations, messages, action logs, buttons,
-attachments and spans are written by the tracking SDK because they are things
-that happened and the SDK watched them happen. Feedback is not telemetry.
+`ags.feedbacks` is **the one place this client records something that
+happened**, and the exception proves the rule everywhere else. Conversations,
+messages, action logs, buttons, attachments and spans are written by the
+tracking SDK because they are things that happened and the SDK watched them
+happen. Feedback is not telemetry.
 Nothing about a run of your agent reveals whether the person on the other end
 was satisfied with it — somebody has to say so, and the moment they say it is a
 click in your application, not an event any SDK could observe.

@@ -8,8 +8,8 @@ outline: deep
 
 An action is a **definition, not an event** — `search_orders` the capability,
 rather than the eleven times it ran this morning. `ags.actions` reads those
-definitions, reads their invocations, and sets the two fields that decide how
-each one reads on the dashboard.
+definitions, reads their invocations, declares new ones, and sets the two fields
+that decide how each one reads on the dashboard.
 
 ```python
 for action in ags.actions.list():
@@ -18,19 +18,50 @@ for action in ags.actions.list():
 
 ## Where actions come from
 
-**The tracking SDK is the only thing that creates one.** The first `@tool` or
-`@task` span carrying a name brings that action into being; every later one
-finds it already there.
+**Tracking makes them as it goes.** The first `@tool` or `@task` span carrying a
+name brings that action into being; every later one finds it already there. Most
+of your actions will arrive this way and you never have to think about it.
 
-So there is deliberately no `create()` here, and no `delete()`. An action exists
-because your agent performed it, and a second way to conjure or destroy that row
-would mean two sets of semantics for the same table — while a `delete()` would
-take every invocation hanging off the definition with it.
+**Or you declare one ahead of time**, so a capability shows up in the dashboard
+before — or without — anything ever performing it:
+
+```python
+ags.actions.create(                                        # write role
+    "search_orders",
+    display_name="Search orders",
+    description="Looks up a customer's recent orders by id.",
+)
+```
+
+The two converge. Tracking resolves an action by its name, so the first span
+carrying `search_orders` **adopts** the row above rather than creating a second
+one beside it — with the label you already gave it intact. Declare it, then
+ship the tool, and there is still exactly one action.
+
+That only works while a name means one thing, so `create()` raises
+[`ValidationError`](./errors.md) on a name this agent already has:
+
+```
+An action named "search_orders" already exists for this agent.
+```
+
+It refuses rather than handing back the existing row, because you asked to
+create something and quietly returning a different id is how you end up
+updating an action you never meant to touch. Reach for
+`ags.actions.list(name="search_orders")` if you need to know which one it is.
+
+Uniqueness is **per agent** — a different agent of yours may hold
+`search_orders` too, and normally will.
+
+There is deliberately no `delete()`. Every recorded invocation hangs off the
+definition, so removing one would take that action's whole history with it; the
+route behind it refuses too. Rename or relabel with `update()` instead.
 
 ## What this namespace is for
 
 `display_name` and `description` decide how an action reads in the dashboard,
-and **a span carries neither**. There is nowhere else to set them:
+and **a span carries neither**. For an action tracking created, this is the only
+place they can be set:
 
 ```python
 ags.actions.update(                                        # write role
@@ -43,10 +74,11 @@ ags.actions.update(                                        # write role
 `name` is changeable too, and rarely should be — it is the name the backend
 matches on, so renaming it means the next span carrying the old name creates a second
 action beside this one. Change the display name instead; that is what it is for.
+Renaming onto a name this agent already holds is refused with the same 400
+`create()` gives.
 
-The action has to exist before you can label it, which means your agent has to
-have performed it at least once. There is no way to pre-register a tool you have
-not shipped yet.
+The action has to exist before you can label it — because your agent performed
+it, or because you declared it with `create()` above.
 
 ## Reading them
 
