@@ -6,251 +6,155 @@ outline: deep
 
 # Core Concepts
 
-Understanding AgentSight's architecture will help you effectively track and analyze your AI agent conversations.
+There are four things to model. Everything else in the SDK is mechanism in
+service of them.
 
-## Three SDK Clients
+| | |
+|---|---|
+| **Conversation** | a business entity — a thread with one customer |
+| **Turn** | one exchange within it — ask, work, answer |
+| **Message** | a point in time — something was said |
+| **Tool** | a unit of work — something was done |
 
-AgentSight provides three specialized clients, each designed for specific use cases. All clients are **automatically initialized as singletons** - just import and use them.
+They nest, and the nesting is the whole design: a conversation contains turns, a
+turn contains messages and the work that produced the answer. Get those four
+right and the dashboard follows.
 
-### 1. ConversationTracker
-**Purpose:** Track conversations in real-time as they happen
+This page is the model you write code against. For what each one records and why
+it is captured that way, see
+[What gets traced & why](/getting-started/what-gets-traced).
 
-```python
-from agentsight import conversation_tracker
+## Conversation
 
-# Track data in memory
-conversation_tracker.track_human_message("Hello!")
-conversation_tracker.track_agent_message("Hi there!")
-
-# Send when ready
-conversation_tracker.send_tracked_data()
-```
-
-**Use cases:**
-- Real-time conversation logging
-- Tracking questions, answers, actions, buttons, attachments
-- Token usage monitoring
-- Batch processing of conversation events
-
-### 2. ConversationManager
-**Purpose:** Manage and update existing conversations
+A conversation is **identified by a string you control** — whatever id your own
+system already uses for that thread:
 
 ```python
-from agentsight import conversation_manager
-
-# Rename conversation
-conversation_manager.rename_conversation(
-    conversation_id="conv-123",
-    name="Resolved: Password Reset"
-)
-
-# Submit user feedback
-conversation_manager.submit_feedback(
-    conversation_id="conv-123",
-    sentiment="positive",
-    comment="Very helpful!"
-)
+with agentsight.conversation("wa-3859"):
+    ...
 ```
 
-**Use cases:**
-- Renaming conversations
-- Adding user feedback
-- Marking conversations as important
-- Deleting conversations
-- Updating conversation metadata
+It is a business entity, not a trace. It can last hours, survive restarts and
+deploys, and pass through as many processes as your architecture involves; you
+open the same id again tomorrow and it is the same conversation. Omit the id and
+one is generated, which is what you want for a throwaway session and never what
+you want for a real thread.
 
-### 3. AgentSightAPI
-**Purpose:** Fetch and query conversation data
+A conversation produces no span of its own. What it does is establish scope: its
+fields — customer, device, language, metadata — are stamped onto
+everything recorded inside it, which is what makes them filterable later without
+you passing context down your call stack.
+
+The scope works as a context manager, an async context manager, or a decorator:
 
 ```python
-from agentsight import agentsight_api
-
-# Fetch with filters
-conversations = agentsight_api.fetch_conversations(
-    feedback_sentiment="positive",
-    page_size=10
-)
-
-# Get specific conversation
-conversation = agentsight_api.fetch_conversation(42)
+@agentsight.conversation(customer_id="user-456")
+def nightly_summary():
+    ...
 ```
 
-**Use cases:**
-- Building analytics dashboards
-- Querying conversations by filters
-- Fetching conversation details
-- Generating reports
-- Integration with other systems
+Passing `enabled=False` turns everything inside into a no-op — useful for test
+traffic and evaluation runs.
 
-:::info Singleton Pattern
-All three clients are initialized as singletons. You can import and use them anywhere in your code without worrying about multiple instances or configuration conflicts.
-:::
+## Turn
 
-## Conversations & Context
-
-A **conversation** represents a logical grouping of related interactions between users and your AI agent. Each conversation has (if you pass this data):
-
-- **Unique ID:** String identifier you control (e.g., `"chat-session-123"`)
-- **Database ID:** Integer primary key assigned by AgentSight
-- **Metadata:** Custom fields like customer_id, device, language, environment
-- **Messages:** Ordered sequence of user questions and agent answers
-- **Actions:** Tool usage, database queries, API calls
-- **Attachments:** Files, images, documents
-- **Feedback:** User ratings and comments
-
-:::info Agent Identity & Organization
-Every interaction is associated with a specific AI agent identity which is linked to API key, allowing you to differentiate performance between different AI agents or configurations.
-:::
-
-### Common Implementation Patterns
-
-- **Web Apps:** Store in localStorage/cookies - one ID per browser session
-- **WhatsApp/SMS Bots:** Use phone number - naturally groups all messages
-- **Mobile Apps:** Store in local database - separate ID per conversation thread
-- **Voice Agents:** Generate new ID per call using `generate_conversation_id()`
+A turn is **one exchange**, and it is a span:
 
 ```python
-from agentsight.helpers import generate_conversation_id
-
-# Generate unique ID
-conversation_id = generate_conversation_id()  # e.g., "conv_a3f8bc9d"
+with agentsight.conversation("wa-3859"):
+    with agentsight.turn():
+        ...
 ```
 
-## In-Memory Tracking & Batch Processing
+**Its duration is your answer latency** — measured, not approximated. Tool calls
+and LLM calls made inside it nest underneath it, so "how much of the wait was
+tools, and how much was the model?" is answerable for every exchange without any
+extra instrumentation.
 
-AgentSight uses an **in-memory-first architecture** for maximum performance. All tracking operations are instant - data is stored locally with precise timestamps until you're ready to send it.
-
-### How It Works
+Name it if the name is useful. Turns can nest, and one `turn(...)` bound to a
+variable can be entered more than once:
 
 ```python
-# ⚡ All instant - no network calls
-conversation_tracker.track_human_message("What is machine learning?")
-conversation_tracker.track_action("search_knowledge_base", duration_ms=150)
-conversation_tracker.track_agent_message("Machine learning is...")
-conversation_tracker.track_token_usage(prompt_tokens=45, completion_tokens=32)
-
-# 🌐 Single network call sends everything
-response = conversation_tracker.send_tracked_data()
+with agentsight.turn("ask"):
+    ...
 ```
 
-### Benefits
+## Message
 
-✅ **Zero latency** - Tracking never slows down your AI agent  
-✅ **Order preserved** - Chronological sequence maintained with microsecond precision  
-✅ **Resource efficient** - Minimal memory and CPU usage  
-✅ **Flexible batching** - Send when it makes sense for your app  
-✅ **Atomic operations** - All data sent in one transaction  
-
-### Sequential Order Preservation
-
-Every tracked event gets a timestamp. When sent, events appear in your dashboard in exact chronological order:
+A message is **a point in time**: something was said, by the user or the agent.
 
 ```python
-# Tracked in this order...
-conversation_tracker.track_human_message("2 + 2 = ?")      # 12:00:00.001Z
-conversation_tracker.track_action("calculate")             # 12:00:00.055Z
-conversation_tracker.track_agent_message("The answer is 4") # 12:00:00.120Z
-conversation_tracker.track_button("helpful", "👍", "yes")   # 12:00:00.125Z
-
-# ...appears in dashboard in the same order
+agentsight.user_message("How do I reset my password?")
+agentsight.agent_message("Click 'Forgot Password' on the login page.")
 ```
 
-:::warning Track in Order
-Always track events in the order they occur. Out-of-order tracking leads to confusing conversation flows and inaccurate analytics.
-:::
+Record as many as you like, in any order, from either sender — a burst of three
+user messages, an answer followed by a card, an exchange where the agent escalates
+and never replies. There is no required shape and **nothing to keep in order**:
+each message carries its own timestamp, so recording them as they happen is
+enough.
 
-### When to Send Data
+Messages are explicit because inference would put the wrong text into a
+transcript your customers read — a rewritten prompt instead of what the human
+typed. The module-level calls attach to whichever turn is currently active.
 
-You control when to send. Common patterns:
+## Tool
+
+A tool is **a unit of work**, and it becomes an action on the dashboard:
 
 ```python
-# Pattern 1: Send after each interaction
-def handle_query(query):
-    conversation_tracker.track_human_message(query)
-    answer = agent.process(query)
-    conversation_tracker.track_agent_message(answer)
-    conversation_tracker.send_tracked_data()  # Send immediately
+@agentsight.tool
+def search_orders(customer_id: str) -> list:
+    ...
 
-# Pattern 2: Batch multiple interactions
-def handle_session(queries):
-    for query in queries:
-        conversation_tracker.track_human_message(query)
-        answer = agent.process(query)
-        conversation_tracker.track_agent_message(answer)
-    
-    conversation_tracker.send_tracked_data()  # Send all at once
+@agentsight.task(name="rerank")
+def rerank(docs: list) -> list:
+    ...
 ```
 
-### Multi-Conversation Support
+Decorating the function records when it started, when it ended, what it was
+called with, and what it returned — or the error it raised, which is data too and
+is re-raised untouched. A **tool** is something the agent calls out to; a **task**
+is internal work. Identical rows, different word.
 
-Track multiple conversations concurrently - each maintains its own independent timeline:
+The name matters beyond labelling: escalation metrics key off specific action
+names, so `@agentsight.tool(name="fallback_to_human")` is what makes an escalation
+count as one.
+
+## How they fit together
+
+```
+conversation "wa-3859" ─────────────────────────────────►  hours, many processes
+   ├── turn ──► messages + nested tool/llm spans   [duration = answer latency]
+   ├── turn ──► ...
+   └── turn ──► ...
+```
+
+A conversation outlives any one process. A turn lives inside one.
+
+## When a turn ends
+
+A turn ends when its `with` block ends — **unless you hand its lifetime to
+something else with `wrap()`, which you must do whenever the handler returns
+before the work is done.**
+
+This is the one thing worth knowing before you integrate anything that streams. A
+handler that returns a streaming response has returned; the block has closed; and
+without `wrap()` the turn is recorded with a near-zero duration and no answer.
+Nothing raises — the data is simply wrong.
 
 ```python
-# Conversation A
-conversation_tracker.configure(conversation_id="user-123")
-conversation_tracker.track_human_message("Hello")
-
-# Conversation B  
-conversation_tracker.configure(conversation_id="user-456")
-conversation_tracker.track_human_message("Hi there")
-
-# Conversation A
-conversation_tracker.configure(conversation_id="user-123")
-conversation_tracker.track_agent_message("How can I help?")
-
-# Each conversation maintains separate chronological order
+return agentsight.wrap(StreamingResponse(event_generator()))
 ```
 
-## Rich Metadata System
+[Streaming](/tracking/streaming) is the page for that, and it is worth reading
+before you ship a streaming endpoint. A turn whose lifetime has been handed off
+also gets a deadline — five minutes by default, tunable with
+`turn_timeout_ms` — so a stream nobody drains cannot leave it open forever.
 
-Add context to any tracked event using metadata. This transforms raw logs into actionable insights.
+## Next
 
-```python
-# Add metadata to messages
-conversation_tracker.track_human_message(
-    message="How do I reset my password?",
-    metadata={
-        "user_type": "premium",
-        "language": "en",
-        "support_category": "account",
-        "priority": "high"
-    }
-)
-
-# Add metadata to actions
-conversation_tracker.track_action(
-    action_name="database_query",
-    duration_ms=150,
-    metadata={
-        "query_type": "SELECT",
-        "cache_hit": False,
-        "rows_returned": 10
-    }
-)
-
-# Add metadata to conversations
-conversation_tracker.get_or_create_conversation(
-    conversation_id="support-123",
-    metadata={
-        "session_id": "abc123",
-        "referrer": "help_page",
-        "user_agent": "Chrome/91.0"
-    }
-)
-```
-
-**Every tracking method accepts metadata** - use it to capture context that matters for your analytics.
-
-## AgentSight Dashboard
-
-The AgentSight dashboard provides real-time visibility into your AI agent's performance:
-
-**Key Features:**
-- 📊 **Analytics** - Response times, message flow, engagement trends
-- 🔍 **Search & Filter** - Find conversations by sentiment, actions, metadata
-- 💬 **Conversation Viewer** - See full conversation transcripts with timestamps
-- 📈 **Token Usage** - Monitor LLM costs and optimize usage
-- ⭐ **Feedback Analysis** - Track user satisfaction and identify issues
-- 🏷️ **White-Labeling** - Branded dashboard for each client
-
-<!-- For full usage details, see the [Dashboard User Guide](/dashboard). -->
+- [Turns & Messages](/tracking/turns-and-messages) — the explicit form, for
+  handlers the quickstart shortcut does not fit
+- [Configuration](./configuration.md) — the whole `init()` surface
+- [Deployment & limitations](./deployment.md) — what to wire up before you ship
