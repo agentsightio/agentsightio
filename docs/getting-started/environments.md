@@ -25,11 +25,14 @@ traffic stay separate in your dashboard.
 
 | Environment | Purpose | Dashboard Access | Analytics Availability |
 | --------------- | -------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------- |
-| **Development** | Used for building and testing your AI.       | View transcripts, messages, actions, and attachments. | ⚠️ Not yet excluded from insights — analytics currently cover all environments together. |
+| **Development** | Used for building and testing your AI.       | View transcripts, messages, actions, and attachments. | ❌ No analytics or reports (test data is excluded from insights). |
 | **Production**  | Used for deployed, real-world conversations. | Full access to dashboards, analytics, and reports.    | ✅ Analytics and reports available.                               |
 
 To view your development data inside the dashboard, simply toggle **Development
-Mode**.
+Mode**. Analytics and reports are computed from production traffic only, so
+Development Mode shows you which metrics are receiving data instead of charts —
+enough to confirm your integration is working, without test runs skewing the
+numbers your dashboards report.
 
 > **Note:** Conversations are recorded against **production** unless you select
 > an environment.
