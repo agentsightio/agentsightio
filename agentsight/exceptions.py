@@ -1,108 +1,202 @@
-class NoApiKeyException(Exception):
+"""Every exception the SDK raises.
+
+Two rules govern what belongs here:
+
+* The tracking surface never raises into user code. Nothing in ``sdk/`` outside
+  :mod:`agentsight.sdk.uploads` should be constructing these.
+* The data plane always raises, because it moves customer data and returns
+  answers the caller is going to act on. Silence would be the bug.
+
+The hierarchy is deliberately shallow — status code first, message second —
+so ``except APIError`` catches everything the backend can say and the
+narrower classes exist only where callers genuinely branch.
+"""
+
+from typing import Any, Dict, Optional
+
+
+class AgentSightError(Exception):
+    """Base class for everything this package raises."""
+
+
+# --------------------------------------------------------------------------
+# Configuration — raised before a request is ever attempted
+# --------------------------------------------------------------------------
+
+
+class ConfigurationError(AgentSightError):
+    """The client cannot be built from what it was given."""
+
+
+class MissingApiKeyError(ConfigurationError):
+    """No API key was passed and none is in the environment."""
+
+    def __init__(self, message: Optional[str] = None, app_url: Optional[str] = None):
+        if message is None:
+            from agentsight._settings import resolve_app_url
+
+            where = app_url or resolve_app_url()
+            message = (
+                "No AgentSight API key. Pass api_key= or set AGENTSIGHT_API_KEY."
+                f"\n\t    Find your API key at {where}/settings"
+            )
+        super().__init__(message)
+
+
+class InvalidApiKeyError(ConfigurationError):
+    """The key is present but not shaped like an AgentSight key.
+
+    Checked locally against ``_settings.API_KEY_PATTERN`` so an obvious typo
+    fails at construction rather than as a confusing 401 later. A key that
+    passes this check can still be rejected by the backend — that surfaces as
+    :class:`AuthenticationError`.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, app_url: Optional[str] = None):
+        from agentsight._settings import resolve_app_url
+
+        where = app_url or resolve_app_url()
+        super().__init__(
+            f"API key is malformed: {api_key!r}. Expected the form "
+            f"ags_<32 hex>_<6 hex>."
+            f"\n\t    Find your API key at {where}/settings"
+        )
+        self.api_key = api_key
+
+
+# --------------------------------------------------------------------------
+# HTTP — raised from a response the backend actually sent
+# --------------------------------------------------------------------------
+
+
+class APIError(AgentSightError):
+    """The backend answered, and the answer was an error.
+
+    ``detail`` is the backend's own words where it gave any. Backend error
+    bodies are not uniform — some carry ``detail``, some ``error``, some a DRF
+    field map — so the transport normalises them into this one attribute and
+    keeps the parsed body on ``response``.
+    """
+
     def __init__(
         self,
-        message="Could not initialize AgentSight client - API Key is missing."
-        + "\n\t    Find your API key at https://app.agentsight.io/settings",
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        detail: Optional[str] = None,
+        response: Any = None,
     ):
         super().__init__(message)
+        self.status_code = status_code
+        self.detail = detail
+        self.response = response
 
 
-class InvalidApiKeyException(Exception):
-    def __init__(self, api_key, app_url):
-        message = f"API Key is invalid: {api_key}.\n\t    Find your API key at {app_url}/settings"
-        super().__init__(message)
+class AuthenticationError(APIError):
+    """401. The credential was rejected.
+
+    The backend distinguishes four cases in the message text — unknown key,
+    inactive/expired/revoked key, key not linked to an agent, and no active
+    subscription. Only the last gets its own class; the rest are told apart by
+    reading ``detail``.
+    """
 
 
-class ApiServerException(Exception):
-    def __init__(self, message):
-        super().__init__(message)
+class SubscriptionInactiveError(AuthenticationError):
+    """401, but nothing is wrong with the key — the agent is not paid up.
+
+    Separated because it is the one 401 that rotating a key will not fix.
+    """
 
 
-class AgentSightClientNotInitializedException(RuntimeError):
-    def __init__(self, message="AgentSight client must be initialized before using this feature"):
-        super().__init__(message)
+class PermissionDeniedError(APIError):
+    """403. The key authenticated but is not allowed to do this.
+
+    Most often a ``read``-role key attempting a write. ``AgentSight().me()``
+    reports the key's own role, so this no longer has to be how a caller finds
+    out — but it is still what a write attempt raises.
+    """
 
 
-class AgentSightApiJwtExpiredException(Exception):
-    def __init__(self, message="JWT token has expired"):
-        super().__init__(message)
+class NotFoundError(APIError):
+    """404, or a filter lookup that matched nothing."""
 
 
-class ConversationTrackingException(Exception):
-    """Base exception for conversation tracking errors."""
-    def __init__(self, message):
-        super().__init__(message)
+class ValidationError(APIError):
+    """400. The request body or query was rejected.
+
+    ``errors`` holds the DRF field map when the backend sent one. Note that
+    this backend frequently raises ``ValidationError({"detail": ...})``, so a
+    400 carrying only ``detail`` is still one of these — classification is by
+    status code, never by the shape of the body.
+    """
+
+    def __init__(self, message: str, *, errors: Optional[Dict[str, Any]] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.errors = errors or {}
 
 
-class InvalidConversationDataException(ConversationTrackingException):
-    """Exception for invalid conversation data."""
-    def __init__(self, message="Invalid conversation data provided"):
-        super().__init__(message)
+class MethodNotAllowedError(APIError):
+    """405. Several routes here disable verbs a router would otherwise expose."""
 
-class NoConversationIdException(Exception):
-    """Exception raised when conversation_id is required but not provided."""
-    
-    def __init__(self, message: str = "conversation_id is required but was not provided"):
-        self.message = message
-        super().__init__(self.message)
 
-class InvalidAnswerDataException(ConversationTrackingException):
-    """Exception for invalid conversation data."""
-    def __init__(self, message="Invalid answer data provided"):
-        super().__init__(message)
+class RateLimitError(APIError):
+    """429. Too many requests, and the right response is to wait.
 
-class InvalidQuestionDataException(ConversationTrackingException):
-    """Exception for invalid conversation data."""
-    def __init__(self, message="Invalid question data provided"):
-        super().__init__(message)
+    Separate from the rest of the 4xx family because it is the only one where
+    the request was *fine* — nothing about retrying the identical call is
+    wrong, which is the opposite of every other client error here.
 
-class MissingConversationIdException(Exception):
-    """Raised when conversation_id is missing or empty."""
-    def __init__(self, message: str = "Conversation ID is required and cannot be empty"):
-        super().__init__(message)
+    ``retry_after`` is the server's own pacing in seconds where it sent a
+    ``Retry-After`` header, and ``None`` where it did not. It is already
+    normalised: the header's HTTP-date form is converted to a duration, and a
+    time in the past reads as ``0.0``.
+    """
 
-class NoDataToSendException(Exception):
-    """Raised when attempting to send data but no data is tracked."""
-    def __init__(self, message: str = "No tracked data found for conversation."):
-        super().__init__(message)
+    def __init__(self, message: str, *, retry_after: Optional[float] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
 
-class ConversationApiException(ConversationTrackingException):
-    """Exception for conversation API errors."""
-    def __init__(self, message, status_code=None, response_data=None):
+
+class ServerError(APIError):
+    """5xx, raised only once retries are exhausted."""
+
+
+class NetworkError(AgentSightError):
+    """The request never got an answer — DNS, connection, timeout, TLS."""
+
+
+# --------------------------------------------------------------------------
+# Data plane
+# --------------------------------------------------------------------------
+
+
+class UploadError(AgentSightError):
+    """The backend refused an upload, or the network failed getting there.
+
+    Raised by ``agentsight.upload_attachments`` — the one call in the tracking
+    namespace allowed to raise, because it moves customer data rather than
+    telemetry.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        response: Any = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
-        self.response_data = response_data
+        self.response = response
 
 
-class ConversationNetworkException(ConversationTrackingException):
-    """Exception for conversation tracking network errors."""
-    def __init__(self, message):
-        super().__init__(message)
+class ToolFailure(Exception):
+    """LangChain has already turned the tool's exception into a string.
 
+    ``end_tool_span`` records an exception rather than a message, so what
+    reaches it has to be one. This carries the text the framework kept and
+    invents nothing else.
 
-class InvalidAttachmentException(Exception):
-    """Exception raised when attachment data is invalid or too large."""
-    
-    def __init__(self, message: str = "Invalid attachment data provided"):
-        self.message = message
-        super().__init__(self.message)
-
-class NotFoundException(ConversationApiException):
-    """Exception raised when a resource is not found (404)."""
-    
-    def __init__(self, message: str = "Resource not found"):
-        super().__init__(message, status_code=404)
-
-
-class UnauthorizedException(ConversationApiException):
-    """Exception raised when authentication fails (401)."""
-    
-    def __init__(self, message: str = "Unauthorized - invalid or missing API key"):
-        super().__init__(message, status_code=401)
-
-
-class ForbiddenException(ConversationApiException):
-    """Exception raised when access is forbidden (403)."""
-    
-    def __init__(self, message: str = "Forbidden - not authorized to access this resource"):
-        super().__init__(message, status_code=403)
+    Not an :class:`AgentSightError`: it stands in for *user* code that failed,
+    and is only ever recorded on a span, never raised at a caller.
+    """

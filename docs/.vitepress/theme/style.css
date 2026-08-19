@@ -202,6 +202,27 @@
   flex-grow: 1;
 }
 
+/* Inline call-to-action button, e.g. "View pricing" on the introduction page */
+.cta-button {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid var(--vp-button-brand-border);
+  color: var(--vp-button-brand-text) !important;
+  background-color: var(--vp-button-brand-bg);
+  text-decoration: none !important;
+  transition: color 0.25s, border-color 0.25s, background-color 0.25s;
+}
+
+.cta-button:hover {
+  border-color: var(--vp-button-brand-hover-border);
+  color: var(--vp-button-brand-hover-text) !important;
+  background-color: var(--vp-button-brand-hover-bg);
+}
+
 .api-method {
   display: inline-block;
   padding: 2px 8px;

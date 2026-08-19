@@ -1,0 +1,1117 @@
+"""The two user-facing scopes: ``conversation()`` and ``turn()``.
+
+Both work as a context manager *and* as a decorator, because real code needs
+both: a decorator for a clean handler, a context manager when the id has to be
+dug out of a payload first (which, in every production service reviewed, it
+does).
+"""
+
+import asyncio
+import functools
+import inspect
+import threading
+import uuid
+from contextvars import Token
+from typing import Any, Callable, Dict, Literal, Optional
+
+from opentelemetry import context as otel_context
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import Status, StatusCode
+
+from agentsight import _settings
+from agentsight.sdk import context as ags_context
+from agentsight.sdk.semconv import (
+    ConversationAttributes,
+    MessageAttributes,
+    SpanAttributes,
+    SpanKind,
+    TurnAttributes,
+)
+from agentsight.sdk.serialization import (
+    bind_arguments,
+    clamp_field,
+    first_string_argument,
+    to_json,
+    to_text,
+    valid_ip,
+    warn_once,
+)
+
+_logger = None
+
+
+def _log():
+    global _logger
+    if _logger is None:
+        from agentsight.sdk.core import logger
+
+        _logger = logger
+    return _logger
+
+
+def _resolve_environment(value: Optional[str]) -> Optional[str]:
+    """A per-conversation environment, or ``None`` if the backend won't know it.
+
+    Warned and dropped rather than sent: an unknown slug 400s the whole
+    payload, which costs every other conversation in the batch. Dropped, this
+    conversation still lands — against the agent's default environment.
+
+    "Unknown" is the learned set — the fallback pair plus whatever the key
+    preflight has confirmed from ``/api/me/`` — so a custom slug starts
+    resolving the moment the preflight lands. The warning is worded around
+    that: the SDK can only say what it has confirmed, not what the agent has.
+    """
+    if not value:
+        return None
+    resolved = _settings.normalize_environment(value)
+    if resolved is None:
+        warn_once(
+            "environment:%s" % value,
+            "AgentSight: environment %r is not one the SDK has been able to "
+            "confirm this agent has (confirmed: %s); recording this "
+            "conversation without one.",
+            value,
+            ", ".join(_settings.allowed_environments()),
+        )
+    return resolved
+
+
+def generate_conversation_id() -> str:
+    """Used when the caller supplies none.
+
+    Required by product: every span must carry a conversation id, and a
+    missing one is generated rather than rejected — losing the data would be
+    worse than a synthetic id.
+    """
+    return f"conv_{uuid.uuid4().hex[:12]}"
+
+
+# ---------------------------------------------------------------------------
+# conversation
+# ---------------------------------------------------------------------------
+
+
+class ConversationScope:
+    """Ambient conversation identity plus the metadata behind the charts.
+
+    Produces no span of its own. A conversation outlives any single process,
+    so there is nothing for a span to bracket; instead every span inside
+    inherits these attributes and the exporter groups by them.
+    """
+
+    def __init__(
+        self,
+        conversation_id: Optional[str] = None,
+        *,
+        customer_id: Optional[str] = None,
+        customer_ip_address: Optional[str] = None,
+        device: Optional[str] = None,
+        source: Optional[str] = None,
+        language: Optional[str] = None,
+        name: Optional[str] = None,
+        environment: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        enabled: bool = True,
+    ):
+        #: What the caller actually passed, kept apart from what it resolved
+        #: to. The decorator form rebuilds a scope per invocation from these,
+        #: so ``None`` here has to stay ``None`` — see __call__.
+        self._explicit_id = conversation_id
+        self._kwargs: Dict[str, Any] = {
+            "customer_id": customer_id,
+            "customer_ip_address": customer_ip_address,
+            "device": device,
+            "source": source,
+            "language": language,
+            "name": name,
+            "environment": environment,
+            "metadata": metadata,
+            "enabled": enabled,
+        }
+
+        self.conversation_id = clamp_field(
+            "conversation_id", conversation_id
+        ) or generate_conversation_id()
+        self.enabled = enabled
+        self._token = None
+
+        attributes: Dict[str, Any] = {
+            ConversationAttributes.ID: self.conversation_id,
+        }
+        # Clamped, not passed through: ingest validates the whole payload at
+        # once, so a single over-length field rejects every conversation in
+        # the batch it travelled with.
+        supplied = {
+            "customer_id": clamp_field("customer_id", customer_id),
+            "customer_ip_address": valid_ip(customer_ip_address),
+            "device": clamp_field("device", device),
+            "source": clamp_field("source", source),
+            "language": clamp_field("language", language),
+            "name": clamp_field("name", name),
+            "environment": _resolve_environment(environment),
+        }
+        for kwarg, value in supplied.items():
+            if value is not None:
+                attributes[ConversationAttributes.BY_KWARG[kwarg]] = value
+        if supplied["environment"] is None:
+            # The deployment-wide default from init(environment=...) /
+            # AGENTSIGHT_ENVIRONMENT. Per-conversation always wins — a
+            # development conversation inside a production process is the
+            # caller's statement, not ours to override.
+            from agentsight.sdk.core import default_environment
+
+            fallback = default_environment()
+            if fallback:
+                attributes[ConversationAttributes.BY_KWARG["environment"]] = fallback
+        #: The live document, kept as a dict beside the serialized attribute so
+        #: ``update_metadata`` can merge into it. Copied rather than aliased:
+        #: ``self._kwargs["metadata"]`` is the same object, and the decorator
+        #: form rebuilds a scope from those kwargs on every invocation — an
+        #: in-place mutation would leak one request's update into every later
+        #: request through the same decorated handler.
+        self.metadata: Dict[str, Any] = dict(metadata) if metadata else {}
+        #: A scope is reachable from more than one thread: a streaming turn
+        #: re-attaches its conversation from the consumer's context.
+        self._metadata_lock = threading.Lock()
+
+        if metadata:
+            attributes[ConversationAttributes.METADATA] = to_json(metadata)
+
+        self.attributes = attributes
+
+    # -- metadata -----------------------------------------------------------
+
+    def set_metadata(self, document: Dict[str, Any]) -> None:
+        """Replace the conversation's metadata, for every span from here on.
+
+        Spans already exported keep the document they carried; there is no
+        rewriting them. Ingest takes the newest it has seen, so the row
+        converges on this one.
+
+        The raw dict is what gets kept and re-serialized each time. Merging out
+        of the serialized attribute instead would compound ``to_json``'s
+        truncation: a document trimmed once would be trimmed again on the next
+        update, and the keys it shed the first time could never come back.
+        """
+        with self._metadata_lock:
+            self.metadata = dict(document)
+            if self.metadata:
+                self.attributes[ConversationAttributes.METADATA] = to_json(
+                    self.metadata
+                )
+            else:
+                # An empty document is a real instruction — "clear it" — and
+                # has to travel, so it is sent as `{}` rather than by dropping
+                # the attribute, which would read as "no opinion" and leave
+                # whatever the row already holds in place.
+                self.attributes[ConversationAttributes.METADATA] = to_json({})
+
+    def set_fields(self, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Update the conversation fields that ride on every span.
+
+        The counterpart to :meth:`set_metadata`, and it exists for the same
+        reason. ``customer_id``, ``device``, ``language`` and ``name`` are
+        stamped on every span and hoisted to the payload block, and ingest
+        writes whichever of them a block carries onto the row — so a value
+        changed through ``agentsight.api`` while this conversation is still
+        open in the process would be overwritten by the very next span. The
+        caller would watch a successful PATCH and see it revert seconds later.
+
+        Values go through the same clamps the constructor uses: this document
+        travels on the wire, and a field that the API accepted at some other
+        length must not be what rejects the batch it next rides in.
+
+        Returns the fields it actually applied, so a caller can log or test
+        what travelled. Unknown keys are ignored rather than refused — the API
+        surface accepts fields (``is_marked``) that no span carries, and this
+        is not the place to enumerate them a second time.
+        """
+        applied: Dict[str, Any] = {}
+        with self._metadata_lock:
+            for kwarg, value in fields.items():
+                attribute = ConversationAttributes.BY_KWARG.get(kwarg)
+                if attribute is None or value is None:
+                    continue
+                if kwarg == "customer_ip_address":
+                    resolved: Any = valid_ip(value)
+                elif kwarg == "environment":
+                    resolved = _resolve_environment(value)
+                else:
+                    resolved = clamp_field(kwarg, str(value))
+                if resolved is None:
+                    continue
+                self.attributes[attribute] = resolved
+                self._kwargs[kwarg] = resolved
+                applied[kwarg] = resolved
+        return applied
+
+    # -- context manager ----------------------------------------------------
+
+    def __enter__(self) -> "ConversationScope":
+        self._token = ags_context.set_conversation(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._token is None:
+            return
+        # Only unwind if this scope is still the active one. A streaming turn
+        # closes its conversation from inside the consumer's context, which is
+        # not the context that opened it — resetting there would clear whatever
+        # conversation the consumer legitimately had.
+        if ags_context.current_conversation() is self:
+            ags_context.reset_conversation(self._token)
+        self._token = None
+
+    async def __aenter__(self) -> "ConversationScope":
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
+
+    # -- decorator ----------------------------------------------------------
+
+    def __call__(self, func: Callable) -> Callable:
+        """Decorator form: one conversation per *call*, not per decoration.
+
+        The scope this is called on is a template. Each invocation builds its
+        own from the arguments the caller originally supplied, which is the
+        only way ``@agentsight.conversation()`` with no id can mean "a new
+        conversation each time" — resolving the id once, at decoration, put
+        every user who ever hit the handler into the same conversation for the
+        life of the process.
+
+        Rebuilding also re-reads the deployment-wide environment. Decoration
+        happens at import, which is before ``init()``, so a template built
+        then has no environment on it at all.
+        """
+        if asyncio.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                async with self._per_call_scope():
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            with self._per_call_scope():
+                return func(*args, **kwargs)
+
+        return sync_wrapper
+
+    def _per_call_scope(self) -> "ConversationScope":
+        return ConversationScope(self._explicit_id, **self._kwargs)
+
+
+# ---------------------------------------------------------------------------
+# turn
+# ---------------------------------------------------------------------------
+
+
+class TurnScope:
+    """One exchange. Grouping and latency — nothing else.
+
+    A turn does not capture messages; you emit those. What it gives you is the
+    span whose duration *is* the answer latency, and a parent for the tool and
+    LLM spans that happen inside, so "how much of the wait was tools" is
+    answerable without new instrumentation.
+
+    A turn that does not finish is still exported — marked incomplete, with
+    the reason — so ingest can keep it out of the transcript while the token
+    spend stays recoverable. Completion is therefore tracked explicitly rather
+    than inferred from the span ending.
+    """
+
+    def __init__(self, name: Optional[str] = None):
+        self.name = name or "turn"
+        #: ``None`` is a real state, not just "not started yet": a turn that
+        #: could not start has no span, and every method here handles that.
+        self.span: Optional[otel_trace.Span] = None
+        self._otel_token: Optional["Token[otel_context.Context]"] = None
+        self._ctx_token: Optional[Any] = None
+        self._complete = False
+        self._deferred = False
+        self._ended = False
+        self._watchdog: Optional[int] = None
+        #: Guards the end-once transition. A deferred turn really can be raced:
+        #: the watchdog fires on its own thread while the iterator is finishing
+        #: on the consumer's, and ending a span twice corrupts the export.
+        self._lock = threading.Lock()
+        #: Captured at start() so a wrapped iterator can re-attach it while it
+        #: drains — see _enter_step().
+        self._conversation: Optional[ConversationScope] = None
+        self.turn_id: Optional[str] = None
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def start(self) -> "TurnScope":
+        from agentsight.sdk.core import get_tracer, is_enabled
+
+        if not is_enabled() or not ags_context.tracking_enabled():
+            return self
+
+        try:
+            tracer = get_tracer()
+            self._conversation = ags_context.current_conversation()
+            attributes = dict(ags_context.conversation_attributes())
+            attributes[SpanAttributes.KIND] = SpanKind.TURN
+            attributes[SpanAttributes.ENTITY_NAME] = self.name
+
+            span = tracer.start_span(self.name, attributes=attributes)
+            self.span = span
+            # Tag the turn with its own span id so every descendant can carry
+            # it; a ReadableSpan exposes only its immediate parent, so the
+            # buffering processor cannot walk a chain at export time.
+            self.turn_id = format(span.get_span_context().span_id, "016x")
+            span.set_attribute(TurnAttributes.ID, self.turn_id)
+
+            self._otel_token = otel_context.attach(
+                otel_trace.set_span_in_context(span)
+            )
+            self._ctx_token = ags_context.set_turn(self)
+        except Exception as exc:
+            # A turn that cannot be started is a turn that records nothing.
+            # It is not a reason for the user's handler to fail.
+            _log().debug("could not start turn span: %s", exc)
+            self.span = None
+        return self
+
+    def finish(self, complete: bool = True, *, reason: Optional[str] = None) -> None:
+        """End the span. ``complete=False`` marks the turn incomplete: it is
+        exported anyway, and ingest archives it without projecting it into the
+        transcript. ``reason`` says why (one of ``TurnAttributes.REASON_*``);
+        when omitted on an incomplete turn it defaults to ``abandoned``, since
+        every path that has an exception in hand passes ``error`` explicitly.
+
+        Idempotent by design: a deferred turn can be raced by its iterator
+        finishing and its watchdog firing, and whichever gets here first wins —
+        including the reason, which is written only by the winner.
+        """
+        self._cancel_watchdog()
+        with self._lock:
+            # `span` doubles as the already-done flag: it stays None when the
+            # turn never started or someone else already won the race.
+            span = self.span
+            if self._ended or span is None:
+                span = None
+            else:
+                self._ended = True
+        if span is None:
+            self._detach_context()
+            return
+        self._complete = complete
+        try:
+            span.set_attribute(TurnAttributes.COMPLETE, complete)
+            if not complete:
+                span.set_attribute(
+                    TurnAttributes.INCOMPLETE_REASON,
+                    reason or TurnAttributes.REASON_ABANDONED,
+                )
+            span.set_status(Status(StatusCode.OK if complete else StatusCode.ERROR))
+            span.end()
+        except Exception as exc:  # pragma: no cover - never reach user code
+            _log().debug("failed to end turn span: %s", exc)
+        finally:
+            self._detach_context()
+
+    def abandon(self) -> None:
+        """Mark this turn unfinished: it will be archived but never projected.
+
+        Needed because an application that detects its own client disconnect
+        (``if await request.is_disconnected(): break``) then returns *normally* —
+        from the SDK's side that is indistinguishable from success.
+
+        No attribute is written here: only finish()'s winner may touch the
+        span. A pre-write outside that lock could stamp ``complete=false``
+        onto a turn another thread just finished as OK, producing the
+        contradiction "incomplete, status OK, no reason" on the wire.
+        """
+        self._complete = False
+        self._deferred = False
+        self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+
+    def _record_failure(self, exc: BaseException) -> None:
+        """Attach the exception to the span, if there is one to attach to."""
+        if self.span is None or exc is None:
+            return
+        try:
+            self.span.record_exception(exc)
+        except Exception:
+            pass
+
+    def _cancel_watchdog(self) -> None:
+        if self._watchdog is None:
+            return
+        from agentsight.sdk import watchdog
+
+        watchdog.cancel(self._watchdog)
+        self._watchdog = None
+
+    def _detach_context(self) -> None:
+        """Stop being the ambient turn, without ending the span.
+
+        A deferred turn calls this when its ``with`` block exits: the span
+        stays open because the work is still running, but leaving the turn
+        attached would make the *next* thing that happens in this context —
+        the next message off the queue, the next iteration of a loop — nest
+        inside an exchange that has already been handed off.
+        """
+        if self._otel_token is not None:
+            # Detaching a token in a context that did not create it makes OTel
+            # log an error of its own, which no try/except of ours can stop.
+            # If we are no longer current, the context that owns the token is
+            # gone anyway and there is nothing to unwind.
+            if otel_trace.get_current_span() is self.span:
+                try:
+                    otel_context.detach(self._otel_token)
+                except Exception:
+                    pass
+            self._otel_token = None
+        if self._ctx_token is not None:
+            if ags_context.current_turn() is self:
+                ags_context.reset_turn(self._ctx_token)
+            self._ctx_token = None
+
+    # -- messages -----------------------------------------------------------
+
+    def add_message(
+        self, sender: str, content: Any, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        if self.span is None:
+            return
+        attributes = {
+            MessageAttributes.SENDER: sender,
+            MessageAttributes.CONTENT: to_text(content),
+        }
+        if metadata:
+            attributes[MessageAttributes.METADATA] = to_json(metadata)
+        try:
+            self.span.add_event(MessageAttributes.EVENT_NAME, attributes=attributes)
+        except Exception as exc:  # pragma: no cover
+            _log().debug("failed to add message event: %s", exc)
+
+    def user_message(
+        self, content: Any, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Attach a user message to *this* turn, wherever it is called from.
+
+        The module-level :func:`agentsight.user_message` targets whichever turn
+        is active on the current context, and opens one of its own when there
+        is none. That is right almost always and wrong in exactly one place: a
+        turn deferred by :meth:`keep_open` outlives its block, so the later
+        callback that finishes it is no longer inside it, and the module-level
+        call would quietly file the message under a turn of its own.
+        """
+        self.add_message(MessageAttributes.SENDER_USER, content, metadata)
+
+    def agent_message(
+        self, content: Any, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Attach an agent message to *this* turn. See :meth:`user_message`."""
+        self.add_message(MessageAttributes.SENDER_AGENT, content, metadata)
+
+    # -- lifetime binding ---------------------------------------------------
+
+    def keep_open(self) -> "TurnScope":
+        """Take the turn out of its block's hands. You must end it yourself.
+
+        The escape hatch for work whose end is not an iterator, a future or an
+        exception — a websocket exchange finished by a later callback, say.
+        Pair it with :meth:`end` or :func:`agentsight.abandon_turn`; the
+        watchdog closes the turn as incomplete if you never do.
+        """
+        self._deferred = True
+        self._arm_watchdog()
+        return self
+
+    def end(self, complete: bool = True, *, reason: Optional[str] = None) -> None:
+        """End a turn that was deferred by :meth:`keep_open` or :meth:`wrap`."""
+        self.finish(complete=complete, reason=reason)
+
+    def wrap(self, obj):
+        """Bind this turn's lifetime to ``obj`` instead of to a block.
+
+        The one primitive behind every case where a Python block and a unit of
+        work disagree. A handler returns a streaming body, a generator, or a
+        task; the framework drains or awaits it afterwards. Closing the span at
+        the ``return`` would record ~0ms latency and no agent message —
+        confidently wrong data, which is worse than none.
+
+        Accepts, in order of how often it shows up:
+
+        * a response object with a ``body_iterator`` (Starlette, FastAPI)
+        * an async or sync generator / iterator
+        * an ``asyncio.Task`` or ``Future``, or a ``concurrent.futures.Future``
+        * any awaitable
+
+        Anything else is returned untouched with the turn still open, which is
+        the safe reading of an unrecognised object: better a turn closed late
+        by the watchdog than a turn closed before its work happened.
+        """
+        if obj is None:
+            return obj
+
+        # Starlette wraps the real generator in a response object, so unwrap
+        # one level and rebuild it rather than wrapping the response itself.
+        if hasattr(obj, "body_iterator"):
+            obj.body_iterator = self.wrap(obj.body_iterator)
+            return obj
+
+        self._deferred = True
+        self._arm_watchdog()
+
+        if inspect.isasyncgen(obj) or hasattr(obj, "__aiter__"):
+            return self._wrap_async_iterator(obj)
+        if hasattr(obj, "add_done_callback"):
+            return self._wrap_future(obj)
+        if inspect.isawaitable(obj):
+            return self._wrap_awaitable(obj)
+        if hasattr(obj, "__iter__") or hasattr(obj, "__next__"):
+            return self._wrap_sync_iterator(obj)
+
+        _log().debug("turn.wrap() got %r, which has no end to bind to", type(obj))
+        return obj
+
+    def _arm_watchdog(self) -> None:
+        """A deferred turn that never ends can never be exported — OTel only
+        exports ended spans — and its buffered children stay pinned in memory.
+        The deadline bounds both."""
+        if self.span is None or self._watchdog is not None:
+            return
+        from agentsight.sdk import watchdog
+        from agentsight.sdk.core import get_turn_timeout_ms
+
+        timeout = get_turn_timeout_ms()
+        if timeout and timeout > 0:
+            self._watchdog = watchdog.arm(timeout / 1000.0, self._expire)
+
+    def _expire(self, deadline_expired: bool = True) -> None:
+        """Watchdog callback. ``deadline_expired`` is False when the watchdog
+        is being drained at process shutdown — the turn did not out-stay its
+        deadline, the process is leaving, and the two deserve different
+        reasons on the wire and different log levels here."""
+        if self._ended:
+            return
+        if deadline_expired:
+            _log().warning(
+                "turn %s exceeded its deadline without ending; recording it as "
+                "incomplete. Something wrapped by turn.wrap() was never drained.",
+                self.turn_id,
+            )
+            self.finish(complete=False, reason=TurnAttributes.REASON_DEADLINE)
+        else:
+            self.finish(complete=False, reason=TurnAttributes.REASON_SHUTDOWN)
+
+    # A wrapped iterator resumes in whoever is *consuming* it — a different
+    # task, sometimes a different thread — and generators do not carry the
+    # producer's context with them. Without re-attaching around each step, an
+    # agent_message() emitted while the stream drains sees no conversation and
+    # is silently dropped. Attach per step rather than once, so nothing leaks
+    # into the consumer between chunks.
+
+    def _enter_step(self):
+        conversation_token = None
+        if self._conversation is not None:
+            if ags_context.current_conversation() is not self._conversation:
+                conversation_token = ags_context.set_conversation(self._conversation)
+        turn_token = None
+        if ags_context.current_turn() is not self:
+            turn_token = ags_context.set_turn(self)
+        otel_token = None
+        if self.span is not None:
+            try:
+                otel_token = otel_context.attach(
+                    otel_trace.set_span_in_context(self.span)
+                )
+            except Exception:
+                otel_token = None
+        return conversation_token, turn_token, otel_token
+
+    def _exit_step(self, tokens) -> None:
+        conversation_token, turn_token, otel_token = tokens
+        if otel_token is not None:
+            try:
+                otel_context.detach(otel_token)
+            except Exception:
+                pass
+        if turn_token is not None:
+            ags_context.reset_turn(turn_token)
+        if conversation_token is not None:
+            ags_context.reset_conversation(conversation_token)
+
+    def _wrap_sync_iterator(self, iterator):
+        def generator():
+            source = iter(iterator)
+            try:
+                while True:
+                    tokens = self._enter_step()
+                    try:
+                        item = next(source)
+                    except StopIteration:
+                        break
+                    finally:
+                        self._exit_step(tokens)
+                    yield item
+            except GeneratorExit:
+                # The consumer walked away — a client disconnect, usually.
+                # A partial answer is not an exchange; the turn goes out
+                # marked abandoned so the transcript stays clean while the
+                # tokens it burned stay on the books.
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+                raise
+            except BaseException as exc:
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+                raise
+            else:
+                self.finish(complete=True)
+
+        return generator()
+
+    def _wrap_async_iterator(self, iterator):
+        async def generator():
+            source = iterator.__aiter__()
+            try:
+                while True:
+                    tokens = self._enter_step()
+                    try:
+                        item = await source.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    finally:
+                        self._exit_step(tokens)
+                    yield item
+            except (GeneratorExit, asyncio.CancelledError):
+                # GeneratorExit is a sync consumer walking away;
+                # CancelledError is the same event in async clothing — the
+                # task draining this stream was cancelled. Neither is the
+                # turn *failing*, and _wrap_future already maps a cancelled
+                # future to abandoned; iteration must agree with it.
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+                raise
+            except BaseException as exc:
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+                raise
+            else:
+                self.finish(complete=True)
+
+        return generator()
+
+    def _wrap_future(self, future):
+        """``asyncio.Future``/``Task`` and ``concurrent.futures.Future`` both.
+
+        Returned as-is: a future has an identity the caller may already hold or
+        compare, so replacing it with a wrapper would be a visible change to
+        their program. The callback is enough.
+        """
+
+        def done(completed):
+            try:
+                cancelled = completed.cancelled()
+            except Exception:
+                cancelled = False
+            error = None
+            if not cancelled:
+                try:
+                    error = completed.exception()
+                except Exception as exc:
+                    error = exc
+            if error is not None:
+                self._record_failure(error)
+            # Cancelled and errored are different signals: a cancelled task is
+            # the caller walking away, an exception is the work blowing up.
+            if cancelled:
+                self.finish(complete=False, reason=TurnAttributes.REASON_ABANDONED)
+            elif error is not None:
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+            else:
+                self.finish(complete=True)
+
+        try:
+            future.add_done_callback(done)
+        except Exception as exc:
+            _log().debug("could not bind turn to future: %s", exc)
+            self.finish(complete=True)
+        return future
+
+    def _wrap_awaitable(self, awaitable):
+        async def runner():
+            tokens = self._enter_step()
+            try:
+                result = await awaitable
+            except BaseException as exc:
+                self._exit_step(tokens)
+                self._record_failure(exc)
+                self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+                raise
+            self._exit_step(tokens)
+            self.finish(complete=True)
+            return result
+
+        return runner()
+
+    # -- context manager ----------------------------------------------------
+
+    def __enter__(self) -> "TurnScope":
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._deferred and exc_type is None:
+            # wrap() took ownership; whatever it bound to closes the span. The
+            # block still gives up being the ambient turn on its way out.
+            self._detach_context()
+            return
+        if exc_type is not None:
+            self._record_failure(exc_val)
+            self.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+        else:
+            self.finish(complete=True)
+
+    async def __aenter__(self) -> "TurnScope":
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
+
+
+class _TurnSpec:
+    """Options for a turn, shared by the decorator and context-manager forms."""
+
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        id_from: Optional[Any] = None,
+        infer: bool = False,
+        conversation_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        self.name = name
+        self.id_from = id_from
+        self.infer = infer
+        self.conversation_kwargs = conversation_kwargs or {}
+
+
+class _TurnFactory:
+    """What ``turn(...)`` returns: usable as ``with`` or as ``@``.
+
+    Both forms are needed. The decorator is the clean case; the context
+    manager is what a real handler uses, because the conversation id usually
+    has to be dug out of a payload before a turn can be opened.
+    """
+
+    def __init__(self, spec: _TurnSpec):
+        self._spec = spec
+        #: A stack, not a slot. ``t = agentsight.turn("ask")`` used twice — or
+        #: nested — would otherwise overwrite the first scope with the second
+        #: and leave the first turn open forever, and ``__exit__`` without a
+        #: matching ``__enter__`` would raise AttributeError out of a `with`
+        #: statement, which is the one thing tracking must never do.
+        self._scopes: "list[TurnScope]" = []
+        self._lock = threading.Lock()
+
+    def __call__(self, func: Callable) -> Callable:
+        return _decorate_turn(func, self._spec)
+
+    def __enter__(self) -> TurnScope:
+        scope = TurnScope(self._spec.name).start()
+        with self._lock:
+            self._scopes.append(scope)
+        return scope
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> "Literal[False]":
+        # ``Literal[False]`` rather than ``None``: returning False here is
+        # public, tested behaviour, and the literal type still tells mypy this
+        # can never suppress an exception.
+        with self._lock:
+            scope = self._scopes.pop() if self._scopes else None
+        if scope is not None:
+            scope.__exit__(exc_type, exc_val, exc_tb)
+        return False
+
+    async def __aenter__(self) -> TurnScope:
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> "Literal[False]":
+        return self.__exit__(exc_type, exc_val, exc_tb)
+
+
+def turn(
+    func: Optional[Callable] = None,
+    *,
+    name: Optional[str] = None,
+    id_from: Optional[Any] = None,
+    infer: bool = False,
+    **conversation_kwargs: Any,
+):
+    """One exchange — grouping and latency.
+
+    Three call shapes, all supported::
+
+        with agentsight.turn("ask"):      ...   # context manager
+        @agentsight.turn                        # bare decorator
+        @agentsight.turn(id_from="sid")         # configured decorator
+
+    ``infer=True`` is the opt-in shortcut for handlers shaped like
+    ``(text) -> str``: first string argument becomes the user message, the
+    return value becomes the agent message. It is **off by default** because
+    in every production service reviewed the user's text had been rewritten
+    before it reached a variable (an image description, a templated prompt),
+    so inferring it would put the wrong text into a client-facing transcript.
+    """
+    # ``turn("ask")`` is the obvious way to name a turn and reads as if it
+    # already worked. Without this it binds to ``func``, fails the callable
+    # test, and the name is discarded in silence — every span named "turn".
+    if isinstance(func, str):
+        name = name or func
+        func = None
+
+    spec = _TurnSpec(name, id_from, infer, conversation_kwargs)
+    if func is not None and callable(func):
+        return _decorate_turn(func, spec)  # bare @turn
+    return _TurnFactory(spec)
+
+
+def _resolve_conversation_id(spec: Any, arguments: Dict[str, Any]) -> Optional[str]:
+    """``id_from`` accepts a parameter name or a callable.
+
+    Parameter-name lookup covers the clean case. The callable exists because
+    in real handlers the id is nested — ``json.loads(data)["conversation_id"]``
+    is two dereferences from any argument.
+    """
+    if spec is None:
+        return None
+    if callable(spec):
+        try:
+            return spec(arguments)
+        except Exception as exc:
+            _log().warning("id_from callable failed: %s", exc)
+            return None
+    value = arguments.get(spec)
+    return str(value) if value is not None else None
+
+
+def _defer_if_streaming(result: Any, scope: TurnScope) -> Any:
+    """Hand the span's lifetime to the result, if the result is still working.
+
+    Deliberately a short list rather than "anything iterable": a handler that
+    returns a list or a dict has finished, and deferring on those would leave
+    every ordinary turn open until the watchdog killed it. Starlette's
+    ``StreamingResponse`` is recognised by ``body_iterator`` rather than by
+    importing it, so the SDK stays free of a FastAPI dependency.
+    """
+    if hasattr(result, "body_iterator"):
+        return scope.wrap(result)
+    if inspect.isasyncgen(result) or inspect.isgenerator(result):
+        return scope.wrap(result)
+    if hasattr(result, "add_done_callback"):  # asyncio / concurrent futures
+        return scope.wrap(result)
+    return None
+
+
+def _decorate_turn(func: Callable, spec: _TurnSpec) -> Callable:
+    """Wrap ``func`` so each call is one turn.
+
+    The conversation scope is opened here only when the decorator was given
+    enough to identify one (``id_from`` or conversation kwargs) and no scope is
+    already active — so a decorated handler nested inside an explicit
+    ``with conversation(...)`` does not start a second one.
+    """
+
+    def open_conversation_scope(arguments: Dict[str, Any]) -> Optional[ConversationScope]:
+        conversation_id = _resolve_conversation_id(spec.id_from, arguments)
+        if conversation_id is None and not spec.conversation_kwargs:
+            return None
+        if conversation_id is None and ags_context.current_conversation() is not None:
+            return None
+        scope = ConversationScope(conversation_id, **spec.conversation_kwargs)
+        scope.__enter__()
+        return scope
+
+    def close(conversation_scope: Optional[ConversationScope]) -> None:
+        if conversation_scope is not None:
+            conversation_scope.__exit__(None, None, None)
+
+    def record_input(scope: TurnScope, arguments: Dict[str, Any]) -> None:
+        if not spec.infer:
+            return
+        # The id parameter is a string too, and usually comes first — without
+        # excluding it, `@turn(id_from="session_id", infer=True)` records the
+        # session id as the user's message.
+        candidates = dict(arguments)
+        if isinstance(spec.id_from, str):
+            candidates.pop(spec.id_from, None)
+        text = first_string_argument(candidates)
+        if text:
+            scope.add_message(MessageAttributes.SENDER_USER, text)
+
+    def record_output(scope: TurnScope, result: Any) -> None:
+        if spec.infer and result is not None:
+            scope.add_message(MessageAttributes.SENDER_AGENT, result)
+
+    def fail(scope: TurnScope, exc: BaseException) -> None:
+        scope._record_failure(exc)
+        scope.finish(complete=False, reason=TurnAttributes.REASON_ERROR)
+
+    if asyncio.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            # Fast path. bind_arguments() calls inspect.signature(), which is
+            # ~15us — far too much to pay on a decorator that is meant to be a
+            # pure pass-through when the SDK is off.
+            from agentsight.sdk.core import is_enabled
+
+            if not is_enabled():
+                return await func(*args, **kwargs)
+
+            arguments = bind_arguments(func, args, kwargs)
+            conversation_scope = open_conversation_scope(arguments)
+            scope = TurnScope(spec.name or func.__name__).start()
+            record_input(scope, arguments)
+            try:
+                result = await func(*args, **kwargs)
+            except BaseException as exc:
+                fail(scope, exc)
+                close(conversation_scope)
+                raise
+
+            # A streaming result owns the span's lifetime from here: the
+            # handler returns before the work happens. The conversation scope
+            # must stay open too, or messages emitted while the stream drains
+            # are dropped for having no active conversation.
+            streamed = _defer_if_streaming(result, scope)
+            if streamed is not None:
+                # Released here rather than deferred: wrap() captured both
+                # scopes at start() and re-attaches them around each step, so
+                # the stream keeps them. Leaving them attached to *this*
+                # context instead would follow the handler home — into the next
+                # iteration of a worker loop, or the next task on this thread.
+                scope._detach_context()
+                close(conversation_scope)
+                return streamed
+
+            record_output(scope, result)
+            scope.finish(complete=True)
+            close(conversation_scope)
+            return result
+
+        return async_wrapper
+
+    @functools.wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        from agentsight.sdk.core import is_enabled
+
+        if not is_enabled():
+            return func(*args, **kwargs)
+
+        arguments = bind_arguments(func, args, kwargs)
+        conversation_scope = open_conversation_scope(arguments)
+        scope = TurnScope(spec.name or func.__name__).start()
+        record_input(scope, arguments)
+        try:
+            result = func(*args, **kwargs)
+        except BaseException as exc:
+            fail(scope, exc)
+            close(conversation_scope)
+            raise
+
+        streamed = _defer_if_streaming(result, scope)
+        if streamed is not None:
+            # See the async wrapper: wrap() owns both scopes from here.
+            scope._detach_context()
+            close(conversation_scope)
+            return streamed
+
+        record_output(scope, result)
+        scope.finish(complete=True)
+        close(conversation_scope)
+        return result
+
+    return sync_wrapper
+
+
+# ---------------------------------------------------------------------------
+# model_hint
+# ---------------------------------------------------------------------------
+
+
+class ModelHintScope:
+    """A model name to fall back on when a call resolves none of its own.
+
+    For the models automatic detection genuinely cannot name: a hand-rolled
+    LangChain ``BaseChatModel`` around a self-hosted server, a custom
+    LlamaIndex LLM — wrappers that expose no model attribute and report none
+    in their responses. The caller knows what is on the other end; this is
+    where they say so::
+
+        with agentsight.model_hint("llama3.1:8b"):
+            chain.invoke(...)
+
+    Strictly a last resort. A call that resolves any model — from the
+    provider's response or from its own arguments — keeps it; the hint fills
+    the hole only when both came up empty, and the span it fills is stamped
+    ``model_declared`` so the archive can tell an assertion from a
+    measurement. That precedence is what makes a broad hint safe: at worst it
+    names a call that would otherwise be nameless, never one that was
+    resolved.
+
+    Worth filling because a nameless call is *permanently* unpriceable — with
+    no name on the usage row, no rate table entry can ever match it, and
+    repricing cannot recover what a missing rate row can. Named, it is priced
+    now or the day a rate row exists.
+
+    The hint is read when a call *starts*, so a stream created inside the
+    block is covered even when it drains after the block exits — the same
+    rule that keeps ``wrap()``-style handlers correct. Nesting works the way
+    the other scopes nest: innermost wins, exiting restores.
+    """
+
+    def __init__(self, model: Optional[str]):
+        # Anything with a str form is accepted rather than only str: model
+        # ids arrive as enums and config objects often enough, and dropping
+        # a hint over its type would defeat the one job it has.
+        self._model = str(model) if model is not None and not isinstance(model, str) else model
+        self._token = None
+
+    def __enter__(self) -> "ModelHintScope":
+        self._token = ags_context.set_model_hint(self._model or None)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._token is not None:
+            ags_context.reset_model_hint(self._token)
+            self._token = None
+
+    async def __aenter__(self) -> "ModelHintScope":
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.__exit__(exc_type, exc_val, exc_tb)
+
+    # -- decorator ----------------------------------------------------------
+
+    def __call__(self, func: Callable) -> Callable:
+        """Decorator form. A fresh scope per call, like the other scopes —
+        this one holds per-entry state (``_token``), and one instance entered
+        concurrently from two requests would unwind the wrong context."""
+        if asyncio.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                async with ModelHintScope(self._model):
+                    return await func(*args, **kwargs)
+
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            with ModelHintScope(self._model):
+                return func(*args, **kwargs)
+
+        return sync_wrapper
+
+
+def model_hint(model: Optional[str]) -> ModelHintScope:
+    """See :class:`ModelHintScope`. Context manager or decorator."""
+    return ModelHintScope(model)

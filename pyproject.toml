@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentsight"
-version = "0.0.44"
+version = "0.1.0"
 authors = [
   { name="Moreno Franjković", email="moreno.franjkovic@outlook.com" },
 ]
@@ -18,7 +18,12 @@ classifiers = [
 license = "MIT"
 keywords = ["AI", "AI Agents", "Monitoring", "Tracking", "Analytics", "Chatbot"]
 dependencies = [
-    "requests>=2.25.0"
+    "requests>=2.25.0",
+    # The 1.0 SDK is built on OpenTelemetry. The SDK package (not just the API)
+    # is required because AgentSight supplies its own TracerProvider, span
+    # processors and exporter. No OTLP exporter and no Collector — spans go to
+    # the AgentSight REST API directly.
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +33,19 @@ test = [
     "pytest-mock",
     "pytest-asyncio",
     "requests-mock",
+    # `timeout = 30` under [tool.pytest.ini_options] is read by this plugin and
+    # by nothing else; without it the setting is silently inert and a hung test
+    # hangs CI instead of failing it.
+    "pytest-timeout",
+    # Provider integrations are tested against a mock transport rather than the
+    # network, which needs the provider SDK present to exercise its real
+    # streaming decoder. Tests skip cleanly when one is absent — which is the
+    # trap: a provider missing here does not fail, it quietly tests nothing.
+    "httpx",
+    "openai",
+    "anthropic",
+    "langchain-core",
+    "llama-index-core",
 ]
 
 dev = [
@@ -68,9 +86,29 @@ markers = [
     "unit: marks tests as unit tests",
 ]
 
+[tool.mypy]
+# Matches the CI lint job, not requires-python: the installed OTel SDK uses
+# 3.10+ `match` syntax, which mypy refuses to parse under python_version 3.9.
+# Runtime 3.9 compatibility is the test matrix's job.
+python_version = "3.11"
+# check_untyped_defs is deliberately off for now: several function bodies in
+# watchdog.py and core.py are currently unchecked (mypy notes them), and
+# turning it on surfaces new errors — worthwhile, but its own piece of work.
+# Flip it in a change that also clears what it finds.
+
+# mypy 1.16 crashes with an INTERNAL ERROR while analysing the provider SDKs
+# (anthropic/_client.py, openai/_client.py). They are installed by the `test`
+# extra so they are always found — the problem is analysing them, hence
+# follow_imports = "skip" rather than ignore_missing_imports.
+[[tool.mypy.overrides]]
+module = ["anthropic.*", "openai.*", "langchain_core.*", "llama_index.*"]
+follow_imports = "skip"
+
 [tool.ruff]
 line-length = 100
-target-version = "py37"
+# Matches requires-python. Was py37, which let ruff accept syntax
+# the project itself does not support.
+target-version = "py39"
 
 [tool.ruff.lint]
 select = [
@@ -106,9 +144,14 @@ exclude = [
     "docs/*",
     "node_modules/*",
     "venv/*",
-    "examples/*", 
+    "examples/*",
     "tests/*",
     ".github/*",
+    # Local-only. Both are kept out of git as well, but hatchling does not read
+    # the global gitignore, so without these the sdist ships them.
+    "design/*",
+    ".claude/*",
+    ".playwright-mcp/*",
     "*.gif",
     "*.png",
     "dist/*",
