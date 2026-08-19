@@ -3,7 +3,7 @@
 Importing this module puts the repository root on ``sys.path``, so the examples
 run against the working tree with nothing installed::
 
-    venv/bin/python examples/01_plain.py
+    python examples/01_plain.py
 
 Each script calls :func:`start`, does its work, and calls ``run.finish()``.
 ``start()`` points ``AGENTSIGHT_FILE_EXPORTER`` at a directory of its own and

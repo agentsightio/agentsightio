@@ -1,14 +1,14 @@
 # Examples — seeing what the SDK actually emits
 
-A development harness, not shipped documentation. Each script exercises one
-integration and writes the spans it produced to disk as **the exact JSON body
-the ingest endpoint would have received** — the same `build_payload()` the HTTP
-transport uses, so what you read here is what the backend will get.
+Each script runs on its own and exercises one integration, writing the spans it
+produced to disk as **the exact JSON body the ingest endpoint would have
+received** — the same `build_payload()` the HTTP transport uses, so what you
+read here is what the backend will get.
 
 Nothing needs an API key, an account or a network.
 
 ```bash
-venv/bin/python examples/01_plain.py
+python examples/01_plain.py
 ```
 
 Each run empties its own output directory first, so what you read afterwards is
@@ -38,7 +38,7 @@ repository's `.env` counts as present even though nobody typed it this morning.
 Each script prints which mode it chose before doing anything. To force the stub:
 
 ```bash
-AGENTSIGHT_EXAMPLES_OFFLINE=1 venv/bin/python examples/02_openai.py
+AGENTSIGHT_EXAMPLES_OFFLINE=1 python examples/02_openai.py
 ```
 
 ## Reading the output

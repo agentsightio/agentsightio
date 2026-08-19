@@ -14,8 +14,8 @@ the rule that keeps the two integrations from double-counting: the handler
 stands down on LLM spans for any provider a patch already covers, so you still
 get exactly one `llm` span per call.
 
-    venv/bin/python examples/04_llama_index.py
-    AGENTSIGHT_EXAMPLES_OFFLINE=1 venv/bin/python examples/04_llama_index.py
+    python examples/04_llama_index.py
+    AGENTSIGHT_EXAMPLES_OFFLINE=1 python examples/04_llama_index.py
 """
 
 import _common  # noqa: F401  — puts the repository root on sys.path

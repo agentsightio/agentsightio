@@ -11,7 +11,7 @@ example shows the wrong version alongside the right one. Standard library
 only: FastAPI/Starlette responses are the usual case, but the primitive is not
 about FastAPI, and a Celery task or queue consumer needs exactly the same tool.
 
-    venv/bin/python examples/06_streaming.py
+    python examples/06_streaming.py
 """
 
 import asyncio

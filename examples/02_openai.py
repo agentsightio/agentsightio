@@ -10,8 +10,8 @@ check the banner before assuming this is free. Otherwise it drives a real
 `openai` client over an `httpx.MockTransport`, the technique the test suite
 uses: every line of the patch still executes, only the socket is replaced.
 
-    venv/bin/python examples/02_openai.py
-    AGENTSIGHT_EXAMPLES_OFFLINE=1 venv/bin/python examples/02_openai.py
+    python examples/02_openai.py
+    AGENTSIGHT_EXAMPLES_OFFLINE=1 python examples/02_openai.py
 """
 
 import json

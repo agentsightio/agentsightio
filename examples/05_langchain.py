@@ -11,8 +11,8 @@ installed it uses a real model *and* installs the OpenAI patch, which shows the
 stand-down rule — the handler emits no `llm` span for a provider a patch
 already covers, so the call is counted once, not twice.
 
-    venv/bin/python examples/05_langchain.py
-    AGENTSIGHT_EXAMPLES_OFFLINE=1 venv/bin/python examples/05_langchain.py
+    python examples/05_langchain.py
+    AGENTSIGHT_EXAMPLES_OFFLINE=1 python examples/05_langchain.py
 """
 
 import _common  # noqa: F401  — puts the repository root on sys.path

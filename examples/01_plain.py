@@ -4,7 +4,7 @@ This is the floor: everything here is what you get from the explicit surface
 alone. Read it first, because every other example adds spans on top of exactly
 this shape rather than replacing it.
 
-    venv/bin/python examples/01_plain.py
+    python examples/01_plain.py
 """
 
 import _common  # noqa: F401  — puts the repository root on sys.path

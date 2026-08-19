@@ -8,9 +8,9 @@ token counts rather than nothing.
 `anthropic` is not a dependency of this project, so this script reports and
 exits when it is missing rather than faking the package. Install it to run:
 
-    venv/bin/pip install anthropic
-    venv/bin/python examples/03_anthropic.py
-    AGENTSIGHT_EXAMPLES_OFFLINE=1 venv/bin/python examples/03_anthropic.py
+    pip install anthropic
+    python examples/03_anthropic.py
+    AGENTSIGHT_EXAMPLES_OFFLINE=1 python examples/03_anthropic.py
 """
 
 import json
@@ -99,7 +99,7 @@ def main() -> None:
         import anthropic  # noqa: F401
     except ImportError:
         print("anthropic is not installed — nothing to demonstrate.")
-        print("  venv/bin/pip install anthropic")
+        print("  pip install anthropic")
         return
 
     run = _common.start("03_anthropic", auto_instrument=["anthropic"])
