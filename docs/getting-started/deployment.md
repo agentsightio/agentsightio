@@ -84,8 +84,13 @@ so end the turn first, then flush.
 
 ## The flush budget is shared
 
-Spans leave your process in batches, and how often is set by
-`export_interval_ms` (five seconds by default).
+Spans leave your process in batches. Spans recorded inside a turn are held in
+memory until that turn ends — a turn and the work beneath it travel together —
+and once released they join the export queue. On an interval set by
+`export_interval_ms` (five seconds by default), everything waiting in that
+queue goes out as one batch. So the interval is not "everything in memory every
+five seconds": an open turn sends nothing, and a finished one is on the wire
+within one interval of ending.
 
 The thing to know when you scale out: sending is a **per-process** rate spent
 against a **per-agent** allowance. Every worker in your deployment draws on the
@@ -116,11 +121,13 @@ produces far more work than a typical exchange can outgrow a single transmission
 and the dashboard may then account for less of it than was actually sent. Normal
 exchanges are nowhere near this.
 
-**`with_streaming_response` produces no span.** On OpenAI and Anthropic, this is
-the one response mode the SDK stays out of: reading that body belongs to you, and
-until it is read there is genuinely nothing to record. The tokens spent on those
-calls are not captured. Every other mode, including ordinary streaming and
-`with_raw_response`, is recorded.
+**`with_streaming_response` produces no span.** Ordinary streaming
+(`stream=True`) **is** fully recorded, token usage included — this limitation is
+not about streaming in general. It is about one specific wrapper on the OpenAI
+and Anthropic clients, `with_streaming_response`, which hands you the raw HTTP
+body to read yourself: until you read it there is genuinely nothing to record,
+so the SDK stays out of it and the tokens spent on those calls are not captured.
+Every other mode, including `with_raw_response`, is recorded.
 
 **LangChain cache hits can report tokens nobody was billed for.** A cached
 response still reports usage figures through the callback, and the handler cannot
@@ -132,11 +139,6 @@ providers end a stream without a usage event. Rather than record an authoritativ
 `0` — indistinguishable from a call that really was free — the SDK marks the call
 as having reported nothing. Unknown spend reads as unknown.
 
-**There is no OpenTelemetry interop.** Spans go to AgentSight; a collector of your
-own receives nothing from us, and traces you already collect elsewhere are not
-joined up with these. If you want your own exporter in the path,
-`init(span_exporter=...)` accepts any OpenTelemetry `SpanExporter`.
-
 **`@tool` costs roughly 100 microseconds per call.** Irrelevant against anything
 that touches a network, and worth knowing if you decorate a function that returns
 instantly and is called in a tight loop.
@@ -145,6 +147,5 @@ instantly and is called in a tight loop.
 
 - `agentsight.shutdown()` wired into your host's shutdown path
 - An [environment](./environments.md) chosen for the deployment
-- Key verification left on, so a revoked or read-only key says so at startup
 - `export_interval_ms` sized to your worker count
 - `AGENTSIGHT_FILE_EXPORTER` unset — with it set, nothing is transmitted

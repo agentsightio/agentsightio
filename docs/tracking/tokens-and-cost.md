@@ -127,4 +127,5 @@ LLM accounting for that provider, and nothing else.
 - [Tools & Actions](./tools-and-actions.md) — the other half of what happens
   inside a turn
 - [Conversations](./conversations.md) — the scope that decides what gets counted
-- [Configuration](/getting-started/configuration) — every `init()` parameter
+- [Configuration](/getting-started/configuration) — keys, environments, and
+  logging

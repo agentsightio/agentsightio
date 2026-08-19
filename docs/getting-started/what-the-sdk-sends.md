@@ -283,7 +283,7 @@ Four requests do not carry spans, listed for completeness:
 
 | What | When | What it carries |
 |---|---|---|
-| Key verification | once at `init()`, on a background thread | your API key only, no conversation data. Skip it with `init(verify_key=False)` |
+| Key verification | once at `init()`, on a background thread | your API key only, no conversation data |
 | Span batches | every 5 seconds by default | the payload above, gzipped above 8 KB where the server supports it |
 | Conversation upsert | before an `upload_attachments()` batch | the conversation id and environment, so the files have a conversation to land on |
 | Attachment upload | only on `upload_attachments()` | **the file contents**, base64-encoded, with their filenames and MIME types |
@@ -291,9 +291,6 @@ Four requests do not carry spans, listed for completeness:
 `record_attachments()` records that files were shared without sending them.
 `upload_attachments()` sends them. They are separate calls so the choice is
 explicit.
-
-Everything goes to `https://api.agentsight.io` over HTTPS, or to whatever
-`AGENTSIGHT_API_ENDPOINT` names.
 
 ## Limits
 
@@ -357,13 +354,6 @@ agentsight.init(auto_instrument=["openai"])   # or narrow it to one
 **Turn off the SDK.** Without a valid key, `init()` returns `False` and every
 scope and decorator becomes a pass-through — your application behaves exactly as
 if AgentSight were not installed.
-
-**Bring your own exporter.** `init(span_exporter=...)` accepts any OpenTelemetry
-`SpanExporter`, which puts your code between the SDK and the network:
-
-```python
-agentsight.init(span_exporter=MyExporter())
-```
 
 :::info What is not available yet
 There is no field-level redaction — no way to keep `agentsight.message.content`

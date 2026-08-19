@@ -206,8 +206,7 @@ beneath it, and the exchange would never arrive. So every deferred turn gets a
 deadline — `init(turn_timeout_ms=...)`, **five minutes by default**. On expiry
 the turn is closed and recorded as incomplete, with a warning on the
 `agentsight` logger naming what happened. `0` disables it. A turn inside a plain
-`with` block is unaffected: it ends when the block ends. See
-[Configuration](/getting-started/configuration).
+`with` block is unaffected: it ends when the block ends.
 
 ## Graceful shutdown is your job
 
@@ -240,7 +239,7 @@ the turn has ended does the same job without tearing the SDK down.
   special case of
 - [Tokens & Cost](./tokens-and-cost.md) — what a streamed LLM call reports,
   and when it reports nothing
-- [Configuration](/getting-started/configuration) — `turn_timeout_ms` and the
-  rest of `init()`
+- [Configuration](/getting-started/configuration) — keys, environments, and
+  logging
 - [Deployment & limitations](/getting-started/deployment) — shutdown hooks and
   the gaps worth knowing about

@@ -36,8 +36,15 @@ Offering a client-facing platform transforms your offering from just building AI
   - **Use AgentSight as a long-term memory store** for their AI agents.
   - **Integrate as an add-on** to an existing system (like a separate database or observability platform) or use it as the **primary, all-in-one database** for a new conversational system.
 
-::: info You choose how to use it
-It can be used as an add-on to your existing system (e.g., just for the client platform), as your primary database system for conversational AI, or as a complete solution for both.
+::: tip Use it as an add-on — nothing has to be replaced
+AgentSight plugs in **alongside whatever you already run** — your own database, your observability platform — and immediately adds a layer your stack doesn't have today:
+
+  - **Additional data** captured from every chat — transcripts, tool activity, token spend — without building any of it yourself
+  - **Analytics and reports** for the conversations you already handle
+  - **A shared surface for you and your clients** to talk about the quality of their chats, backed by the actual transcripts
+  - **Tickets as action items** — turn a conversation that needs follow-up into a tracked task
+
+Or go all in and use it as the **primary, all-in-one database** for a new conversational system. The integration is the same few lines either way.
 :::
 
 ## Dashboard
@@ -65,6 +72,8 @@ There are two ways your clients can access the dashboard:
 
 2.  **Via Embedded Dashboard:** you can embed the dashboard directly into your own or your clients' platforms, such as WordPress sites or custom-built applications.
 
+<a class="cta-button" href="https://agentsight.io/#pricing" target="_blank" rel="noreferrer">View pricing</a>
+
 ## Feedback and Tickets
 
 The dashboard is not just a window — it closes the loop between your end users and the people running the AI:
@@ -80,6 +89,7 @@ AgentSight is built for:
   - Developers, agencies, and teams delivering conversational AI solutions **who need a client-facing dashboard *and/or* a managed conversation database**.
   - Freelancers managing multiple AI clients.
   - Organizations wanting to offer **clients transparent, usable insights** into their AI systems.
+  - Anyone who wants to **deliver more value on top of an AI system that already works** — capturing richer information from every chat, offering analytics out of the box, and tightening the communication between developers and clients with tickets built from real conversations.
 
 It makes internal performance data useful to **you (via API)** and accessible to your **clients (via the dashboard)**.
 

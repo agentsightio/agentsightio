@@ -15,21 +15,21 @@ capture it. No infrastructure, no collector to run.
 :::tabs
 == pip
 ```bash
-pip install agentsight
+pip install agentsight python-dotenv
 ```
 == poetry
 ```bash
-poetry add agentsight
+poetry add agentsight python-dotenv
 ```
 == uv
 ```bash
-uv add agentsight
+uv add agentsight python-dotenv
 ```
 :::
 
-Installing [python-dotenv](https://pypi.org/project/python-dotenv/) alongside it
-is worth it: with it present, importing `agentsight` picks up a `.env` file, so
-your key never has to be in code.
+[python-dotenv](https://pypi.org/project/python-dotenv/) is included because
+with it present, importing `agentsight` picks up a `.env` file — so your key
+never has to be in code.
 
 ## Setup
 
@@ -96,7 +96,11 @@ directory instead of the network — no key, no account, no requests:
 AGENTSIGHT_FILE_EXPORTER=./agentsight-traces python your_app.py
 ```
 
-You get the exact JSON the API would have received.
+`AGENTSIGHT_FILE_EXPORTER` names a **directory**, not a file — the SDK creates
+it if needed and writes one JSON file into it per batch. (Putting the variable
+in front of `python your_app.py` sets it for that one run; exporting it or
+adding it to `.env` works the same.) You get the exact JSON the API would have
+received.
 
 ## Next steps
 
@@ -106,6 +110,6 @@ You get the exact JSON the API would have received.
   handlers
 - [Streaming](/tracking/streaming) — required reading before you ship a streaming
   endpoint
-- [Configuration](./configuration.md) — every `init()` parameter
+- [Configuration](./configuration.md) — keys, environments, and logging
 - [Deployment & limitations](./deployment.md) — graceful shutdown, and the gaps
   worth knowing about
