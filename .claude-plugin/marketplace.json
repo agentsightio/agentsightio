@@ -1,0 +1,22 @@
+{
+  "name": "agentsight",
+  "description": "AgentSight skills for AI coding agents",
+  "owner": {
+    "name": "AgentSight",
+    "url": "https://agentsight.io"
+  },
+  "plugins": [
+    {
+      "name": "agentsight",
+      "source": "./",
+      "description": "Integrate AgentSight conversation analytics into an AI agent application: code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success.",
+      "author": {
+        "name": "AgentSight",
+        "url": "https://agentsight.io"
+      },
+      "homepage": "https://docs.agentsight.io",
+      "license": "MIT",
+      "category": "observability"
+    }
+  ]
+}
