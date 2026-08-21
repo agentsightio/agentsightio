@@ -1,0 +1,13 @@
+{
+  "name": "agentsight",
+  "description": "Integrate AgentSight conversation analytics into an AI agent application: code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success.",
+  "version": "0.1.0",
+  "author": {
+    "name": "AgentSight",
+    "url": "https://agentsight.io"
+  },
+  "homepage": "https://docs.agentsight.io",
+  "repository": "https://github.com/agentsightio/agentsightio",
+  "license": "MIT",
+  "keywords": ["agentsight", "analytics", "observability", "conversations", "tracking"]
+}
