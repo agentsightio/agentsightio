@@ -65,11 +65,13 @@ turns go; which handlers return before their work is done → where `wrap()` is
 mandatory; whether LangChain/LlamaIndex already report the tools → what must
 NOT be decorated; every candidate tool's full signature → the data-consent
 question; shutdown hook, worker config, secret handling → deployment wiring;
-decision logs/ADRs → a standing decision that touches observability is a
-blocking question, not something to integrate over; contract-pinning tests
-(golden files, frozen wire bytes, AST walkers, env-file completeness checks)
-→ the guardrails the integration must land inside. Work in the live repo
-only — skip snapshot/backup copies, vendored code, and virtualenvs.
+an existing conversations table or tracing SDK → whether this is an add-on
+beside what they run or the primary store; decision logs/ADRs → a standing
+decision that touches observability is a blocking question, not something to
+integrate over; contract-pinning tests (golden files, frozen wire bytes, AST
+walkers, env-file completeness checks) → the guardrails the integration must
+land inside. Work in the live repo only — skip snapshot/backup copies,
+vendored code, and virtualenvs.
 
 While reading, also collect the conversation-id candidates and check each
 handler for what is reachable there (user id, IP, device, language, source).
@@ -77,11 +79,12 @@ handler for what is reachable there (user id, IP, device, language, source).
 ### 2. Findings summary, then the interview
 
 Present what you determined as a short findings summary, then run the
-interview per interview.md: Tier 1 (blocking) first; Tier 2 plus the
-triggered Tier 3 rows as one batch, every question carrying its findings and
-its default. Never ask what the code already answered; never ask questions
-one at a time; never stall on silence — take the default and name it in the
-report.
+interview per interview.md: Tier 1 (blocking) first — opening with add-on or
+primary store, because that answer moves the defaults under everything after
+it; then Tier 2 plus the triggered Tier 3 rows as one batch, every question
+carrying its findings and its default. Never ask what the code already
+answered; never ask questions one at a time; never stall on silence — take
+the default and name it in the report.
 
 ### 3. Write AGENTSIGHT.md
 
@@ -113,6 +116,10 @@ The judgment calls, in the order they usually bite:
   metric stays empty.
 - **Respect the consent list.** Functions the developer said to skip stay
   uninstrumented; refactors they approved happen before decoration.
+- **Let the adoption mode bound the scope.** In add-on mode their store stays
+  the system of record: match its conversation id so the rows join, and prefer
+  a named gap over building propagation across services nobody asked you to
+  touch.
 - **Environment per deployment**, QA/eval traffic to `development` or
   `enabled=False`.
 - Match the codebase's own style; the integration should read as if the

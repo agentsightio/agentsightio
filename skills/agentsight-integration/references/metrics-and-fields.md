@@ -2,7 +2,7 @@
 
 Every metric the dashboard shows, mapped to the code that feeds it. Use this
 to answer "why is this chart empty?" before it gets asked — and to make
-Tier 1 question 4 and the Tier 2 batch concrete.
+Tier 1 question 5 and the Tier 2 batch concrete.
 
 ## Three categories
 
@@ -37,7 +37,7 @@ Time (near-zero turns) — automatic does not mean unbreakable.
 | Agent Language | `language` | charts group the exact strings sent — pick one code style and stick to it |
 | Source | `source` | **recorded but not yet surfaced** — no dashboard, filter, or API response shows it today. Worth sending for the record; not something to build on. Say this honestly. |
 
-These are the per-field rows of Tier 1 question 4: available at the handler /
+These are the per-field rows of Tier 1 question 5: available at the handler /
 needs plumbing / not available — and for plumbing, skip vs wire-empty vs
 build.
 
@@ -95,7 +95,7 @@ server-side; the SDK learns them at startup). Conversations record against
 Development Mode in the dashboard shows **which metrics are receiving data**
 instead of charts — the way to confirm an integration is landing without test
 runs skewing production numbers. This is also why a mis-set environment fails
-silently (Tier 1 question 6): a production deploy recording to `development`
+silently (Tier 1 question 7): a production deploy recording to `development`
 produces no analytics and no error.
 
 Set once per deployment (`AGENTSIGHT_ENVIRONMENT` or `init(environment=…)`;

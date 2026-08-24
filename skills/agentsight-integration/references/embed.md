@@ -83,6 +83,6 @@ already-open pages — that is the kill switch.
 
 The embed's conversation and feedback views are searched by the
 **`conversation_id` the SDK recorded**. This is another reason Tier 1
-question 1 matters: a stable, human-recognizable id is what the developer's
+question 2 matters: a stable, human-recognizable id is what the developer's
 client will paste into the embed's search; a generated id makes every lookup
 a dead end.

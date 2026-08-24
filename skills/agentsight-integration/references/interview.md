@@ -35,14 +35,20 @@ it in the findings summary so the developer sees what was already determined:
 - Queue and websocket completion paths (where a turn's reply actually lands —
   this decides `wrap()` vs `keep_open()`).
 - The full signature list of every candidate tool function — names, parameters,
-  what each returns. Tier 1 question 3 is built from this list.
+  what each returns. Tier 1 question 4 is built from this list.
 - **Recorded decisions and guardrails.** Search the repo's decision log, ADRs,
   and dependency-file comments for standing decisions about observability,
   egress, or vendors — one may forbid exactly this integration (that becomes
-  Tier 1 question 7). Find the tests that pin contracts your edits could
+  Tier 1 question 8). Find the tests that pin contracts your edits could
   brush against: golden files, byte-frozen wire contracts, AST-walking tests,
   env-file completeness checks. Real production repos guard themselves; the
   integration must land inside those guardrails, not around them.
+- **The existing stack.** Whether conversation history is already persisted —
+  ORM models or tables named for conversations, messages, chat history, or a
+  memory/vector store — and whether an observability or LLM-tracing SDK is in
+  the dependency file (`langfuse`, `langsmith`, `opentelemetry-*`,
+  `sentry-sdk`, `datadog`, `helicone`, `arize-phoenix`, `braintrust`,
+  `weave`). Tier 1 question 1 is built from this.
 - Work only in the live repo — skip snapshot/backup copies of it (sibling
   `*.snapshot-*`, `*-backup` directories), vendored code, and virtualenvs.
 
@@ -51,7 +57,36 @@ it in the findings summary so the developer sees what was already determined:
 Wrong guesses here are unrecoverable or unsafe. Ask all of Tier 1 in the first
 wave, findings attached.
 
-### 1. Which conversation id do we use?
+### 1. Add-on alongside what you already run, or the primary store?
+
+Ask this first: it moves the defaults on almost everything below. Present what
+pre-flight found — the conversation tables or ORM models, and any observability
+SDK in the dependency file — and offer the two shapes:
+
+- **Add-on.** Their database or observability platform stays the system of
+  record; AgentSight adds the analytics, the transcripts, the client-facing
+  dashboard and the tickets on top of a system that already works. Nothing is
+  replaced, and they can stop at any point without unpicking their storage.
+- **Primary.** AgentSight is where conversation data lives — either there is
+  nothing else, or the something else is being retired.
+
+Two things to state unprompted, because they change the answer and the
+developer cannot know them:
+
+- **Nothing collides.** The SDK uses a private tracer provider and registers no
+  global one, so it captures none of an existing tracer's spans and they
+  capture none of its. Running both is ordinary, not a workaround.
+- **Moving to primary brings no history.** Conversations have exactly one way
+  in — the tracking SDK — so there is no backfill: the dashboard starts at
+  cutover and whatever is in their store stays there. Anyone who says
+  "migration" is usually assuming the opposite.
+
+*Default: add-on when pre-flight found an existing conversation store or a
+tracing SDK; primary when it found neither.* Guessing add-on is recoverable —
+the developer asks for more. Guessing primary means plumbing, propagation and
+edits across files they never wanted touched.
+
+### 2. Which conversation id do we use?
 
 Propose the candidates found in the code (`session_id`, `thread_id`,
 `chat_id`, …) and ask which is the **durable, business-level thread id**. Code
@@ -67,7 +102,7 @@ lookup by the id they know. Their call, made explicitly.
 *No default.* An integration with the wrong id is not a smaller integration;
 it is wrong data.
 
-### 2. One AgentSight agent, or one per end client?
+### 3. One AgentSight agent, or one per end client?
 
 An API key belongs to exactly one agent, and tracking is initialised once per
 process. If each of the developer's customers should get their own dashboard,
@@ -78,7 +113,7 @@ separate agents keep the data (and the embed dashboards) fully apart.
 
 *No default.*
 
-### 3. Do you accept what leaves the process?
+### 4. Do you accept what leaves the process?
 
 Message content, tool arguments, tool return values, metadata, and exception
 stack traces (which carry file paths) are transmitted and stored. LLM prompts
@@ -108,7 +143,7 @@ been sent. Offer it — don't argue.
 *No default for sensitive-looking functions. Functions with plainly harmless
 signatures may default to instrument, listed as such in the findings.*
 
-### 4. Which conversation fields can you supply — and for the rest, stub or skip?
+### 5. Which conversation fields can you supply — and for the rest, stub or skip?
 
 Go per field — `customer_id`, `customer_ip_address`, `device`, `language`,
 `source` — with what pre-flight found: **available at the handler** / **needs
@@ -127,7 +162,7 @@ IP address; anything else is dropped rather than sent.
 
 *Default: send what is available at the handler; skip the rest as named gaps.*
 
-### 5. Which parts of this codebase must not be touched?
+### 6. Which parts of this codebase must not be touched?
 
 Frozen modules, vendored or generated code, another team's directories,
 latency-critical paths. Nothing in a repo says "don't edit me" — ask.
@@ -135,7 +170,7 @@ latency-critical paths. Nothing in a repo says "don't edit me" — ask.
 *Default: only the files the integration plan names, listed in the findings
 before editing.*
 
-### 6. Which deployment is production, and where does the key live?
+### 7. Which deployment is production, and where does the key live?
 
 Map deployments to environments and settle the secret's home. This is Tier 1
 because a mis-set environment fails silently: development data is excluded
@@ -151,7 +186,7 @@ integration minus the key is still a deliverable.
 *Default when unanswerable: file exporter, with the switch-to-live steps
 written into the report.*
 
-### 7. Does a recorded decision forbid this? *(ask only when pre-flight found one)*
+### 8. Does a recorded decision forbid this? *(ask only when pre-flight found one)*
 
 A decision log, ADR, or dependency comment saying "no external observability",
 "no AI tracing", or "prompt content may not leave the network" is a standing
@@ -189,6 +224,15 @@ in the report.
 | Retention or erasure obligations? | none assumed; the report states plainly: data is kept indefinitely, deletion is soft |
 | How should QA and load-test traffic be handled? | recorded against the `development` environment (or `enabled=False` where it should not be recorded at all) |
 
+**How the adoption mode moves these defaults.** Add-on pulls every judgment
+call toward the lightest thing that still produces good analytics: fields that
+need plumbing get wired-empty or skipped rather than propagated, attachments
+stay descriptors because the bytes already live in their store, and the
+conversation id has to be the id their own store keys on — otherwise the two
+sets of rows cannot be joined, which is the whole reason to run both. Primary
+pulls the other way: the plumbing is worth building, because there is no
+second place to look anything up.
+
 **The widget-opened note.** The signal for Unique Interaction comes from the
 developer's own chat frontend reaching their backend — `open_conversation()`
 is a backend SDK call. It has nothing to do with AgentSight's embeddable
@@ -208,7 +252,6 @@ batch as Tier 2.
 | LangChain cache enabled | Cache hits report tokens nobody was billed for; token totals become an upper bound. Accept? |
 | No shutdown hook found | "May I add `agentsight.shutdown()` to your lifespan/signal path?" SIGTERM — how containers stop — does not flush; an orderly exit does. |
 | Server preloads the app before forking workers | `init()` must run in each worker process, not the parent — it has to move into the post-fork hook. "May I edit that config?" |
-| Existing observability (Langfuse, OTel, Sentry, …) | Keep both, or is this a migration? State unprompted: the SDK uses a private tracer provider and registers no global one, so it captures none of their spans and they capture none of its — nothing collides. |
 | A redelivering channel or a retrying client in front of the handler (webhook redelivery, a frontend that retries failed requests) | Is there idempotency on the retry? The SDK records what the handler runs: a delivery that runs the handler again records the exchange again — and if each retry genuinely re-runs the model, recording it twice is the honest accounting of real spend. |
 | A human-takeover path exists | Should a human's reply be recorded as an agent message — and marked as human in message metadata so the transcript stays honest? |
 | Multiple services in the conversation path, one repo in scope | Recording goes through the SDK, so: instrument this service and propagate the conversation id and fields into it from the others — or produce a written spec of what the other services must pass along? (Feedback and reads are available to any language over the REST API; recording is not.) |
@@ -230,7 +273,7 @@ batch as Tier 2.
 4. **Answers get written down** in `AGENTSIGHT.md` (next section), so a re-run
    reads instead of re-interrogating.
 5. **The payload dump is offered, not requested.** Any hesitation on Tier 1
-   question 3 → run with `AGENTSIGHT_FILE_EXPORTER` and hand over the actual
+   question 4 → run with `AGENTSIGHT_FILE_EXPORTER` and hand over the actual
    bytes rather than arguing about them.
 
 ## The decision record: AGENTSIGHT.md
@@ -252,6 +295,7 @@ Written by an integration run on <date>. These answers are binding for
 re-runs: update this file rather than re-answering.
 
 ## Identity
+- Adoption: <add-on alongside <what> | primary store>; existing stack: <what pre-flight found, or none>
 - Conversation id: `<variable>` — <why it is the durable thread id>; PII: <no / hashed with …>
 - Topology: <one agent | one agent per end client via …>; tenant tag: <metadata key or n/a>
 - Environments: production = <deploy target>, key lives in <secret store / env file>
