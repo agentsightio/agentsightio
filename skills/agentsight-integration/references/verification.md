@@ -19,7 +19,7 @@ AGENTSIGHT_FILE_EXPORTER=/tmp/agentsight-verify python -m your_app
 
 Each file in the directory is one export batch — the exact payload that would
 have been sent, which also makes this the honest answer to "show me what
-leaves the process" (Tier 1 question 3):
+leaves the process" (Tier 1 question 4):
 
 ```bash
 jq '.conversations[] | {conversation_id, customer_id, device, language, environment}' /tmp/agentsight-verify/*.json
@@ -63,7 +63,7 @@ Work through it against the JSON, not from memory:
 7. **Nothing left the process that the interview excluded.** Grep the JSON
    for the values that were supposed to stay home (the skipped tool's
    arguments, the unhashed id). This check is the promise made in Tier 1
-   question 3, kept.
+   question 4, kept.
 8. **The environment tag is what the deployment intends.**
 
 If the run was the no-key fallback, stop here: hand over the dump, the

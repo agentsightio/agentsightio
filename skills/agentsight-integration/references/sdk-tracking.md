@@ -93,7 +93,7 @@ with agentsight.conversation("wa-3859", customer_id="user-456", device="mobile")
 - The id is a **business string the developer controls** — the same id
   tomorrow is the same conversation, across restarts, deploys and processes.
   Omitting it generates a throwaway id nothing can ever tie back to a
-  customer; never do that for a real thread. (This is Tier 1 question 1.)
+  customer; never do that for a real thread. (This is Tier 1 question 2.)
 - Works as context manager, async context manager, and decorator. The
   decorator builds a fresh scope per call — without an explicit id that means
   one conversation per invocation, so pass an id or use `turn(id_from=…)`.
@@ -195,7 +195,7 @@ def rerank(candidates: list) -> list: ...
   **A failed call is still recorded and the exception propagates untouched.**
 - **Arguments and results are captured in full** (up to size limits). A tool
   that takes a credential or returns a full customer record sends exactly
-  that — which is why Tier 1 question 3 goes function by function.
+  that — which is why Tier 1 question 4 goes function by function.
 - **The name is load-bearing**: an action named `fallback_to_human`,
   `open_ticket`, `ticket` or `contact_human` counts as a human escalation;
   the same function named `escalate` does not.
