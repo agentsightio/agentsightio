@@ -81,11 +81,38 @@ agentsight.upload_attachments(
 | `sender` | `str` | `"end_user"` |
 | `metadata` | `dict` | — |
 | `timeout` | `float` | `30` |
+| `message_id` | `int` or `str` | — |
 
 `conversation_id` defaults to the conversation you are inside, and may be passed
 explicitly when you are not inside one. The conversation is created if it does
 not exist yet, so uploading immediately after opening a scope is safe even though
 tracking is delivered in the background.
+
+## Attaching to an existing message
+
+Without `message_id`, the backend creates a message of its own to hold the
+files, stamped at upload time. When the files belong to a message the transcript
+already has — a question uploaded with photos, delivered from a background
+worker after the reply was recorded — that creates a stray `[Attachments]` row
+in the wrong place, and no timestamp of your own will fix it: message order is
+what AgentSight observed, so nothing in the SDK lets you write one. Pass the
+message's `id` instead:
+
+```python
+ags = agentsight.api.AgentSight()
+conversation = ags.conversations.get("conv-1")
+question = conversation["messages"][-2]          # however you find yours
+
+agentsight.upload_attachments(
+    photos,
+    conversation_id="conv-1",
+    message_id=question["id"],
+)
+```
+
+The message must belong to that conversation — the backend answers 404
+(`UploadError(status_code=404)`) when it does not. The message keeps its own
+timestamp; attaching files to it does not move it.
 
 It returns the backend's response, and it needs the HTTP transport — file bytes
 always travel over the network, so a file exporter or a custom span exporter

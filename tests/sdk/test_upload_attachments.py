@@ -239,6 +239,142 @@ def test_caller_mistakes_are_value_errors(sdk):
         ags.upload_attachments([], conversation_id="conv-1")
 
 
+# --- linking to an existing message -----------------------------------------
+
+
+def test_message_id_is_sent_as_the_message_field(sdk, requests_mock):
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES},
+        conversation_id="conv-1",
+        message_id=10325,
+    )
+
+    upload = sent_to(requests_mock, ATTACHMENTS_URL)[0].json()
+    assert upload["message"] == "10325"
+
+
+def test_no_message_id_omits_the_field(sdk, requests_mock):
+    """The 0.1.1 payload, byte for byte — the backend's create branch."""
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES}, conversation_id="conv-1"
+    )
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES},
+        conversation_id="conv-1",
+        message_id="  ",
+    )
+
+    for request in sent_to(requests_mock, ATTACHMENTS_URL):
+        assert "message" not in request.json()
+
+
+def test_stale_message_id_surfaces_the_backend_404(sdk, requests_mock):
+    requests_mock.post(CONVERSATIONS_URL, json={"id": 7})
+    requests_mock.post(
+        ATTACHMENTS_URL, status_code=404, json={"detail": "Message 1 not found"}
+    )
+
+    with pytest.raises(UploadError) as excinfo:
+        ags.upload_attachments(
+            {"filename": "f.png", "data": PNG_BYTES},
+            conversation_id="conv-1",
+            message_id=1,
+        )
+    assert excinfo.value.status_code == 404
+
+
+# --- the internal timestamp -------------------------------------------------
+#
+# `_timestamp` is private on purpose: it is the only writable timestamp the
+# backend exposes, and a transcript's order is what the SDK observed, not what
+# a caller asserts. These tests pin the behaviour our own integrations use —
+# and that the public name stays unavailable.
+
+
+def test_public_timestamp_argument_does_not_exist(sdk, requests_mock):
+    import pytest
+
+    stub_happy_backend(requests_mock)
+
+    with pytest.raises(TypeError):
+        ags.upload_attachments(
+            {"filename": "f.png", "data": PNG_BYTES},
+            conversation_id="conv-1",
+            timestamp="2026-08-24T10:00:00+00:00",
+        )
+
+
+def test_internal_timestamp_is_keyword_only(sdk, requests_mock):
+    import inspect
+
+    parameter = inspect.signature(ags.upload_attachments).parameters["_timestamp"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_aware_timestamp_is_sent_verbatim(sdk, requests_mock):
+    from datetime import datetime, timezone
+
+    stub_happy_backend(requests_mock)
+    instant = datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES},
+        conversation_id="conv-1",
+        _timestamp=instant,
+    )
+
+    upload = sent_to(requests_mock, ATTACHMENTS_URL)[0].json()
+    assert upload["timestamp"] == instant.isoformat()
+
+
+def test_naive_timestamp_is_read_as_utc_not_local(sdk, requests_mock):
+    from datetime import datetime, timezone
+
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES},
+        conversation_id="conv-1",
+        _timestamp=datetime(2026, 8, 24, 10, 0),
+    )
+
+    upload = sent_to(requests_mock, ATTACHMENTS_URL)[0].json()
+    assert upload["timestamp"] == datetime(
+        2026, 8, 24, 10, 0, tzinfo=timezone.utc
+    ).isoformat()
+
+
+def test_string_timestamp_passes_through(sdk, requests_mock):
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES},
+        conversation_id="conv-1",
+        _timestamp="2026-08-24T10:00:00+00:00",
+    )
+
+    upload = sent_to(requests_mock, ATTACHMENTS_URL)[0].json()
+    assert upload["timestamp"] == "2026-08-24T10:00:00+00:00"
+
+
+def test_default_timestamp_is_still_now(sdk, requests_mock):
+    from datetime import datetime
+
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES}, conversation_id="conv-1"
+    )
+
+    upload = sent_to(requests_mock, ATTACHMENTS_URL)[0].json()
+    # A required serializer field on the backend — must be present and parse.
+    assert datetime.fromisoformat(upload["timestamp"]).tzinfo is not None
+
+
 # --- the descriptor span ----------------------------------------------------
 
 
