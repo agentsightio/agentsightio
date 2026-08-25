@@ -23,7 +23,7 @@ import mimetypes
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
@@ -72,6 +72,9 @@ def upload_attachments(
     sender: str = MessageAttributes.SENDER_USER,
     metadata: Optional[Dict[str, Any]] = None,
     timeout: float = _TIMEOUT_SECONDS,
+    message_id: Optional[Union[int, str]] = None,
+    *,
+    _timestamp: Optional[Union[datetime, str]] = None,
 ) -> Any:
     """Upload file bytes and attach them to a conversation.
 
@@ -86,6 +89,20 @@ def upload_attachments(
     ``conversation_id`` defaults to the active ``with agentsight.conversation(...)``
     scope. The conversation row is created server-side if the span pipeline has
     not delivered it yet, so uploading right after opening a scope is safe.
+
+    ``message_id`` attaches the files to an existing message — the ``id`` a
+    transcript read (``conversations.get()`` / ``list_full()``) returns —
+    instead of the backend creating a message of its own for them. The message
+    must belong to ``conversation_id``: the backend answers 404 (raised here as
+    ``UploadError(status_code=404)``) when it does not.
+
+    Without ``message_id`` the backend creates a message to hold the files,
+    stamped at upload time. Nothing here lets a caller choose that stamp: a
+    transcript's order is what the SDK observed, and every other writer —
+    ``user_message``, ``agent_message``, every span — is stamped by the
+    machine. ``_timestamp`` exists for AgentSight's own integrations, which
+    upload out of band and know the instant the files actually arrived; it is
+    private, unsupported, and may change without a major version.
 
     Blocks the calling thread and raises on failure — this is the one
     AgentSight call that is allowed to, because it moves customer data rather
@@ -125,7 +142,26 @@ def upload_attachments(
     # request carries its own timeout, so nothing about it is per-call.
     # ``agentsight.shutdown()`` releases it.
     transport = _shared_transport(api_key, endpoint)
-    return _upload(transport, normalized, resolved_id, environment, sender, metadata, timeout)
+    return _upload(
+        transport, normalized, resolved_id, environment, sender, metadata,
+        timeout, message_id, _timestamp,
+    )
+
+
+def _isoformat(timestamp: Optional[Union[datetime, str]]) -> str:
+    """The payload's ``timestamp`` field: now, unless an internal caller said.
+
+    A naive datetime is read as UTC rather than local time — the backend
+    stores UTC, and a host-offset shift here would silently reorder the
+    transcript.
+    """
+    if timestamp is None:
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(timestamp, datetime):
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.isoformat()
+    return timestamp
 
 
 def _upload(
@@ -136,6 +172,8 @@ def _upload(
     sender: str,
     metadata: Optional[Dict[str, Any]],
     timeout: float,
+    message_id: Optional[Union[int, str]] = None,
+    timestamp: Optional[Union[datetime, str]] = None,
 ) -> Any:
     conversation_pk = _ensure_conversation(
         transport, resolved_id, environment, timeout
@@ -143,7 +181,7 @@ def _upload(
 
     payload = {
         "conversation": str(conversation_pk),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": _isoformat(timestamp),
         "mode": "base64",
         "sender": sender,
         "metadata": metadata or {},
@@ -156,6 +194,10 @@ def _upload(
             for entry in normalized
         ],
     }
+    # Blank is omitted, not sent: the serializer allows "" and the backend
+    # treats it as absent, so sending it would only blur the contract.
+    if message_id is not None and str(message_id).strip():
+        payload["message"] = str(message_id)
 
     try:
         response = transport.raw(

@@ -260,7 +260,12 @@ question in Tier 2:
   tracking plane; records **descriptors only** (filename, type, size), never
   bytes; never raises; needs an active conversation scope.
 - `agentsight.upload_attachments(files, conversation_id=None, sender="end_user",
-  metadata=None, timeout=30)` — **the one SDK call that blocks and raises.**
+  metadata=None, timeout=30, message_id=None)` — **the one SDK call that blocks
+  and raises.** `message_id` attaches the files to an existing message instead
+  of the backend creating a `[Attachments]` message for them (404 →
+  `UploadError` if it is not in that conversation). Without it the created
+  message is stamped at upload time; no parameter overrides that, so a
+  background upload that must land in its own turn passes `message_id`.
   Uploads the actual bytes over HTTP. Raises `ValueError` for caller mistakes
   and `agentsight.UploadError` (with `.status_code`, `.response`) when the
   backend refuses or the network fails. Limits: 25 MB per file, 10 files per
