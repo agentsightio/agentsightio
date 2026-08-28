@@ -41,6 +41,10 @@ CONVERSATION_FILTERS = frozenset(
         "has_feedback",
         "has_messages",
         "include_deleted",
+        # Filters AND includes: narrows to conversations with at least one
+        # ticket, and each returned row then carries its tickets at full
+        # depth. See Conversations.list for the caveat callers get wrong.
+        "include_tickets",
         "is_marked",
         "language",
         "message_contains",
@@ -75,10 +79,11 @@ FEEDBACK_FILTERS = frozenset(
     }
 )
 #: ``has_ticket`` and ``ticket_status`` are deliberately absent. Tickets are
-#: internal workflow state and are not on the API-key plane at all: the nested
-#: ``ticket`` object is omitted from every feedback payload, the ``counts``
-#: envelope carries only ``all``, and both filters now return 400. Refusing
-#: them here turns that into an error naming the supported filters.
+#: not on the API-key *feedback* plane (conversations expose them via
+#: ``include_tickets``): the nested ``ticket`` object is omitted from every
+#: feedback payload, the ``counts`` envelope carries only ``all``, and both
+#: filters now return 400. Refusing them here turns that into an error naming
+#: the supported filters.
 
 #: Note the absence of ``agent``: an API key is bound to exactly one agent and
 #: the scoping is applied before any filter runs, so the parameter could only

@@ -379,6 +379,7 @@ you and offers `list_full()` as the named opt-in.
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
 | `is_marked` | flagged conversations |
 | `include_deleted` | include soft-deleted rows — see [Deleting](#deleting-is-soft) |
+| `include_tickets` | **narrows to conversations with at least one ticket, and puts each row's tickets on the payload in full** — see the warning below |
 | `has_messages` | conversations that recorded any message |
 | `has_action` | conversations in which any tool or task ran |
 | `action_name` | conversations in which a *named* tool or task ran |
@@ -390,6 +391,22 @@ you and offers `list_full()` as the named opt-in.
 | `metadata_key` + `metadata_value` | one key, spelled out as two parameters |
 | `started_at_after`, `started_at_before` | when it began |
 | `ordering` | `started_at`, `ended_at`, `id`, `customer_id`, `is_marked`, `language` |
+
+:::warning `include_tickets=true` filters as well as includes
+It does two things at once: each returned conversation carries its `tickets`
+(title, status, priority, tags, timestamps and the full discussion thread
+under `comments`), **and the result set drops every conversation that has no
+ticket** — with no error. An agent with a thousand conversations and three
+ticketed ones answers with three rows, and the envelope's `count` is that
+ticketed count. Do not add it "just to see tickets" on a listing you expect to
+stay complete.
+
+The accepted spellings are `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`;
+anything else — the empty string included — answers `400` naming the
+parameter, rather than silently ignoring what you asked for. On
+[Get one conversation](#get-one-conversation) the parameter is accepted and
+ignored: detail carries tickets unconditionally.
+:::
 
 Combining them narrows:
 
@@ -572,7 +589,53 @@ curl "https://api.agentsight.io/api/conversations/732/" \
       "comment": "Quick and helpful, delivery moved as asked.",
       "created_at": "2026-08-17T10:32:38.050751Z"
     }
-  ]
+  ],
+  "tickets": [
+    {
+      "id": 61,
+      "title": "Courier ETA was wrong",
+      "status": "open",
+      "priority": "medium",
+      "tags": ["delivery"],
+      "created_at": "2026-08-18T09:12:04.118330Z",
+      "updated_at": "2026-08-18T09:40:11.902514Z",
+      "comments": [
+        {
+          "id": 204,
+          "author": "Maja K.",
+          "role": "reporter",
+          "body": "The bot promised 13:00, parcel came at 18:30.",
+          "created_at": "2026-08-18T09:12:04.120944Z"
+        },
+        {
+          "id": 209,
+          "author": "Dev team",
+          "role": "dev",
+          "body": "Carrier feed lag — switching to the live endpoint.",
+          "created_at": "2026-08-18T09:40:11.900012Z"
+        }
+      ]
+    }
+  ],
+  "token_usage": {
+    "totals": {
+      "prompt_tokens": 8210,
+      "completion_tokens": 1650,
+      "total_tokens": 9860
+    },
+    "cost_usd": "0.05242500",
+    "cost_sources": ["backend"],
+    "models": [
+      {
+        "model": "claude-sonnet-4-5",
+        "cost_source": "backend",
+        "cost_usd": "0.05242500",
+        "prompt_tokens": 8210,
+        "completion_tokens": 1650,
+        "total_tokens": 9860
+      }
+    ]
+  }
 }
 ```
 
@@ -584,7 +647,22 @@ belongs to it. `sender` is `end_user` or `agent`.
 
 This route always returns the whole conversation — asking for one by id is the
 case where you almost certainly want all of it, and `?full=` is a **list-only**
-parameter that this route ignores.
+parameter that this route ignores. `tickets` and `token_usage` arrive
+unconditionally for the same reason (and `?include_tickets=` is accepted and
+ignored here).
+
+`tickets` is every ticket filed against the conversation, discussion thread
+included, newest ticket first, thread messages oldest first.
+
+`token_usage` is `null` when nothing was recorded. `totals` names only the
+token columns that are non-zero for this conversation (`total_tokens` always),
+and `models` breaks the same columns down per model — tokens from different
+models are not the same unit. Costs are decimal **strings**, and `cost_source`
+is carried through rather than blended: `backend` means priced from the rate
+card, `reported` means the SDK's own figure was used, and `unpriced` means no
+price row matched — that zero is "we could not price this", never "this was
+free". One `models` entry per model *and* pricing source, so a partially
+repriced model shows both.
 
 `geo_location` is `null` unless an IP was recorded and resolved.
 
