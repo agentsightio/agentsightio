@@ -63,6 +63,10 @@ ags.environments()          # ['production', 'development', …] — the authori
 
 - `list(**filters)` / `list_full(**filters)` — summaries vs full transcripts;
   list what you need, `list_full` is the heavier call.
+- `list(include_tickets=True)` — **narrows AND includes**: only conversations
+  with at least one ticket come back, each carrying its `tickets` at full
+  depth (discussion thread included). Never add it to a listing that must
+  stay complete. `get()` carries tickets unconditionally.
 - `get(conv, full=True)`, `attachments(conv)`, `metadata_keys()`,
   `metadata_values(key)`, `resolve(conv)`, `rename(conv, name)`,
   `mark(conv, is_marked=True)`, `update(conv, **fields)`.
@@ -90,9 +94,12 @@ ags.feedbacks.create_for_agent("negative", comment="too slow")   # about the age
   `delete(id)`.
 - Wiring it means one small endpoint in the developer's backend that their UI
   calls — offered in Tier 2, default not wired and reported as a gap.
-- Retried writes are not idempotent: a replayed create is a second row. Ticket
-  fields (`has_ticket`, ticket status) are dashboard-side, not on the API-key
-  plane.
+- Retried writes are not idempotent: a replayed create is a second row.
+- Tickets ride behind the same gate as conversations:
+  `list(include_tickets=True)` narrows to promoted feedback AND puts the
+  nested `ticket` (full depth) on each row; `has_ticket` / `ticket_status`
+  work only alongside it (400 without); `get(id)` carries the ticket
+  unconditionally.
 
 ## Actions: labelling for the dashboard
 

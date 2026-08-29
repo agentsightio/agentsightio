@@ -71,19 +71,24 @@ FEEDBACK_FILTERS = frozenset(
         "env",
         "environment",
         "has_comment",
+        # The gate to the ticket surface of this route: narrows to feedback
+        # rows that carry a ticket, and opens the nested ``ticket`` (at full
+        # depth, discussion thread included), the per-status ``counts``, and
+        # the two ticket filters below. Without it those filters answer 400
+        # and payloads carry no ticket data. Same name and coupling as the
+        # conversations twin; see Feedbacks.list.
+        "include_tickets",
+        "has_ticket",
         "kind",
         "ordering",
         "search",
         "sentiment",
+        # Accepts a list — ``ticket_status=["open", "in_progress"]`` ORs, sent
+        # as repeated keys.
+        "ticket_status",
         "user",
     }
 )
-#: ``has_ticket`` and ``ticket_status`` are deliberately absent. Tickets are
-#: not on the API-key *feedback* plane (conversations expose them via
-#: ``include_tickets``): the nested ``ticket`` object is omitted from every
-#: feedback payload, the ``counts`` envelope carries only ``all``, and both
-#: filters now return 400. Refusing them here turns that into an error naming
-#: the supported filters.
 
 #: Note the absence of ``agent``: an API key is bound to exactly one agent and
 #: the scoping is applied before any filter runs, so the parameter could only

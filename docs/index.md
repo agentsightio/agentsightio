@@ -80,7 +80,7 @@ The dashboard is not just a window — it closes the loop between your end users
 
 - **Feedback** is end-user sentiment — `positive`, `neutral` or `negative`, with an optional comment — attached to a single conversation or to the agent as a whole. You can record it from your own UI through the API client, read it back the same way, and filter conversations by it; on the dashboard it sits alongside the conversation it belongs to.
 
-- **Tickets** are the follow-up workflow built on top of feedback. A conversation or a piece of feedback that needs action can be turned into a ticket and worked on the dashboard — triaged, tracked, resolved — so acting on what your clients see happens on the same surface they already use. Tickets are a dashboard workflow; they are not part of the API surface.
+- **Tickets** are the follow-up workflow built on top of feedback. A conversation or a piece of feedback that needs action can be turned into a ticket and worked on the dashboard — triaged, tracked, resolved — so acting on what your clients see happens on the same surface they already use. Tickets are worked on the dashboard, but the API reads them back: conversations and feedback carry their tickets behind `include_tickets=True` (and unconditionally on detail), so an integration can see what was filed and whether anyone acted on it.
 
 ## Who It's For
 

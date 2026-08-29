@@ -128,13 +128,29 @@ def test_list_filters(ags, requests_mock):
     assert qs["kind"] == ["conversation"]
 
 
-@pytest.mark.parametrize("gone", ["has_ticket", "ticket_status"])
-def test_ticket_filters_are_refused_locally(ags, gone):
-    # Tickets are internal workflow state and are not on the API-key plane at
-    # all — the backend now 400s these. Refusing them here turns that round
-    # trip into an error that names the filters that do work.
-    with pytest.raises(ValidationError, match=gone):
-        ags.feedbacks.list(**{gone: True})
+def test_include_tickets_reaches_the_wire(ags, requests_mock):
+    # The gate to the feedback ticket surface: it both narrows (only promoted
+    # rows come back) and includes (each row carries `ticket` at full depth).
+    requests_mock.get(FEEDBACKS, json=envelope([]))
+
+    list(ags.feedbacks.list(include_tickets=True))
+
+    assert requests_mock.last_request.qs["include_tickets"] == ["true"]
+
+
+def test_ticket_filters_pass_through_alongside_the_gate(ags, requests_mock):
+    # ticket_status accepts a list and ORs it — sent as repeated keys, which
+    # is how django-filter's MultipleChoiceFilter reads it.
+    requests_mock.get(FEEDBACKS, json=envelope([]))
+
+    list(ags.feedbacks.list(
+        include_tickets=True, has_ticket=True,
+        ticket_status=["open", "in_progress"],
+    ))
+
+    qs = requests_mock.last_request.qs
+    assert qs["has_ticket"] == ["true"]
+    assert qs["ticket_status"] == ["open", "in_progress"]
 
 
 def test_an_unknown_filter_is_refused(ags):
@@ -143,15 +159,25 @@ def test_an_unknown_filter_is_refused(ags):
 
 
 def test_page_exposes_the_counts_block(ags, requests_mock):
-    # For an API key this collapses to {"all": N} — the ticket aggregates it
-    # used to carry leaked the same internal workflow state the nested ticket
-    # object did, in summary form. `extra` passes the envelope through
-    # generically, so nothing here had to change to follow it.
+    # Without include_tickets this collapses to {"all": N}; `extra` passes the
+    # envelope through generically, so nothing here has to track its shape.
     requests_mock.get(FEEDBACKS, json=envelope([], counts={"all": 12}))
 
     page = ags.feedbacks.page()
 
     assert page.extra["counts"] == {"all": 12}
+
+
+def test_page_carries_the_ticket_aggregates_behind_the_gate(ags, requests_mock):
+    # With include_tickets=True the per-status tallies arrive alongside `all`
+    # (actions/closed/015 reversed their removal). Still pure pass-through.
+    counts = {"all": 3, "tickets": 3, "open_tickets": 2, "open": 1, "in_progress": 1, "done": 1}
+    requests_mock.get(FEEDBACKS, json=envelope([], counts=counts))
+
+    page = ags.feedbacks.page(include_tickets=True)
+
+    assert page.extra["counts"] == counts
+    assert requests_mock.last_request.qs["include_tickets"] == ["true"]
 
 
 def test_get(ags, requests_mock):

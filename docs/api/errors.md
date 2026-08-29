@@ -108,10 +108,13 @@ message names the values that would have worked. You can tell the two apart:
 a locally-raised one has `status_code` of `None` and an empty `errors`.
 
 ```python
-ags.conversations.list(has_ticket=True)
-# ValidationError: unknown conversation filter(s): has_ticket.
+ags.conversations.list(started_after="2026-01-01")
+# ValidationError: unknown conversation filter(s): started_after.
 #                  Supported: action_name, conversation_id, customer_id, …
 ```
+
+(The real filter is `started_at_after` — the kind of near-miss this exists to
+catch.)
 
 Refusing an unrecognised filter is worth the strictness. A filter the server
 does not apply returns *more* rows than you asked for, and a typo that quietly

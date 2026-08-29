@@ -47,32 +47,46 @@ class Feedbacks(Resource):
         Filters: ``agent``, ``category``, ``comment_contains``,
         ``conversation`` (pk), ``conversation_id`` (string),
         ``created_at_after``, ``created_at_before``, ``environment`` (or
-        ``env``), ``has_comment``, ``kind``, ``ordering``, ``search``,
-        ``sentiment``, ``user``.
+        ``env``), ``has_comment``, ``has_ticket``, ``include_tickets``,
+        ``kind``, ``ordering``, ``search``, ``sentiment``, ``ticket_status``,
+        ``user``.
 
-        Tickets are not filterable here — see :meth:`get`.
+        **``include_tickets=True`` also narrows the result set** — it returns
+        only feedback that was promoted to a ticket, and each of those rows
+        then carries the nested ``ticket`` at full depth (title, status,
+        priority, tags, ``comments_count`` and the ``comments`` thread).
+        Adding it merely to see tickets loses every unpromoted row; without
+        it, feedback payloads carry no ``ticket`` key at all.
+
+        ``has_ticket`` and ``ticket_status`` work only alongside
+        ``include_tickets=True`` — on their own the backend answers 400.
+        ``ticket_status`` accepts a list and ORs it:
+        ``ticket_status=["open", "in_progress"]``.
         """
         return PageIterator(self._fetch, self._filters(filters))
 
     def page(self, number: int = 1, **filters: Any) -> Page:
-        """One page, with the aggregate count the envelope carries.
+        """One page, with the aggregate counts the envelope carries.
 
-        ``Page.extra["counts"]`` holds ``{"all": N}`` — how many rows match the
-        filters, which is the same number as ``Page.count`` and is kept only
-        because the envelope publishes it.
-
-        Earlier versions of this client documented ticket aggregates here too
-        (``tickets``, ``open_tickets``, and the per-status tallies). Those are
-        internal workflow state and are no longer sent to an API key.
+        Without ``include_tickets=True``, ``Page.extra["counts"]`` holds
+        ``{"all": N}`` — how many rows match the filters, the same number as
+        ``Page.count``. With it, the ticket aggregates arrive alongside:
+        ``tickets``, ``open_tickets``, and one tally per ticket status
+        (``backlog``, ``open``, ``in_progress``, ``in_review``, ``done``,
+        ``closed``). The tallies ignore any ``ticket_status`` filter on
+        purpose, so a selected status does not zero the other buckets.
         """
         return PageIterator(self._fetch, self._filters(filters)).page(number)
 
     def get(self, feedback_id: int) -> Dict[str, Any]:
         """One feedback row.
 
-        No ``ticket`` key: tickets are internal workflow state and are not
-        exposed on the API-key plane, so the field is absent rather than null
-        on every payload here — list, retrieve and the echo from a create.
+        Carries the nested ``ticket`` unconditionally — at full depth,
+        discussion thread included — or ``null`` when the feedback was never
+        promoted. Asking for one row by id is itself the explicit act, so no
+        parameter is needed here; only the *list* keeps tickets behind
+        ``include_tickets=True``. (The echo from a create still has no
+        ``ticket`` key.)
         """
         return self._request("GET", f"/api/feedbacks/{int(feedback_id)}/")
 

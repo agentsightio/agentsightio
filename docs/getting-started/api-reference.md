@@ -195,10 +195,10 @@ Datetime filters accept the same form. **Booleans** are the lowercase strings
 GET /api/conversations/?has_tickets=true    →  count: 539
 ```
 
-That filter does not exist — the real one is `has_ticket`, and it is not on this
-plane at all. Nothing was applied, and the response is the entire result set
-wearing the appearance of a filtered one. A typo here does not error; it
-**widens** your result set, silently.
+That filter does not exist — the real one is `include_tickets`. Nothing was
+applied, and the response is the entire result set wearing the appearance of a
+filtered one. A typo here does not error; it **widens** your result set,
+silently.
 
 Two habits make that survivable: check `count` against what you expected, and
 copy filter names from the tables below rather than typing them. This is also
@@ -954,9 +954,13 @@ curl "https://api.agentsight.io/api/feedbacks/?sentiment=negative" \
 
 </details>
 
-Newest first. The envelope carries one extra key, `counts`, which holds how many
-rows match the filters — the same number as `count`, and kept only because the
-envelope publishes it.
+Newest first. The envelope carries one extra key, `counts`. Plain, it holds
+`{"all": N}` — how many rows match the filters, the same number as `count`.
+Behind `?include_tickets=true` (below) the ticket aggregates arrive alongside:
+`tickets`, `open_tickets`, and one tally per ticket status (`backlog`, `open`,
+`in_progress`, `in_review`, `done`, `closed`). The tallies ignore any
+`ticket_status` filter on purpose, so a selected status does not zero the
+other buckets.
 
 | Filter | Selects on |
 |---|---|
@@ -970,6 +974,8 @@ envelope publishes it.
 | `has_comment` | rows with free text, or rows without |
 | `comment_contains` | text inside the comment |
 | `created_at_after`, `created_at_before` | when it was left |
+| `include_tickets` | the gate to the ticket surface — see the warning below |
+| `has_ticket`, `ticket_status` | the promoted state — only alongside `include_tickets=true`; `ticket_status` repeats to OR (`?ticket_status=open&ticket_status=done`) |
 | `search` | across the searchable fields |
 | `ordering` | `created_at`, `id`, `kind`, `sentiment`, `category` |
 
@@ -977,23 +983,33 @@ To go the other way — conversations that *have* feedback, rather than the
 feedback itself — filter conversations on `has_feedback` or
 `feedback_sentiment`.
 
-:::info Tickets are not on this surface
-`has_ticket` and `ticket_status` are refused rather than ignored:
+:::warning `include_tickets` narrows as it includes
+`?include_tickets=true` does two things at once: each returned row carries its
+nested `ticket` at full depth (title, status, priority, tags, timestamps,
+`comments_count` and the `comments` thread, oldest first), **and every
+feedback that was never promoted to a ticket is dropped** — with no error. Do
+not add it "just to see tickets" on a listing you expect to stay complete; the
+envelope's `count` is the promoted count. The accepted spellings are
+`1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`; anything else — the empty
+string included — answers `400`. Same contract as the conversations list.
+
+Without it, feedback payloads carry no `ticket` key, `counts` holds `all` and
+nothing else, and the two ticket filters are refused rather than ignored:
 
 ```json
-{ "has_ticket": "Tickets are not available on the API-key plane." }
+{ "has_ticket": "Ticket filters need ?include_tickets=true on the API-key plane." }
 ```
-
-Feedback payloads carry no nested ticket object, and `counts` holds `all` and
-nothing else. Tickets are internal workflow state; that is a boundary drawn on
-purpose, not a field that has yet to be added.
 :::
 
 ### Get one
 
 <span class="api-method get">GET</span> `/api/feedbacks/{id}/` — *read role*
 
-Returns a single row in the shape above.
+Returns a single row in the shape above, plus its nested `ticket`
+unconditionally — at the same full depth as the opted-in list, or `null` when
+the feedback was never promoted. Asking for one row by id is itself the
+explicit act, so no parameter is needed here (and `include_tickets` is
+accepted and ignored). The echo from a create still carries no `ticket` key.
 
 ### Create feedback on a conversation
 
@@ -1781,7 +1797,7 @@ absence is a decision:
 | | Why |
 |---|---|
 | **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run. |
-| **Tickets** | Internal workflow state. No routes, no nested objects, and the ticket filters are refused rather than ignored. |
+| **Ticket routes** | No `/api/tickets/` CRUD for a key yet. Ticket *data* does reach this plane where it is anchored: on conversations behind `?include_tickets=true` and unconditionally on conversation detail, and on feedback the same way. Creating, editing and discussing tickets stays a dashboard workflow. |
 | **Buttons** | Recorded completely, but nothing projects them into a readable table yet — a list here would answer "no clicks" to everyone. Read them as [spans](#what-spans-are-good-for). |
 | **Message and action-log writes** | Same rule as recording: they belong to the SDK. |
 | **Admin and dashboard routes** | Session-authenticated, and not part of any integration contract. |

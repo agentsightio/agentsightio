@@ -87,19 +87,43 @@ ags.feedbacks.page().count
 | `environment` (or `env`) | the environment it was left in |
 | `has_comment`, `comment_contains` | the free text |
 | `created_at_after`, `created_at_before` | when it was left |
+| `include_tickets` | the gate to the ticket surface — see below |
+| `has_ticket`, `ticket_status` | the promoted state — only alongside `include_tickets=True` |
 | `search`, `ordering` | across the searchable fields, and the sort |
 
 To go the other way — conversations that have feedback, rather than the
 feedback itself — filter [conversations](./conversations.md#the-filters) on
 `has_feedback` or `feedback_sentiment`.
 
-:::info No ticket filters, and no ticket object
-Tickets are internal workflow state and are not on the API-key surface at all.
-Feedback payloads here carry no nested ticket, `has_ticket` and `ticket_status`
-are refused with an error naming the filters that do work, and the aggregate
-`counts` collapses to `{"all": N}`. That is a boundary drawn on purpose, not a
-field that has yet to be added.
+### Tickets: `include_tickets` narrows as it includes
+
+A ticket is typically a promoted piece of feedback, and `include_tickets=True`
+is how you read that promotion back:
+
+```python
+for feedback in ags.feedbacks.list(include_tickets=True):
+    ticket = feedback["ticket"]
+    print(ticket["status"], ticket["title"], ticket["comments_count"])
+```
+
+Each returned row carries its `ticket` — id, title, status, priority, tags,
+timestamps, `comments_count` and the full discussion thread under `comments`,
+oldest message first — or you can narrow further with `has_ticket` and
+`ticket_status` (which accepts a list and ORs it:
+`ticket_status=["open", "in_progress"]`).
+
+:::warning It also narrows the result set
+`include_tickets=True` does two things at once: it puts the ticket on each
+row, **and it drops every feedback that was never promoted** — with no error.
+Do not add it "just to see tickets" on a listing you expect to stay complete;
+the page's `count` is the promoted count. Without it, payloads carry no
+`ticket` key, `counts` collapses to `{"all": N}`, and `has_ticket` /
+`ticket_status` answer 400 — same contract as
+[conversations](./conversations.md#tickets-include_tickets-narrows-as-it-includes).
 :::
+
+`get()` needs no parameter: one feedback by id carries its `ticket`
+unconditionally, at the same full depth, or `null` when it was never promoted.
 
 ## Correcting and removing
 
