@@ -90,6 +90,39 @@ FEEDBACK_FILTERS = frozenset(
     }
 )
 
+#: ``/api/tickets/`` — the workflow items filed against this agent.
+#:
+#: No ``agent`` (same reasoning as ACTION_FILTERS below) and no
+#: ``environment``: the route has no environment filter — a ticket records the
+#: environment it was created in, but the backend does not filter on it.
+#: ``conversation`` is the integer pk and ``conversation_id`` the business
+#: string, the same split the feedback route makes.
+TICKET_FILTERS = frozenset(
+    {
+        "conversation",
+        "conversation_id",
+        "created_at_after",
+        "created_at_before",
+        "has_conversation",
+        "has_feedback",
+        "ordering",
+        "priority",
+        "search",
+        # Accepts a list — ``status=["open", "in_progress"]`` ORs, sent as
+        # repeated keys.
+        "status",
+        # Comma-separated: ``tags="checkout,billing"`` matches tickets
+        # carrying ANY of the named tags.
+        "tags",
+        "updated_at_after",
+        "updated_at_before",
+    }
+)
+
+#: The ticket lifecycle, as the dashboard's board columns order it.
+TICKET_STATUSES = ("backlog", "open", "in_progress", "in_review", "done", "closed")
+TICKET_PRIORITIES = ("low", "medium", "high")
+
 #: Note the absence of ``agent``: an API key is bound to exactly one agent and
 #: the scoping is applied before any filter runs, so the parameter could only
 #: ever be a no-op or a contradiction. The same is true on ``/api/buttons/``,

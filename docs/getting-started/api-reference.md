@@ -901,7 +901,8 @@ operator actions. If you need either, ask.
 
 ## Feedbacks
 
-Feedback is the one thing on this API you can create, and the exception proves
+Feedback is one of the few things on this API you can create — [tickets](#tickets)
+and [action declarations](#actions) are the others — and the exceptions prove
 the rule elsewhere. Everything else is telemetry — things that happened, which
 the SDK watched happen. Nothing about a run of your agent reveals whether the
 person on the other end was satisfied with it. Somebody has to say so, and the
@@ -1145,6 +1146,180 @@ curl -X DELETE "https://api.agentsight.io/api/feedbacks/4/" \
 `204 No Content`, and it is gone — unlike a conversation, feedback deletes for
 real. It is a statement somebody made, and withdrawing it means withdrawn rather
 than hidden. Asking for it afterwards is a `404`.
+
+## Tickets
+
+Tickets are the workflow items a team tracks against an agent — bugs and
+tasks, optionally anchored to the conversation they are about and to the
+feedback that prompted them. They were a dashboard-only surface until the
+key plane opened here; the full lifecycle is now reachable, which is what
+lets an agent file its own ticket when a guardrail trips instead of
+escalating into a transcript nobody reads.
+
+Everything is scoped to the one agent the key is bound to. Another agent's
+ticket id answers `404`, indistinguishable from an id that does not exist.
+
+**Writes are attributed to the key, not to a person.** A ticket or comment
+created with a key is authored as the API key's *name* (the label given at
+creation; the agent's name if that is blank), and comments are recorded with
+the role `agent` — alongside the human roles `dev` and `reporter` — so the
+dashboard can always tell machine-filed entries from human ones. Every write
+notifies the whole team, the key's owner included: file tickets
+deliberately, not on every failed turn.
+
+:::warning Nothing here is idempotent
+There is no dedupe key on this API. A retried create files a second ticket;
+a retried comment posts twice. Automation that files tickets should guard
+its own retries — list first, or track what it filed.
+:::
+
+### List tickets
+
+<span class="api-method get">GET</span> `/api/tickets/` — *read role*
+
+```bash
+curl "https://api.agentsight.io/api/tickets/?status=open&status=in_progress" \
+  -H "Authorization: Api-Key ags_YOUR_KEY"
+```
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "count": 1,
+  "page_size": 15,
+  "total_pages": 1,
+  "current_page": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 57,
+      "agent": 20,
+      "title": "Timeout in checkout",
+      "status": "open",
+      "priority": "high",
+      "tags": ["checkout"],
+      "environment": "production",
+      "environment_id": 39,
+      "conversation": {
+        "id": 733,
+        "conversation_id": "demo-rag-search-956f",
+        "name": "Refund",
+        "environment": "production",
+        "environment_id": 39
+      },
+      "feedback": {
+        "id": 3,
+        "kind": "conversation",
+        "sentiment": "negative",
+        "comment": "It hung and never answered.",
+        "created_at": "2026-08-17T10:32:38.247146Z"
+      },
+      "comments": [
+        {
+          "id": 12,
+          "author": "CI bot",
+          "role": "agent",
+          "body": "Reproduced on the last three runs.",
+          "created_at": "2026-08-18T09:00:00Z"
+        }
+      ],
+      "comments_count": 1,
+      "created_at": "2026-08-17T10:40:00Z",
+      "updated_at": "2026-08-18T09:00:00Z"
+    }
+  ]
+}
+```
+
+</details>
+
+Newest first. Every row carries its full `comments` thread — there is no
+summary depth on this route. `conversation` and `feedback` are nested
+context summaries, `null` when the ticket is not anchored.
+
+| Filter | Selects on |
+|---|---|
+| `status` | the lifecycle — `backlog`, `open`, `in_progress`, `in_review`, `done`, `closed`; repeats to OR (`?status=open&status=done`) |
+| `priority` | `low`, `medium` or `high` |
+| `conversation` | the anchored conversation, by numeric id |
+| `conversation_id` | the anchored conversation, by business id |
+| `has_conversation`, `has_feedback` | anchored rows, or unanchored ones |
+| `tags` | comma-separated; matches tickets carrying **any** of the named tags |
+| `created_at_after`, `created_at_before` | when it was filed |
+| `updated_at_after`, `updated_at_before` | when it last moved |
+| `search` | text inside the title |
+| `ordering` | `created_at`, `updated_at`, `priority`, `status`, `title` |
+
+There is no `environment` filter: a ticket records the environment it was
+created in, but the route does not select on it.
+
+### Get one
+
+<span class="api-method get">GET</span> `/api/tickets/{id}/` — *read role*
+
+One ticket in the shape above. The discussion thread is already on it; the
+nested comments route below exists as the write path, and as a paginated
+read for very long threads.
+
+### Create a ticket
+
+<span class="api-method post">POST</span> `/api/tickets/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/tickets/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Timeout in checkout", "priority": "high", "conversation_id": 733}'
+```
+
+`title` is the one required field. `status` defaults to `open`;
+`environment` takes a slug (`production` unless you say otherwise) and is
+**write-once** — it records where the problem was observed and cannot be
+changed later. `conversation_id` here is the **numeric** conversation id
+(the business-string spelling belongs to the list filter); `feedback_id`
+records the feedback that prompted the ticket — product feedback is
+rejected, and a ticket created from conversation feedback inherits that
+feedback's conversation unless you anchor one explicitly. Both links must
+belong to your agent; a foreign id is a `400`.
+
+The ticket is authored as the key's name and the team is notified.
+
+### Update and delete
+
+<span class="api-method patch">PATCH</span> `/api/tickets/{id}/` — *write role*
+
+`title`, `status`, `priority` and `tags` change freely; `environment`
+answers `400` (write-once, above). Updates fire no notification.
+
+<span class="api-method delete">DELETE</span> `/api/tickets/{id}/` — *write role*
+
+`204 No Content`, and the discussion thread goes with it. Prefer closing
+(`{"status": "closed"}`) — deletion is for tickets that should never have
+existed.
+
+### The discussion thread
+
+<span class="api-method get">GET</span> `/api/tickets/{id}/comments/` — *read role*
+
+The thread as its own paginated list, oldest first — the same rows every
+ticket payload embeds as `comments`.
+
+<span class="api-method post">POST</span> `/api/tickets/{id}/comments/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/tickets/57/comments/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"body": "Reproduced on the last three runs."}'
+```
+
+`body` is the whole contract. The comment is recorded with the role `agent`
+and authored as the key's name whatever else is sent — a `role` in the
+payload is ignored on this plane, so machine entries can never pass as
+human ones. The team is notified.
 
 ## Actions
 
@@ -1796,8 +1971,7 @@ absence is a decision:
 
 | | Why |
 |---|---|
-| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run. |
-| **Ticket routes** | No `/api/tickets/` CRUD for a key yet. Ticket *data* does reach this plane where it is anchored: on conversations behind `?include_tickets=true` and unconditionally on conversation detail, and on feedback the same way. Creating, editing and discussing tickets stays a dashboard workflow. |
+| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run — and neither is filing a [ticket](#tickets), which is a workflow item somebody decided to open. |
 | **Buttons** | Recorded completely, but nothing projects them into a readable table yet — a list here would answer "no clicks" to everyone. Read them as [spans](#what-spans-are-good-for). |
 | **Message and action-log writes** | Same rule as recording: they belong to the SDK. |
 | **Admin and dashboard routes** | Session-authenticated, and not part of any integration contract. |
