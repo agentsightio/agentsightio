@@ -8,22 +8,19 @@ outline: deep
 
 Increasingly, the thing integrating AgentSight is not a developer reading this
 site — it is a coding agent working in your repository. These docs are built
-for that reader too, and there is a packaged skill that makes the whole
-integration a task an agent completes correctly on the first pass.
+for that reader too, and the SDK repository ships two packaged skills that
+cover the whole lifecycle: getting integrated correctly on the first pass, and
+working with the integration every day after.
 
-## The integration skill
+## The two skills
 
-The SDK repository ships a skill —
-[`skills/agentsight-integration`](https://github.com/agentsightio/agentsightio/tree/main/skills/agentsight-integration)
-— in the emerging agent-skills convention: a `SKILL.md` entry point plus
-reference files. It contains the full tracking and API surface, and, more
-importantly, the judgment calls the docs teach a human: when the quickstart
-shortcut fits and when the explicit form is required, why
-[`wrap()`](/tracking/streaming) is not optional on a streaming handler, where
-[`shutdown()`](/getting-started/deployment) must be wired, and which tools a
-framework already reports.
+Both live in the repository in the emerging agent-skills convention — a
+`SKILL.md` entry point plus reference files — and they install together:
 
-An agent following it will:
+[**`skills/agentsight-integration`**](https://github.com/agentsightio/agentsightio/tree/main/skills/agentsight-integration)
+is the integration workflow, for a codebase that does not yet record to
+AgentSight (or a new service being brought online). An agent following it
+will:
 
 - **Read your code first and ask only what code cannot answer** — which of
   the ids it found is your durable conversation id, which tool functions you
@@ -40,28 +37,48 @@ An agent following it will:
   for that loop, and the dump doubles as a byte-level answer to "what would
   leave my process?"
 
-## Installing it
+[**`skills/agentsight`**](https://github.com/agentsightio/agentsightio/tree/main/skills/agentsight)
+is the knowledge base, for everything after: the full tracking and API
+surface, the judgment calls the docs teach a human — when the quickstart
+shortcut fits and when the explicit form is required, why
+[`wrap()`](/tracking/streaming) is not optional on a streaming handler, where
+[`shutdown()`](/getting-started/deployment) must be wired, which tools a
+framework already reports — plus what powers every dashboard metric, the
+embeddable dashboard, and a symptom-to-cause table for debugging an empty
+chart. Day-to-day work in an integrated repo loads only this skill, not the
+integration workflow.
+
+The split is deliberate: the interview and verification protocol matters
+enormously once, at integration time, and is dead weight in every session
+after. Each skill tells the agent when the other one applies, and the
+integration skill links into the knowledge skill's reference files — which is
+why they should be installed as a pair.
+
+## Installing them
 
 With the [skills CLI](https://skills.sh) — works with Claude Code, Cursor,
-Codex, and most other coding agents:
+Codex, and most other coding agents; it will offer both skills, install both:
 
 ```bash
 npx skills add agentsightio/agentsightio
 ```
 
 In Claude Code, the repository is also a plugin marketplace, which gets you
-update tracking through the plugin manager:
+both skills plus update tracking through the plugin manager:
 
 ```
 /plugin marketplace add agentsightio/agentsightio
 /plugin install agentsight@agentsight
 ```
 
-Either way, then ask for the integration in plain words — "add AgentSight to
-this service". Any harness that can read files can use the skill without an
-installer too: copy `skills/agentsight-integration` from the repository into
-your project and point the agent at its `SKILL.md` — it pulls in the
-reference files as it needs them.
+Either way, then ask in plain words — "add AgentSight to this service" runs
+the integration; later, "why is the escalation chart empty?" or "record
+feedback from our UI" draws on the knowledge skill. Any harness that can read
+files can use the skills without an installer too: copy **both** folders
+(`skills/agentsight-integration` and `skills/agentsight`) from the repository
+side by side into your project and point the agent at a `SKILL.md` — the
+integration skill links into the base skill's reference files, so one without
+the other is incomplete.
 
 ## If you'd rather feed it the docs
 

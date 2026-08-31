@@ -76,8 +76,8 @@ code change**; it also fires in threads the app starts.
   only, no patch.
 - **Cache caveat:** a cached response still reports usage through the
   callback, and the handler cannot tell it from a fresh one. With LangChain's
-  cache enabled, treat token totals as an upper bound — this is a Tier 3
-  question.
+  cache enabled, treat token totals as an upper bound — a fact to put in
+  front of the developer, not to decide for them.
 - The framework surfaces a lossy subset of provider usage — cache counters
   are usually absent on handler-recorded calls.
 
@@ -100,8 +100,7 @@ there is no setting to switch on.** Reached through LangChain or LlamaIndex
 they are recorded; called directly they are not, because nothing in the path
 announces the call.
 
-When pre-flight finds direct calls, that is a Tier 3 question with three
-honest options:
+When the code makes direct calls, put three honest options to the developer:
 
 1. Reach the model through a framework — recorded.
 2. Wrap the call site in `@agentsight.task` — shape and duration on the
@@ -113,7 +112,7 @@ Related limitations to state up front when they apply:
 - **`with_streaming_response` produces no span** (OpenAI and Anthropic both).
   Ordinary `stream=True` is fully recorded — this is only about the wrapper
   that hands over the raw HTTP body. Tokens spent through it are not captured.
-  Accept or switch those call sites — Tier 3.
+  Accept or switch those call sites — the developer's call.
 - **A stream that ends without a usage event is marked as unreported, not
   billed as zero.** Unknown spend reads as unknown.
 - **A very large single exchange** may outgrow one transmission and be partly
@@ -148,8 +147,8 @@ Strictly a fallback — it can name a nameless call, never mislabel a resolved
 one, so wrapping a whole handler in one is safe. The hint is read when the
 call **starts**, so a stream created inside the block is covered when it
 drains later; LangChain's `.stream()` starts on iteration, so keep the block
-around the iteration. The model name only the developer knows is a Tier 3
-question.
+around the iteration. The model name behind a wrapper is something only the
+developer knows — ask them.
 
 **Unpriced is not zero.** A named model with no rate records exact tokens and
 `unpriced` cost; when a rate exists, history is restated. `0` would claim the

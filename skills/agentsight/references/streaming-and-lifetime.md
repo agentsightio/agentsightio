@@ -167,8 +167,8 @@ Spans are batched; at any moment a few seconds of recorded work is in memory.
 An orderly exit flushes automatically. **SIGTERM — how every container,
 orchestrator and process manager stops an app — does not.** The SDK
 deliberately installs no signal handler (a library fighting the app for one
-loses), so this is the one thing that needs the developer's code — and a
-Tier 3 question when no hook exists: "may I add it?"
+loses), so this is the one thing that needs the developer's code — when no
+shutdown hook exists, ask before adding one: "may I add it?"
 
 ```python
 @asynccontextmanager

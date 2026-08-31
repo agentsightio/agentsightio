@@ -65,7 +65,7 @@ because the snippet cannot work until the first two exist:
 
 The loader exchanges the embed token for a short-lived session itself; the
 developer never handles that part. An API key pasted into a page is a
-credential leak — if found during pre-flight, flag it.
+credential leak — if found anywhere in the codebase, flag it.
 
 ## Errors the developer will actually see
 
@@ -82,7 +82,7 @@ already-open pages — that is the kill switch.
 ## One id, both surfaces
 
 The embed's conversation and feedback views are searched by the
-**`conversation_id` the SDK recorded**. This is another reason Tier 1
-question 2 matters: a stable, human-recognizable id is what the developer's
+**`conversation_id` the SDK recorded**. This is another reason the
+conversation-id choice matters: a stable, human-recognizable id is what the developer's
 client will paste into the embed's search; a generated id makes every lookup
 a dead end.

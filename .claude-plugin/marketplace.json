@@ -9,7 +9,7 @@
     {
       "name": "agentsight",
       "source": "./",
-      "description": "Integrate AgentSight conversation analytics into an AI agent application: code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success.",
+      "description": "AgentSight conversation analytics for AI agent applications, as two skills: an integration workflow (code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success) and a knowledge base for integrated codebases (the full tracking and API surface, dashboard metrics, the embeddable dashboard, and debugging).",
       "author": {
         "name": "AgentSight",
         "url": "https://agentsight.io"

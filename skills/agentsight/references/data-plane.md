@@ -99,7 +99,7 @@ ags.feedbacks.create_for_message(4821, "negative", topic="style", reason="too_bo
 - Also: `list(**filters)`, `get(id)`,
   `update(id, sentiment=…, comment=…, topic=…, reason=…)`, `delete(id)`.
 - Wiring it means one small endpoint in the developer's backend that their UI
-  calls — offered in Tier 2, default not wired and reported as a gap.
+  calls — offer it, don't assume it; default: not wired, reported as a gap.
 - Retried writes are not idempotent — a replayed create is a second row —
   except `create_for_message`, which updates the one vote per message and is
   safe to retry.
@@ -123,7 +123,7 @@ Tracking usually brings the action into being (first decorated call carrying
 the name); declaring up front puts it on the dashboard before the tool ships,
 and the first real call adopts the row. There is no `delete()` — every
 recorded invocation hangs off the definition. `logs(id)` lists invocations.
-The Tier 2 default: function names as-is, with a labelling pass proposed.
+Default: function names as-is, with a labelling pass proposed to the developer.
 
 ## Usage and cost
 
@@ -142,7 +142,7 @@ rate was on file — handle the missing key.
 
 The raw record beneath the dashboard — useful for debugging an integration
 remotely (the local-first tool is the file exporter,
-[verification.md](verification.md)):
+[debugging.md](debugging.md)):
 
 - `ags.spans.list(**filters)` — filter by `conversation_id`, `trace_id`,
   `kind`, `status`, `environment`, time range.
