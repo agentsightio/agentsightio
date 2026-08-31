@@ -130,11 +130,14 @@ attempts by default, waiting half a second and then two seconds. `max_retries`
 on the client changes that count. A 429 that names its own pacing overrides the
 curve: the server knows better than the backoff does.
 
-Writes are attempted exactly once, whatever the failure. Nothing this client
-writes is safe to replay — a repeated `feedbacks.create_for_conversation()` is a
-second row, not a retried one — so a failed write raises and the decision is
-yours. Where the failure was a 429, `retry_after` tells you how long to wait
-before making that decision.
+Writes are attempted exactly once, whatever the failure. Almost nothing this
+client writes is safe to replay — a repeated
+`feedbacks.create_for_conversation()` is a second row, not a retried one — so
+a failed write raises and the decision is yours. Where the failure was a 429,
+`retry_after` tells you how long to wait before making that decision. The one
+exception is `feedbacks.create_for_message()`: a message holds one vote and a
+repeat updates it, so that call — and only that call — is safe to retry by
+hand.
 
 `ServerError` on a read therefore means the server failed *and* retrying did
 not help. A write is attempted exactly once — for the reason above — so a

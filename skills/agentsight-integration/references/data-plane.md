@@ -86,15 +86,23 @@ developer's own UI on its own schedule — often after the conversation is over:
 ```python
 ags.feedbacks.create_for_conversation("wa-3859", "positive", comment="solved it")
 ags.feedbacks.create_for_agent("negative", comment="too slow")   # about the agent overall
+ags.feedbacks.create_for_message(4821, "negative", topic="style", reason="too_bold")
 ```
 
 - `sentiment` ∈ `positive` / `neutral` / `negative`. Comment optional. Write
   role required.
-- Also: `list(**filters)`, `get(id)`, `update(id, sentiment=…, comment=…)`,
-  `delete(id)`.
+- `create_for_message` targets one message by pk (the transcript carries the
+  ids). `topic`/`reason` are the host app's own slugs — stored and counted,
+  never interpreted. One vote per message: a repeat call updates the stored
+  vote (server answers 200, not 201), and the vote reads back nested on its
+  message in the transcript payloads.
+- Also: `list(**filters)`, `get(id)`,
+  `update(id, sentiment=…, comment=…, topic=…, reason=…)`, `delete(id)`.
 - Wiring it means one small endpoint in the developer's backend that their UI
   calls — offered in Tier 2, default not wired and reported as a gap.
-- Retried writes are not idempotent: a replayed create is a second row.
+- Retried writes are not idempotent — a replayed create is a second row —
+  except `create_for_message`, which updates the one vote per message and is
+  safe to retry.
 - Tickets ride behind the same gate as conversations:
   `list(include_tickets=True)` narrows to promoted feedback AND puts the
   nested `ticket` (full depth) on each row; `has_ticket` / `ticket_status`

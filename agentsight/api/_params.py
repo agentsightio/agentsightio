@@ -80,12 +80,17 @@ FEEDBACK_FILTERS = frozenset(
         "include_tickets",
         "has_ticket",
         "kind",
+        # Message-kind feedback (integer message pk) and its host-defined
+        # slugs. Exact-match on the slugs, server-side.
+        "message",
         "ordering",
+        "reason",
         "search",
         "sentiment",
         # Accepts a list — ``ticket_status=["open", "in_progress"]`` ORs, sent
         # as repeated keys.
         "ticket_status",
+        "topic",
         "user",
     }
 )

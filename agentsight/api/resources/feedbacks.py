@@ -7,7 +7,7 @@ from agentsight.api._pagination import Page, PageIterator
 from agentsight.api.resources._base import Resource
 from agentsight.exceptions import ValidationError
 
-_UPDATABLE = ("sentiment", "comment")
+_UPDATABLE = ("sentiment", "comment", "topic", "reason")
 
 
 class Feedbacks(Resource):
@@ -27,16 +27,20 @@ class Feedbacks(Resource):
     feedback, no span kind, and no inference: you call this when your user
     clicks the thumb.
 
-    Feedback comes in three kinds server-side. Two are reachable with an API
-    key: ``conversation`` (how a specific conversation went) and ``agent``
-    (how the agent is doing overall, optionally scoped to an environment).
-    The third, ``product``, is staff-only and has no method here.
+    Feedback comes in four kinds server-side. Three are reachable with an API
+    key: ``conversation`` (how a specific conversation went), ``agent`` (how
+    the agent is doing overall, optionally scoped to an environment) and
+    ``message`` (a reaction to one message in a conversation, carrying your
+    application's own ``topic``/``reason`` slugs). The fourth, ``product``,
+    is staff-only and has no method here.
 
     Everything goes through ``/api/feedbacks/``. The older
     ``/api/conversation-feedbacks/`` route that earlier SDK versions posted to
     is deprecated and scheduled for removal, and it silently discarded the
     ``metadata`` field those versions sent — which is why no method here takes
-    one.
+    one. The structured "why" that ``metadata`` never delivered lives on
+    message feedback instead: ``topic`` and ``reason`` are slugs you define,
+    stored and counted by AgentSight and never interpreted by it.
     """
 
     # -- reading -----------------------------------------------------------
@@ -48,8 +52,8 @@ class Feedbacks(Resource):
         ``conversation`` (pk), ``conversation_id`` (string),
         ``created_at_after``, ``created_at_before``, ``environment`` (or
         ``env``), ``has_comment``, ``has_ticket``, ``include_tickets``,
-        ``kind``, ``ordering``, ``search``, ``sentiment``, ``ticket_status``,
-        ``user``.
+        ``kind``, ``message`` (pk), ``ordering``, ``reason``, ``search``,
+        ``sentiment``, ``ticket_status``, ``topic``, ``user``.
 
         **``include_tickets=True`` also narrows the result set** — it returns
         only feedback that was promoted to a ticket, and each of those rows
@@ -123,6 +127,49 @@ class Feedbacks(Resource):
             payload["comment"] = comment
         return self._request("POST", "/api/feedbacks/", json=payload)
 
+    def create_for_message(
+        self,
+        message: int,
+        sentiment: str,
+        comment: Optional[str] = None,
+        *,
+        topic: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record a reaction to one message. *Write role.* **Safe to retry.**
+
+        One vote per message: repeating the call for the same message UPDATES
+        the stored vote instead of filing a second row (the server answers 200
+        rather than 201; this client returns the row either way). That makes
+        it the one write on this API that is safe to retry. Fields you send
+        are applied, fields you omit keep their stored value — a bare repeat
+        of a thumb never wipes an earlier ``topic``/``reason``.
+
+        ``message`` is the integer pk from the transcript
+        (``conversations.get(...)["messages"][n]["id"]``); messages have no
+        string alias. ``sentiment`` is ``positive``, ``neutral`` or
+        ``negative``. ``topic`` and ``reason`` are your application's own
+        slugs (max 50 chars) — AgentSight stores and counts them and never
+        interprets them, so ``GROUP BY topic`` on your side is the point:
+        e.g. ``topic="style", reason="too_bold"``.
+        """
+        if isinstance(message, bool) or not isinstance(message, int):
+            raise ValidationError(
+                f"message must be an integer pk, got {type(message).__name__}"
+            )
+        payload: Dict[str, Any] = {
+            "kind": "message",
+            "message": message,
+            "sentiment": _require_sentiment(sentiment),
+        }
+        if comment:
+            payload["comment"] = comment
+        if topic:
+            payload["topic"] = topic
+        if reason:
+            payload["reason"] = reason
+        return self._request("POST", "/api/feedbacks/", json=payload)
+
     def create_for_agent(
         self,
         sentiment: str,
@@ -157,7 +204,16 @@ class Feedbacks(Resource):
         return self._request("POST", "/api/feedbacks/", json=payload)
 
     def update(self, feedback_id: int, **fields: Any) -> Dict[str, Any]:
-        """Change a feedback's ``sentiment`` or ``comment``. *Write role.*"""
+        """Change a feedback's ``sentiment``, ``comment``, ``topic`` or
+        ``reason``. *Write role.*
+
+        The slugs are accepted on message-kind feedback only — the backend
+        rejects them on the other kinds rather than dropping them. ``None``
+        values are dropped before the request, so clearing a stored slug is
+        not possible through this method; repeat
+        :meth:`create_for_message` for the message instead if you need a
+        different pair.
+        """
         unknown = sorted(set(fields) - set(_UPDATABLE))
         if unknown:
             raise ValidationError(

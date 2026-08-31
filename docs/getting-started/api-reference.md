@@ -265,8 +265,10 @@ Retry-After: 30
 
 Rates are capacity controls rather than contract, so no numbers are published
 here and none should be inferred from what you observe. Retry reads; do not
-blindly retry writes, since nothing on this API is idempotent — a replayed
-feedback create is a second row, not a retried one.
+blindly retry writes, since almost nothing on this API is idempotent — a
+replayed feedback create is a second row, not a retried one. The one exception
+is [message feedback](#create-feedback-on-a-message), whose create updates the
+one vote per message and is safe to retry.
 
 ## Conversations
 
@@ -909,9 +911,11 @@ person on the other end was satisfied with it. Somebody has to say so, and the
 moment they say it is a click in your application, not an event any SDK could
 observe.
 
-Two kinds are reachable with an API key: **conversation** feedback (how one
-conversation went) and **agent** feedback (how the agent is doing overall,
-optionally scoped to an environment).
+Three kinds are reachable with an API key: **conversation** feedback (how one
+conversation went), **agent** feedback (how the agent is doing overall,
+optionally scoped to an environment) and **message** feedback (a reaction to
+one message in a conversation, carrying your application's own
+`topic`/`reason` slugs).
 
 ### List feedback
 
@@ -940,12 +944,15 @@ curl "https://api.agentsight.io/api/feedbacks/?sentiment=negative" \
       "agent": 20,
       "conversation": 733,
       "conversation_id": "demo-rag-search-956f",
+      "message": null,
       "user": null,
       "environment": "production",
       "environment_id": 39,
       "sentiment": "neutral",
       "category": null,
       "comment": "Answer was right but a bit terse.",
+      "topic": null,
+      "reason": null,
       "created_at": "2026-08-17T10:32:38.247146Z"
     }
   ],
@@ -965,10 +972,12 @@ other buckets.
 
 | Filter | Selects on |
 |---|---|
-| `kind` | `conversation` or `agent` |
+| `kind` | `conversation`, `agent` or `message` |
 | `sentiment` | `positive`, `neutral` or `negative` |
 | `conversation` | one conversation, by numeric id |
-| `conversation_id` | one conversation, by business id |
+| `conversation_id` | one conversation, by business id — message votes included, since every vote knows its conversation |
+| `message` | one message's vote, by numeric id |
+| `topic`, `reason` | your own slugs, matched exactly |
 | `agent`, `user` | who it is about, and who left it |
 | `category` | the server-side category, where one is set |
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
@@ -1038,12 +1047,15 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": 738,
   "conversation_id": "demo-delete-1786992718",
+  "message": null,
   "user": null,
   "environment": "development",
   "environment_id": 40,
   "sentiment": "positive",
   "category": null,
   "comment": "Fast and clear.",
+  "topic": null,
+  "reason": null,
   "created_at": "2026-08-17T18:52:44.956984Z"
 }
 ```
@@ -1091,12 +1103,15 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": null,
   "conversation_id": null,
+  "message": null,
   "user": null,
   "environment": "production",
   "environment_id": 39,
   "sentiment": "negative",
   "category": null,
   "comment": "Slow at peak hours.",
+  "topic": null,
+  "reason": null,
   "created_at": "2026-08-17T18:52:46.379106Z"
 }
 ```
@@ -1107,13 +1122,48 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
 reports. `environment` is accepted on this kind only, and takes any slug the
 agent has.
 
-An invalid sentiment is a `400` on either kind:
+### Create feedback on a message
+
+<span class="api-method post">POST</span> `/api/feedbacks/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/feedbacks/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "message",
+    "message": 4821,
+    "sentiment": "negative",
+    "topic": "style",
+    "reason": "too_bold"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `kind` | yes | `"message"` |
+| `message` | yes | the numeric message id from the transcript |
+| `sentiment` | yes | `positive`, `neutral` or `negative` |
+| `topic`, `reason` | no | your own slugs, max 50 chars each — stored and counted, never interpreted |
+| `comment` | no | free text |
+
+A message holds **one vote**. The first POST answers `201 Created`; a repeat
+POST for the same message **updates the stored vote and answers `200 OK`** —
+fields you send are applied, fields you omit keep their stored value, an
+explicit `null` clears one. That makes this the one write on the API that is
+safe to retry. `conversation`, `agent` and `environment` are derived from the
+message, so supplying an environment is refused the same way it is on
+conversation feedback. The transcript carries the vote back nested on its
+message — `messages[n]["feedback"]` on the conversation payloads, `null` where
+no vote was cast.
+
+An invalid sentiment is a `400` on any kind:
 
 ```json
 { "sentiment": ["\"meh\" is not a valid choice."] }
 ```
 
-There is a third kind, `product`, which is not on this plane. Naming it —
+There is a fourth kind, `product`, which is not on this plane. Naming it —
 `?kind=product` on the list, or `"kind": "product"` in a payload — answers
 `403`. A product row reached by id is a `404` like any other row this key
 cannot see.
@@ -1123,7 +1173,8 @@ cannot see.
 <span class="api-method patch">PATCH</span> `/api/feedbacks/{id}/` — *write role*
 
 `sentiment` and `comment` are the changeable fields — plus `environment`, on
-agent-kind feedback only.
+agent-kind feedback only, and `topic`/`reason`, on message-kind feedback
+only.
 
 ```bash
 curl -X PATCH "https://api.agentsight.io/api/feedbacks/4/" \
