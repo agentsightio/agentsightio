@@ -136,7 +136,14 @@ does not list. Ignore what you do not recognise.
 ```
 
 Both are `401`, and both mean the same class of problem: no usable credential.
-A key that is revoked, expired or not linked to an agent lands here too.
+`"Invalid API key."` specifically means the key string is malformed or unknown
+to this deployment — a key issued by a different environment (staging vs
+production) lands here. A revoked or expired key answers
+`"API key is inactive, expired or revoked."`, and a key with no agent binding
+answers `"API key is not linked to any agent."`.
+
+One route differs in status code only: `POST /api/ingest/` returns these same
+bodies as `403`, not `401`.
 
 :::warning One 401 that rotating your key will not fix
 ```json
