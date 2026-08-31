@@ -8,11 +8,12 @@ outline: deep
 
 Increasingly, the thing integrating AgentSight is not a developer reading this
 site — it is a coding agent working in your repository. These docs are built
-for that reader too, and the SDK repository ships two packaged skills that
-cover the whole lifecycle: getting integrated correctly on the first pass, and
-working with the integration every day after.
+for that reader too, and the SDK repository ships three packaged skills that
+cover the whole lifecycle: getting integrated correctly on the first pass,
+bringing your existing history over, and working with the integration every
+day after.
 
-## The two skills
+## The three skills
 
 Both live in the repository in the emerging agent-skills convention — a
 `SKILL.md` entry point plus reference files — and they install together:
@@ -37,6 +38,17 @@ will:
   for that loop, and the dump doubles as a byte-level answer to "what would
   leave my process?"
 
+[**`skills/agentsight-migration`**](https://github.com/agentsightio/agentsightio/tree/main/skills/agentsight-migration)
+covers the conversations that happened *before* you integrated — in a legacy
+database, a previous chat platform, or a vendor export. Point an agent at that
+source and it inspects it read-only, interviews you about the mapping (which
+field is the conversation id, which timezone the timestamps are in, what
+happens to every row that cannot be represented), and produces a JSON file it
+validates with a script the skill ships. You upload the file yourself on the
+dashboard's migrate page — the import routes are deliberately not on the
+API-key plane, so the agent builds the file and never sends it. See
+[Importing existing history](/getting-started/importing-history).
+
 [**`skills/agentsight`**](https://github.com/agentsightio/agentsightio/tree/main/skills/agentsight)
 is the knowledge base, for everything after: the full tracking and API
 surface, the judgment calls the docs teach a human — when the quickstart
@@ -48,23 +60,27 @@ embeddable dashboard, and a symptom-to-cause table for debugging an empty
 chart. Day-to-day work in an integrated repo loads only this skill, not the
 integration workflow.
 
-The split is deliberate: the interview and verification protocol matters
-enormously once, at integration time, and is dead weight in every session
-after. Each skill tells the agent when the other one applies, and the
-integration skill links into the knowledge skill's reference files — which is
-why they should be installed as a pair.
+The split is deliberate, and it runs along one axis: the tense and location of
+the data. Conversations that have not happened yet are the integration skill's;
+conversations that happened somewhere else are the migration skill's;
+conversations already in AgentSight are the knowledge skill's. An interview and
+verification protocol matters enormously once and is dead weight in every
+session after, so each skill tells the agent when another one applies, and both
+workflow skills link into the knowledge skill's reference files — which is why
+they should be installed together.
 
 ## Installing them
 
 With the [skills CLI](https://skills.sh) — works with Claude Code, Cursor,
-Codex, and most other coding agents; it will offer both skills, install both:
+Codex, and most other coding agents; it will offer all three, install all
+three:
 
 ```bash
 npx skills add agentsightio/agentsightio
 ```
 
 In Claude Code, the repository is also a plugin marketplace, which gets you
-both skills plus update tracking through the plugin manager:
+all three skills plus update tracking through the plugin manager:
 
 ```
 /plugin marketplace add agentsightio/agentsightio
@@ -72,13 +88,14 @@ both skills plus update tracking through the plugin manager:
 ```
 
 Either way, then ask in plain words — "add AgentSight to this service" runs
-the integration; later, "why is the escalation chart empty?" or "record
-feedback from our UI" draws on the knowledge skill. Any harness that can read
-files can use the skills without an installer too: copy **both** folders
-(`skills/agentsight-integration` and `skills/agentsight`) from the repository
-side by side into your project and point the agent at a `SKILL.md` — the
-integration skill links into the base skill's reference files, so one without
-the other is incomplete.
+the integration; "can I get my old conversations in?" runs the migration;
+later, "why is the escalation chart empty?" or "record feedback from our UI"
+draws on the knowledge skill. Any harness that can read files can use the
+skills without an installer too: copy **all three** folders
+(`skills/agentsight-integration`, `skills/agentsight-migration` and
+`skills/agentsight`) from the repository side by side into your project and
+point the agent at a `SKILL.md` — both workflow skills link into the base
+skill's reference files, so either one without it is incomplete.
 
 ## If you'd rather feed it the docs
 

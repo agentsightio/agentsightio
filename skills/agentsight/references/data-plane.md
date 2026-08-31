@@ -23,9 +23,10 @@ Full references: `docs.agentsight.io/api/` (Python client) and
 ## Recording is not on this surface
 
 Conversations, messages, tool calls, token usage, buttons and attachments have
-**exactly one way in: the tracking SDK.** There is no HTTP endpoint for
-creating them — a design decision, not a gap (two write paths would mean two
-sets of semantics). This settles the multi-service question honestly:
+**exactly one way in for live traffic: the tracking SDK.** There is no HTTP
+endpoint for creating them — a design decision, not a gap (two write paths
+would mean two sets of semantics). This settles the multi-service question
+honestly:
 
 - A **non-Python service** in the conversation path cannot record directly.
   The options are: propagate the conversation id and fields into the Python
@@ -33,6 +34,16 @@ sets of semantics). This settles the multi-service question honestly:
   recording; or accept the gap, named in the report.
 - What any language **can** do over REST: create feedback, declare and label
   actions, and read everything back.
+
+There is one other way conversations get in, and it is not this surface
+either: a **bulk import of historical conversations**, uploaded as a JSON file
+in the dashboard. It carries conversations and their messages and nothing else
+— no tool calls, no token usage or cost, no geolocation — and it is
+deliberately not on the API-key plane, so no client here can drive it. It is
+also **not a second way to record live traffic**: dedup is on
+`(agent, conversation_id)`, and an id that already exists is rejected
+(`conversation_already_exists`), never merged into. Building that file is the
+`agentsight-migration` skill's job.
 
 ## The client
 

@@ -12,7 +12,9 @@ description: >
   spans), embedding the client dashboard, debugging why a metric or chart
   is empty, or answering any question about the SDK or API surface. For a
   codebase not yet integrated, or bringing a new service online, use the
-  agentsight-integration skill instead.
+  agentsight-integration skill instead; for loading conversations that
+  already happened in a previous system into AgentSight — backfill, bulk
+  import, historical migration — use the agentsight-migration skill.
 ---
 
 # AgentSight: the SDK and API
@@ -32,11 +34,16 @@ Published docs: `https://docs.agentsight.io` — every page has a copy-as-
 markdown button and the site serves raw markdown, so fetch pages directly
 when you need more than the references here. Never contradict them.
 
-**The other skill.** First-time integration — a codebase with no AgentSight
-yet, or a new service/repo being brought online — is a workflow, not a lookup:
-code-first discovery, a consent interview, and verification before any claim
-of success. That lives in the sibling `agentsight-integration` skill; switch
-to it rather than improvising an integration from the references here.
+**The other skills.** Three skills, split on one axis: the tense and location
+of the data. Conversations that have not happened yet — a codebase with no
+AgentSight, or a new service being brought online — belong to the sibling
+`agentsight-integration` skill: code-first discovery, a consent interview, and
+verification before any claim of success. Conversations that happened
+somewhere else — a previous platform, a legacy database, a vendor export —
+belong to the sibling `agentsight-migration` skill, which builds the
+historical import file the developer uploads in the dashboard. This skill owns
+conversations that are already in AgentSight. Switch to the right one rather
+than improvising either workflow from the references here.
 
 ## Hard rules
 

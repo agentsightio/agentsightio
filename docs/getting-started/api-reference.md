@@ -38,11 +38,15 @@ status. Copy the paths exactly.
 
 :::info Recording data is the SDK's job, not this API's
 This page documents reading and managing. **Conversations, messages, tool calls,
-token usage, button clicks and attachments have exactly one way in: the
-[tracking SDK](/getting-started/quick-start).** There is no HTTP endpoint here
-for creating them, and that is a design decision rather than a gap — two ways to
-write the same row would mean two sets of semantics for how it reaches your
-dashboards, and only one of them could be the one that is tested.
+token usage, button clicks and attachments have exactly one way in for live
+traffic: the [tracking SDK](/getting-started/quick-start).** There is no HTTP
+endpoint here for creating them, and that is a design decision rather than a
+gap — two ways to write the same row would mean two sets of semantics for how it
+reaches your dashboards, and only one of them could be the one that is tested.
+Conversation history from a system you used *before* AgentSight is the one
+exception, and it does not arrive here either: it is a file you upload in the
+dashboard, described in
+[Importing existing history](/getting-started/importing-history).
 
 Two things you *can* create here are not recordings of a run: feedback, for the
 reason its [own section](#feedbacks) explains, and an action **definition** —

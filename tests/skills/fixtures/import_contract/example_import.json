@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "conversations": [
+    {
+      "conversation_id": "ext-abc-123",
+      "started_at": "2025-11-03T14:22:05Z",
+      "name": "Refund request",
+      "customer_id": "cust-42",
+      "language": "en",
+      "device": "web",
+      "metadata": {
+        "source": "intercom",
+        "tags": ["billing", "refund"],
+        "assignment": {
+          "team": "support-eu",
+          "priority": 2
+        }
+      },
+      "messages": [
+        {
+          "sender": "user",
+          "content": "Hi, I was charged twice for order #4471.",
+          "timestamp": "2025-11-03T14:22:05Z"
+        },
+        {
+          "sender": "assistant",
+          "content": "I'm sorry about that — I can see the duplicate charge and I've refunded it. It should land in 3-5 business days.",
+          "timestamp": "2025-11-03T14:22:19Z",
+          "metadata": {
+            "model": "gpt-4o",
+            "confidence": 0.94
+          }
+        },
+        {
+          "sender": "user",
+          "content": "Perfect, thank you!",
+          "timestamp": "2025-11-03T14:23:02Z"
+        }
+      ]
+    },
+    {
+      "conversation_id": "ext-abc-124",
+      "started_at": "2025-11-03T16:40:00+01:00",
+      "messages": [
+        {
+          "sender": "customer",
+          "content": "where is my order",
+          "timestamp": "2025-11-03T16:40:00+01:00"
+        },
+        {
+          "sender": "bot",
+          "content": "Order #4520 shipped this morning and is due Wednesday.",
+          "timestamp": "2025-11-03T16:40:11+01:00"
+        }
+      ]
+    },
+    {
+      "conversation_id": "ext-abc-125",
+      "started_at": "2025-11-04T09:05:30-05:00",
+      "name": "Password reset",
+      "customer_id": null,
+      "language": "es",
+      "device": "ios",
+      "messages": [
+        {
+          "sender": "human",
+          "content": "No puedo entrar en mi cuenta.",
+          "timestamp": "2025-11-04T09:05:30-05:00"
+        },
+        {
+          "sender": "ai",
+          "content": "Te he enviado un enlace para restablecer la contraseña.",
+          "timestamp": "2025-11-04T09:05:44-05:00"
+        }
+      ]
+    }
+  ]
+}

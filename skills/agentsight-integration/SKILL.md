@@ -13,7 +13,9 @@ description: >
   verification before any claim of success. For day-to-day work in an
   already-integrated codebase (changing tracking code, reading data,
   embedding the dashboard, debugging metrics), use the agentsight skill
-  instead.
+  instead; to bring conversations that already happened in a previous system
+  into AgentSight — backfill, bulk import, historical migration — use the
+  agentsight-migration skill.
 ---
 
 # Integrating AgentSight
@@ -25,12 +27,16 @@ modes are silent: nothing on the tracking plane ever raises, so a wrong
 integration produces plausible wrong data, not errors. Your job is to produce
 a **first-pass-correct** integration, and to prove it before reporting done.
 
-**The other skill.** The sibling `agentsight` skill is the knowledge home —
+**The other skills.** The sibling `agentsight` skill is the knowledge home —
 the full SDK and API surface, metrics, embed, debugging. This skill is the
 workflow that gets a codebase from zero to correctly integrated; it links
 into the knowledge files below and adds the interview and verification
 discipline around them. Once a repo is integrated, day-to-day work belongs to
-the `agentsight` skill.
+the `agentsight` skill. The third sibling, `agentsight-migration`, owns the
+conversations that happened *before* cutover: this skill records what happens
+next, migration brings the history over as a file the developer uploads. They
+run in that order and neither substitutes for the other — so when a developer
+asks for their old conversations, finish here and route them there.
 
 Published docs: `https://docs.agentsight.io` — every page has a copy-as-
 markdown button and the site serves raw markdown, so fetch pages directly
@@ -39,7 +45,7 @@ when you need more than the references here. Never contradict them.
 ## Reference files
 
 Read them when their subject enters the work — not all up front. The
-knowledge files live in the sibling `agentsight` skill (both skills ship and
+knowledge files live in the sibling `agentsight` skill (the skills ship and
 install together); if the `../agentsight/` paths are missing, that skill
 was not installed alongside this one — install both, or fetch the matching
 pages from `docs.agentsight.io`.

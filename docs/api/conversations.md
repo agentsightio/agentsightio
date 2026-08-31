@@ -8,9 +8,12 @@ outline: deep
 
 `ags.conversations` is **everything you can do to a conversation that has
 already been recorded** — find it, read its transcript, correct how it is
-labelled, hide it. What it cannot do is create one: conversations come into
-being through `agentsight.conversation(...)` on the tracking side, and there is
-no second way in.
+labelled, hide it. What it cannot do is create one: live conversations come
+into being through `agentsight.conversation(...)` on the tracking side, and
+there is no second way in for live traffic. Historical conversations from a
+system you used before AgentSight are the one exception, and they arrive by a
+different route entirely — a one-off file upload in the dashboard, described
+in [Importing existing history](/getting-started/importing-history).
 
 ```python
 for conversation in ags.conversations.list(has_feedback=True):

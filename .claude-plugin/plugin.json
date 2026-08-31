@@ -1,7 +1,7 @@
 {
   "name": "agentsight",
-  "description": "AgentSight conversation analytics for AI agent applications, as two skills: an integration workflow (code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success) and a knowledge base for integrated codebases (the full tracking and API surface, dashboard metrics, the embeddable dashboard, and debugging).",
-  "version": "0.1.0",
+  "description": "AgentSight conversation analytics for AI agent applications, as three skills: an integration workflow (code-first discovery, a consent-aware interview, SDK wiring, and file-exporter verification before any claim of success), a migration workflow for conversation history that already exists somewhere else (source inspection, a mapping interview, and a validated bulk-import file), and a knowledge base for integrated codebases (the full tracking and API surface, dashboard metrics, the embeddable dashboard, and debugging).",
+  "version": "0.2.0",
   "author": {
     "name": "AgentSight",
     "url": "https://agentsight.io"
