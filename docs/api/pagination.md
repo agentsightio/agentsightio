@@ -79,18 +79,19 @@ the one that does:
 ```python
 ags.feedbacks.page().extra
 # {'counts': {'all': 3}}
+
+ags.feedbacks.page(include_tickets=True).extra
+# {'counts': {'all': 3, 'tickets': 3, 'open_tickets': 2,
+#             'backlog': 0, 'open': 1, 'in_progress': 1,
+#             'in_review': 0, 'done': 1, 'closed': 0}}
 ```
 
-It is kept because the response carries it, not because it says anything
-`count` does not.
-
-:::info Tickets are not on this surface
-Earlier versions of this client documented ticket aggregates here — `tickets`,
-`open_tickets` and the per-status tallies. Tickets are internal workflow state
-and are not available to an API key at all, so `counts` now holds `all` and
-nothing else, feedback payloads carry no nested ticket object, and the ticket
-filters are refused rather than ignored. That is a boundary, not a gap.
-:::
+Plain, `counts` holds `all` and nothing else — kept because the response
+carries it, not because it says anything `count` does not. Behind
+[`include_tickets=True`](./feedbacks.md#tickets-include_tickets-narrows-as-it-includes)
+the ticket aggregates arrive alongside: `tickets`, `open_tickets`, and one
+tally per ticket status. The tallies ignore any `ticket_status` filter on
+purpose, so selecting a status does not zero the other buckets.
 
 ## The page size
 

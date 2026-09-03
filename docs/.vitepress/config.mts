@@ -71,6 +71,7 @@ export default defineConfig({
         items: [
           { text: 'Quickstart', link: '/getting-started/quick-start' },
           { text: 'Use with AI agents', link: '/getting-started/ai-agents' },
+          { text: 'Importing existing history', link: '/getting-started/importing-history' },
           { text: 'Core Concepts', link: '/getting-started/core-concepts' },
           { text: 'Metrics', link: '/getting-started/metrics' },
           { text: 'Configuration', link: '/getting-started/configuration' },
@@ -126,6 +127,7 @@ export default defineConfig({
           { text: 'The API client', link: '/api/' },
           { text: 'Conversations', link: '/api/conversations' },
           { text: 'Feedbacks', link: '/api/feedbacks' },
+          { text: 'Tickets', link: '/api/tickets' },
           { text: 'Actions', link: '/api/actions' },
           { text: 'Usage', link: '/api/usage' },
           { text: 'Spans', link: '/api/spans' },

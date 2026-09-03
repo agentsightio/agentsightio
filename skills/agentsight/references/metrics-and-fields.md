@@ -1,8 +1,8 @@
 # Metrics: what powers what
 
 Every metric the dashboard shows, mapped to the code that feeds it. Use this
-to answer "why is this chart empty?" before it gets asked — and to make
-Tier 1 question 5 and the Tier 2 batch concrete.
+to answer "why is this chart empty?" before it gets asked — and to make any
+question to the developer about fields and metrics concrete.
 
 ## Three categories
 
@@ -37,9 +37,9 @@ Time (near-zero turns) — automatic does not mean unbreakable.
 | Agent Language | `language` | charts group the exact strings sent — pick one code style and stick to it |
 | Source | `source` | **recorded but not yet surfaced** — no dashboard, filter, or API response shows it today. Worth sending for the record; not something to build on. Say this honestly. |
 
-These are the per-field rows of Tier 1 question 5: available at the handler /
-needs plumbing / not available — and for plumbing, skip vs wire-empty vs
-build.
+For each field, establish from the code: available at the handler / needs
+plumbing / not available — and where plumbing is needed, the developer
+chooses: skip, wire-empty, or build the propagation.
 
 ## Specialized metrics
 
@@ -60,8 +60,8 @@ escalations. The fix costs one line:
 def hand_off(reason: str) -> str: ...
 ```
 
-Pre-flight names the handoff candidates; Tier 2 confirms. Default if
-unanswered: not renamed, escalation rate stays empty, flagged in the report.
+Name the handoff candidates found in the code and let the developer confirm.
+Default if unanswered: not renamed, escalation rate stays empty, flagged.
 
 ### Conversation Feedback
 
@@ -78,7 +78,7 @@ somebody already typed, so the visit has become an interaction.
 exists **before** any exchange does; the first turn is what marks it engaged.
 That separates "the widget loaded" from "the user said something". Needs a
 backend-reachable "widget opened" signal from the developer's own frontend —
-the Tier 2 question. It arrives within one export interval, which for a
+ask whether one exists. It arrives within one export interval, which for a
 widget-loaded event changes nothing.
 
 ## Environments and where numbers land
@@ -95,8 +95,8 @@ server-side; the SDK learns them at startup). Conversations record against
 Development Mode in the dashboard shows **which metrics are receiving data**
 instead of charts — the way to confirm an integration is landing without test
 runs skewing production numbers. This is also why a mis-set environment fails
-silently (Tier 1 question 7): a production deploy recording to `development`
-produces no analytics and no error.
+silently: a production deploy recording to `development` produces no
+analytics and no error.
 
 Set once per deployment (`AGENTSIGHT_ENVIRONMENT` or `init(environment=…)`;
 `dev`/`prod` accepted as shorthand). A single conversation can override it —

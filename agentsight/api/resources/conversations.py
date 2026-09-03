@@ -52,11 +52,19 @@ class Conversations(Resource):
         ``customer_id``, ``customer_id__icontains``, ``customer_ip_address``,
         ``device``, ``environment`` (or ``env``), ``feedback_sentiment``,
         ``has_action``, ``has_feedback``, ``has_messages``,
-        ``include_deleted``, ``is_marked``,
+        ``include_deleted``, ``include_tickets``, ``is_marked``,
         ``language``, ``message_contains``, ``metadata``, ``metadata_key``,
         ``metadata_value``, ``name``, ``ordering``, ``search``,
         ``started_at_after``, ``started_at_before``. Datetimes and booleans are
         converted for you.
+
+        ``include_tickets=True`` does two things at once: each returned
+        conversation carries its tickets (title, status, priority, tags and
+        the full discussion thread), **and the result set narrows to
+        conversations that have at least one ticket**. It is not a pure
+        include — an agent with a thousand conversations and three ticketed
+        ones returns three rows, with no error. The page's ``count`` is the
+        ticketed count. Composes with :meth:`list_full`.
 
         Soft-deleted conversations are excluded unless you pass
         ``include_deleted=True``.
@@ -73,6 +81,14 @@ class Conversations(Resource):
 
     def get(self, conversation: ConversationRef, *, full: bool = True) -> Dict[str, Any]:
         """One conversation, with its messages, attachments and action logs.
+
+        The payload also carries, with no parameter needed: ``tickets`` —
+        every ticket filed against the conversation, discussion thread
+        included — and ``token_usage``, a spend summary (token totals, a
+        per-model breakdown, ``cost_usd`` as a string and ``cost_sources``,
+        which reads ``unpriced`` when a model had no price row rather than
+        hiding the gap in a zero). ``token_usage`` is ``None`` when nothing
+        was recorded.
 
         Pass ``full=False`` for the metadata alone.
         """

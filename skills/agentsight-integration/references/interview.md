@@ -76,10 +76,15 @@ developer cannot know them:
 - **Nothing collides.** The SDK uses a private tracer provider and registers no
   global one, so it captures none of an existing tracer's spans and they
   capture none of its. Running both is ordinary, not a workaround.
-- **Moving to primary brings no history.** Conversations have exactly one way
-  in — the tracking SDK — so there is no backfill: the dashboard starts at
-  cutover and whatever is in their store stays there. Anyone who says
-  "migration" is usually assuming the opposite.
+- **Cutover is where live recording starts; history is a separate job.** The
+  tracking SDK is the only way live traffic gets in, so the dashboard begins
+  at cutover. Existing transcripts can be brought over afterwards by a
+  one-off bulk import the developer uploads in the dashboard — that is the
+  `agentsight-migration` skill's job, not this one. Say so rather than
+  promising it here, and say what it does *not* carry: an import brings
+  conversations and their messages only, so token, cost and geolocation
+  charts stay empty for imported history permanently. If the developer wants
+  their old data in, finish the integration first and route them there.
 
 *Default: add-on when pre-flight found an existing conversation store or a
 tracing SDK; primary when it found neither.* Guessing add-on is recoverable —

@@ -6,31 +6,14 @@ misnamed handoff tool counts zero escalations. So the definition of done is
 not "the code looks right" — it is **you ran the app and read back what it
 recorded.** Never report the integration finished without this loop.
 
-## The file-exporter loop
-
-The SDK can write every batch to local JSON instead of transmitting — no key,
-no account, no network:
-
-```bash
-AGENTSIGHT_FILE_EXPORTER=/tmp/agentsight-verify python -m your_app
-# exercise the real entry points: send a message, trigger a tool,
-# stream an answer, hit the escalation path
-```
-
-Each file in the directory is one export batch — the exact payload that would
-have been sent, which also makes this the honest answer to "show me what
-leaves the process" (Tier 1 question 4):
-
-```bash
-jq '.conversations[] | {conversation_id, customer_id, device, language, environment}' /tmp/agentsight-verify/*.json
-jq '.conversations[].spans[] | {kind, name, duration_ms}' /tmp/agentsight-verify/*.json
-# Messages are EVENTS on the turn span, not spans of their own — read them there:
-jq '.conversations[].spans[] | select(.kind=="turn") | .events[].attributes' /tmp/agentsight-verify/*.json
-```
-
-Exercise the app through its real transport (HTTP call, webhook payload,
-websocket message) — not by importing the handler and calling it, which can
-miss exactly the lifetime bugs this loop exists to catch.
+The mechanics — running with `AGENTSIGHT_FILE_EXPORTER` set, the `jq` queries
+over the dump, the live smoke test with Development Mode, and the
+symptom→cause table — live in the base skill:
+[../../agentsight/references/debugging.md](../../agentsight/references/debugging.md).
+Run that loop, exercising the app through its real transport (HTTP call,
+webhook payload, websocket message) — not by importing the handler and
+calling it. This file is the checklist that turns the dump into a verdict
+against what the interview promised.
 
 ## The checklist
 
@@ -62,32 +45,15 @@ Work through it against the JSON, not from memory:
    known case, not every call.
 7. **Nothing left the process that the interview excluded.** Grep the JSON
    for the values that were supposed to stay home (the skipped tool's
-   arguments, the unhashed id). This check is the promise made in Tier 1
-   question 4, kept.
+   arguments, the unhashed id). This check is the promise made in the
+   data-consent question, kept.
 8. **The environment tag is what the deployment intends.**
 
 If the run was the no-key fallback, stop here: hand over the dump, the
 checklist results, and the switch-to-live steps. That is a complete
-deliverable.
-
-## The live smoke test
-
-With a key available:
-
-1. Unset `AGENTSIGHT_FILE_EXPORTER` (set, it means nothing is transmitted —
-   also the last line of the ship checklist).
-2. Run once with the environment set to `development`.
-3. Watch the logs: `init()` returning `True` is not key validation — the
-   background check is what reports a refused key, an inactive subscription,
-   or a read-role key (recording needs write).
-4. In the dashboard, toggle **Development Mode**: it shows which metrics are
-   receiving data instead of charts — confirmation the integration is
-   landing, without test runs skewing production numbers. The recorded
-   conversation's transcript is viewable there too.
-5. Only then flip the deployment to `production`. Development data is
-   excluded from analytics by design, so a deployment left on `development`
-   looks like silence — say so in the report, next to where the environment
-   is configured.
+deliverable. With a key, follow with the live smoke test in debugging.md —
+`development` environment first, Development Mode to confirm metrics are
+receiving, only then flip to `production`.
 
 ## What the final report contains
 

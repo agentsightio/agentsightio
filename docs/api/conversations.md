@@ -8,9 +8,12 @@ outline: deep
 
 `ags.conversations` is **everything you can do to a conversation that has
 already been recorded** — find it, read its transcript, correct how it is
-labelled, hide it. What it cannot do is create one: conversations come into
-being through `agentsight.conversation(...)` on the tracking side, and there is
-no second way in.
+labelled, hide it. What it cannot do is create one: live conversations come
+into being through `agentsight.conversation(...)` on the tracking side, and
+there is no second way in for live traffic. Historical conversations from a
+system you used before AgentSight are the one exception, and they arrive by a
+different route entirely — a one-off file upload in the dashboard, described
+in [Importing existing history](/getting-started/importing-history).
 
 ```python
 for conversation in ags.conversations.list(has_feedback=True):
@@ -71,6 +74,7 @@ more rows than you asked for.
 | `device`, `language`, `name` | what was recorded about the conversation |
 | `is_marked` | flagged conversations |
 | `include_deleted` | include the soft-deleted ones |
+| `include_tickets` | conversations that have a ticket — and each row then carries its tickets in full. [Read the warning below](#tickets-include-tickets-narrows-as-it-includes) |
 | `has_messages`, `has_action`, `has_feedback` | conversations where something happened |
 | `action_name` | conversations in which a matching tool or task ran — case-insensitive, on part of the name |
 | `message_contains` | text inside the transcript |
@@ -103,6 +107,27 @@ ags.conversations.list(metadata="plan:pro,analysis.room_name:kitchen")
 ags.conversations.list(metadata_key="plan", metadata_value="pro")
 ```
 
+### Tickets: `include_tickets` narrows as it includes
+
+```python
+for conversation in ags.conversations.list(include_tickets=True):
+    for ticket in conversation["tickets"]:
+        print(ticket["status"], ticket["title"], len(ticket["comments"]))
+```
+
+Each returned row carries its `tickets` — id, title, status, priority, tags,
+timestamps and the full discussion thread under `comments`, oldest message
+first.
+
+:::warning It also narrows the result set
+`include_tickets=True` does two things at once: it puts the tickets on each
+row, **and it drops every conversation that has no ticket** — an agent with a
+thousand conversations and three ticketed ones returns three rows, with no
+error. It is the one thing about this filter that is easy to get wrong: do not
+add it "just to see tickets" on a listing you expect to stay complete. The
+page's `count` is the ticketed count. Composes with `list_full()`.
+:::
+
 ## One conversation, whole
 
 ```python
@@ -121,6 +146,35 @@ difference between a lean row and a transcript.
 Messages arrive in order, each carrying its sender, content, timestamp, any
 metadata you recorded, and the action logs, attachments or button click that
 belong to it.
+
+Two more keys arrive on detail with no parameter needed — asking for one
+conversation by id is itself the explicit act:
+
+- **`tickets`** — every ticket filed against the conversation, discussion
+  thread included, exactly the shape `include_tickets` puts on list rows.
+- **`token_usage`** — what the conversation cost, or `null` when nothing was
+  recorded:
+
+```json
+{
+  "totals": {"prompt_tokens": 8210, "completion_tokens": 1650, "total_tokens": 9860},
+  "cost_usd": "0.05242500",
+  "cost_sources": ["backend"],
+  "models": [
+    {"model": "claude-sonnet-4-5", "cost_source": "backend",
+     "cost_usd": "0.05242500", "prompt_tokens": 8210,
+     "completion_tokens": 1650, "total_tokens": 9860}
+  ]
+}
+```
+
+`totals` names only the token columns that are non-zero for this conversation
+(`total_tokens` always), and `models` breaks the same columns down per model —
+tokens from different models are not the same unit. Costs are decimal
+**strings**. `cost_source` is carried through rather than blended: a model
+with no price row on file books `unpriced`, and its zero means "we could not
+price this", never "this was free" — one entry per model *and* pricing source,
+so a partially repriced model shows both.
 
 ## Attachments
 

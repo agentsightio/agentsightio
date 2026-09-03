@@ -23,9 +23,10 @@ Full references: `docs.agentsight.io/api/` (Python client) and
 ## Recording is not on this surface
 
 Conversations, messages, tool calls, token usage, buttons and attachments have
-**exactly one way in: the tracking SDK.** There is no HTTP endpoint for
-creating them — a design decision, not a gap (two write paths would mean two
-sets of semantics). This settles the multi-service question honestly:
+**exactly one way in for live traffic: the tracking SDK.** There is no HTTP
+endpoint for creating them — a design decision, not a gap (two write paths
+would mean two sets of semantics). This settles the multi-service question
+honestly:
 
 - A **non-Python service** in the conversation path cannot record directly.
   The options are: propagate the conversation id and fields into the Python
@@ -33,6 +34,16 @@ sets of semantics). This settles the multi-service question honestly:
   recording; or accept the gap, named in the report.
 - What any language **can** do over REST: create feedback, declare and label
   actions, and read everything back.
+
+There is one other way conversations get in, and it is not this surface
+either: a **bulk import of historical conversations**, uploaded as a JSON file
+in the dashboard. It carries conversations and their messages and nothing else
+— no tool calls, no token usage or cost, no geolocation — and it is
+deliberately not on the API-key plane, so no client here can drive it. It is
+also **not a second way to record live traffic**: dedup is on
+`(agent, conversation_id)`, and an id that already exists is rejected
+(`conversation_already_exists`), never merged into. Building that file is the
+`agentsight-migration` skill's job.
 
 ## The client
 
@@ -63,6 +74,10 @@ ags.environments()          # ['production', 'development', …] — the authori
 
 - `list(**filters)` / `list_full(**filters)` — summaries vs full transcripts;
   list what you need, `list_full` is the heavier call.
+- `list(include_tickets=True)` — **narrows AND includes**: only conversations
+  with at least one ticket come back, each carrying its `tickets` at full
+  depth (discussion thread included). Never add it to a listing that must
+  stay complete. `get()` carries tickets unconditionally.
 - `get(conv, full=True)`, `attachments(conv)`, `metadata_keys()`,
   `metadata_values(key)`, `resolve(conv)`, `rename(conv, name)`,
   `mark(conv, is_marked=True)`, `update(conv, **fields)`.
@@ -82,17 +97,28 @@ developer's own UI on its own schedule — often after the conversation is over:
 ```python
 ags.feedbacks.create_for_conversation("wa-3859", "positive", comment="solved it")
 ags.feedbacks.create_for_agent("negative", comment="too slow")   # about the agent overall
+ags.feedbacks.create_for_message(4821, "negative", topic="style", reason="too_bold")
 ```
 
 - `sentiment` ∈ `positive` / `neutral` / `negative`. Comment optional. Write
   role required.
-- Also: `list(**filters)`, `get(id)`, `update(id, sentiment=…, comment=…)`,
-  `delete(id)`.
+- `create_for_message` targets one message by pk (the transcript carries the
+  ids). `topic`/`reason` are the host app's own slugs — stored and counted,
+  never interpreted. One vote per message: a repeat call updates the stored
+  vote (server answers 200, not 201), and the vote reads back nested on its
+  message in the transcript payloads.
+- Also: `list(**filters)`, `get(id)`,
+  `update(id, sentiment=…, comment=…, topic=…, reason=…)`, `delete(id)`.
 - Wiring it means one small endpoint in the developer's backend that their UI
-  calls — offered in Tier 2, default not wired and reported as a gap.
-- Retried writes are not idempotent: a replayed create is a second row. Ticket
-  fields (`has_ticket`, ticket status) are dashboard-side, not on the API-key
-  plane.
+  calls — offer it, don't assume it; default: not wired, reported as a gap.
+- Retried writes are not idempotent — a replayed create is a second row —
+  except `create_for_message`, which updates the one vote per message and is
+  safe to retry.
+- Tickets ride behind the same gate as conversations:
+  `list(include_tickets=True)` narrows to promoted feedback AND puts the
+  nested `ticket` (full depth) on each row; `has_ticket` / `ticket_status`
+  work only alongside it (400 without); `get(id)` carries the ticket
+  unconditionally.
 
 ## Actions: labelling for the dashboard
 
@@ -108,7 +134,7 @@ Tracking usually brings the action into being (first decorated call carrying
 the name); declaring up front puts it on the dashboard before the tool ships,
 and the first real call adopts the row. There is no `delete()` — every
 recorded invocation hangs off the definition. `logs(id)` lists invocations.
-The Tier 2 default: function names as-is, with a labelling pass proposed.
+Default: function names as-is, with a labelling pass proposed to the developer.
 
 ## Usage and cost
 
@@ -127,7 +153,7 @@ rate was on file — handle the missing key.
 
 The raw record beneath the dashboard — useful for debugging an integration
 remotely (the local-first tool is the file exporter,
-[verification.md](verification.md)):
+[debugging.md](debugging.md)):
 
 - `ags.spans.list(**filters)` — filter by `conversation_id`, `trace_id`,
   `kind`, `status`, `environment`, time range.

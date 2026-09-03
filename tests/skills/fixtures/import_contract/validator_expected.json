@@ -1,0 +1,272 @@
+{
+  "clean": [],
+  "sender_aliases": [],
+  "metadata_arrays_11_deep": [],
+  "metadata_objects_10_deep": [],
+  "metadata_size_at_cap": [],
+  "metadata_pretty_over_compact_under": [],
+  "metadata_non_ascii": [],
+  "metadata_null": [],
+  "timestamp_equals_started_at": [],
+  "same_instant_other_offset": [],
+  "timestamp_shapes": [],
+  "earliest_timestamp": [],
+  "metadata_objects_11_deep": [
+    [
+      0,
+      "metadata_too_deep",
+      "metadata.n.n.n.n.n.n.n.n.n.n"
+    ]
+  ],
+  "metadata_size_over_cap": [
+    [
+      0,
+      "metadata_too_large",
+      "metadata"
+    ]
+  ],
+  "metadata_keys_51": [
+    [
+      0,
+      "too_many_metadata_keys",
+      "metadata"
+    ]
+  ],
+  "metadata_key_too_long": [
+    [
+      0,
+      "metadata_key_too_long",
+      "metadata.kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+    ]
+  ],
+  "metadata_forbidden_keys": [
+    [
+      0,
+      "forbidden_metadata_key",
+      "metadata.__proto__"
+    ],
+    [
+      0,
+      "forbidden_metadata_key",
+      "metadata.constructor"
+    ],
+    [
+      0,
+      "forbidden_metadata_key",
+      "metadata.prototype"
+    ]
+  ],
+  "metadata_non_finite": [
+    [
+      0,
+      "invalid_number",
+      "metadata.a"
+    ],
+    [
+      0,
+      "invalid_number",
+      "metadata.b"
+    ],
+    [
+      0,
+      "invalid_number",
+      "metadata.c"
+    ]
+  ],
+  "metadata_nul": [
+    [
+      0,
+      "nul_byte",
+      "metadata.ke\u0000y"
+    ],
+    [
+      0,
+      "nul_byte",
+      "metadata.value"
+    ],
+    [
+      0,
+      "nul_byte",
+      "metadata.list[0]"
+    ]
+  ],
+  "nul_text_fields": [
+    [
+      0,
+      "nul_byte",
+      "conversation_id"
+    ],
+    [
+      0,
+      "nul_byte",
+      "name"
+    ],
+    [
+      0,
+      "nul_byte",
+      "customer_id"
+    ],
+    [
+      0,
+      "nul_byte",
+      "language"
+    ],
+    [
+      0,
+      "nul_byte",
+      "device"
+    ]
+  ],
+  "nul_in_message": [
+    [
+      0,
+      "nul_byte",
+      "messages[0].content"
+    ]
+  ],
+  "nul_in_sender": [
+    [
+      0,
+      "nul_byte",
+      "messages[0].sender"
+    ]
+  ],
+  "unknown_senders": [
+    [
+      0,
+      "unknown_sender",
+      "messages[0].sender"
+    ],
+    [
+      0,
+      "unknown_sender",
+      "messages[1].sender"
+    ],
+    [
+      0,
+      "unknown_sender",
+      "messages[2].sender"
+    ],
+    [
+      0,
+      "unknown_sender",
+      "messages[3].sender"
+    ]
+  ],
+  "missing_offset": [
+    [
+      0,
+      "missing_offset",
+      "started_at"
+    ],
+    [
+      0,
+      "missing_offset",
+      "messages[0].timestamp"
+    ]
+  ],
+  "invalid_timestamp": [
+    [
+      0,
+      "invalid_timestamp",
+      "started_at"
+    ],
+    [
+      0,
+      "invalid_timestamp",
+      "messages[0].timestamp"
+    ]
+  ],
+  "out_of_range_past": [
+    [
+      0,
+      "timestamp_out_of_range",
+      "started_at"
+    ],
+    [
+      0,
+      "timestamp_out_of_range",
+      "messages[0].timestamp"
+    ]
+  ],
+  "before_started_at": [
+    [
+      0,
+      "before_started_at",
+      "messages[0].timestamp"
+    ]
+  ],
+  "unparseable_started_at_skips_ordering": [
+    [
+      0,
+      "invalid_timestamp",
+      "started_at"
+    ]
+  ],
+  "duplicate_ids": [
+    [
+      1,
+      "duplicate_conversation_id",
+      "conversation_id"
+    ],
+    [
+      2,
+      "duplicate_conversation_id",
+      "conversation_id"
+    ]
+  ],
+  "short_circuit_same_record": [
+    [
+      0,
+      "unknown_sender",
+      "messages[0].sender"
+    ]
+  ],
+  "short_circuit_is_per_record": [
+    [
+      0,
+      "unknown_field",
+      "converstaion_id"
+    ],
+    [
+      1,
+      "unknown_sender",
+      "messages[0].sender"
+    ]
+  ],
+  "unknown_field": [
+    [
+      0,
+      "unknown_field",
+      "nope"
+    ]
+  ],
+  "missing_field": [
+    [
+      0,
+      "missing_field",
+      "messages"
+    ]
+  ],
+  "metadata_wrong_type": [
+    [
+      0,
+      "wrong_type",
+      "metadata"
+    ]
+  ],
+  "empty_content": [
+    [
+      0,
+      "invalid_format",
+      "messages[0].content"
+    ]
+  ],
+  "not_an_object": [
+    [
+      0,
+      "not_an_object",
+      null
+    ]
+  ]
+}

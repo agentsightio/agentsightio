@@ -33,10 +33,11 @@ never has to be in code.
 
 ## Or let your coding agent do it
 
-If a coding agent works in your repository, there is a packaged skill that
-makes the whole integration a task it completes correctly on the first pass —
+If a coding agent works in your repository, there are packaged skills that
+make the whole integration a task it completes correctly on the first pass —
 it reads your code first, asks only what code cannot answer, and verifies
-what it recorded before claiming success. Install it:
+what it recorded before claiming success. A third one builds the file that
+brings your existing conversation history over. Install them:
 
 :::tabs
 == skills CLI
@@ -51,7 +52,7 @@ npx skills add agentsightio/agentsightio
 :::
 
 then ask in plain words — "add AgentSight to this service" — and skip the
-rest of this page. What the skill does, the agents it works with, and the
+rest of this page. What the skills do, the agents they work with, and the
 no-installer route are on [Use with AI agents](/getting-started/ai-agents).
 
 ## Setup

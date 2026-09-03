@@ -102,6 +102,54 @@ def test_product_feedback_has_no_method(ags):
     assert not hasattr(ags.feedbacks, "create_for_product")
 
 
+def test_message_feedback_sends_the_kind_and_the_slugs(ags, requests_mock):
+    requests_mock.post(FEEDBACKS, json={"id": 1})
+
+    ags.feedbacks.create_for_message(
+        4821, "negative", comment="loud", topic="style", reason="too_bold"
+    )
+
+    assert requests_mock.last_request.json() == {
+        "kind": "message",
+        "message": 4821,
+        "sentiment": "negative",
+        "comment": "loud",
+        "topic": "style",
+        "reason": "too_bold",
+    }
+
+
+def test_message_feedback_omits_unset_optionals(ags, requests_mock):
+    requests_mock.post(FEEDBACKS, json={"id": 1})
+
+    ags.feedbacks.create_for_message(4821, "positive")
+
+    assert requests_mock.last_request.json() == {
+        "kind": "message",
+        "message": 4821,
+        "sentiment": "positive",
+    }
+
+
+@pytest.mark.parametrize("bad", [None, "4821", 3.5, True])
+def test_a_nonsense_message_reference_is_refused(ags, requests_mock, bad):
+    # int pk only — messages have no string alias, and True is an int
+    # subclass that would silently target pk 1.
+    requests_mock.post(FEEDBACKS, json={"id": 1})
+
+    with pytest.raises(ValidationError):
+        ags.feedbacks.create_for_message(bad, "positive")
+
+    assert requests_mock.call_count == 0
+
+
+def test_message_feedback_cannot_carry_an_environment(ags):
+    # Derived from the message's conversation server-side, same as
+    # conversation-kind — so no method parameter either.
+    with pytest.raises(TypeError):
+        ags.feedbacks.create_for_message(4821, "positive", environment="prod")
+
+
 @pytest.mark.parametrize("bad", ["", None, "grumpy"])
 def test_an_invalid_sentiment_is_refused_locally(ags, bad):
     with pytest.raises(ValidationError):
@@ -128,13 +176,40 @@ def test_list_filters(ags, requests_mock):
     assert qs["kind"] == ["conversation"]
 
 
-@pytest.mark.parametrize("gone", ["has_ticket", "ticket_status"])
-def test_ticket_filters_are_refused_locally(ags, gone):
-    # Tickets are internal workflow state and are not on the API-key plane at
-    # all — the backend now 400s these. Refusing them here turns that round
-    # trip into an error that names the filters that do work.
-    with pytest.raises(ValidationError, match=gone):
-        ags.feedbacks.list(**{gone: True})
+def test_include_tickets_reaches_the_wire(ags, requests_mock):
+    # The gate to the feedback ticket surface: it both narrows (only promoted
+    # rows come back) and includes (each row carries `ticket` at full depth).
+    requests_mock.get(FEEDBACKS, json=envelope([]))
+
+    list(ags.feedbacks.list(include_tickets=True))
+
+    assert requests_mock.last_request.qs["include_tickets"] == ["true"]
+
+
+def test_ticket_filters_pass_through_alongside_the_gate(ags, requests_mock):
+    # ticket_status accepts a list and ORs it — sent as repeated keys, which
+    # is how django-filter's MultipleChoiceFilter reads it.
+    requests_mock.get(FEEDBACKS, json=envelope([]))
+
+    list(ags.feedbacks.list(
+        include_tickets=True, has_ticket=True,
+        ticket_status=["open", "in_progress"],
+    ))
+
+    qs = requests_mock.last_request.qs
+    assert qs["has_ticket"] == ["true"]
+    assert qs["ticket_status"] == ["open", "in_progress"]
+
+
+def test_message_filters_reach_the_wire(ags, requests_mock):
+    requests_mock.get(FEEDBACKS, json=envelope([]))
+
+    list(ags.feedbacks.list(kind="message", message=4821, topic="style", reason="too_bold"))
+
+    qs = requests_mock.last_request.qs
+    assert qs["message"] == ["4821"]
+    assert qs["topic"] == ["style"]
+    assert qs["reason"] == ["too_bold"]
 
 
 def test_an_unknown_filter_is_refused(ags):
@@ -143,15 +218,25 @@ def test_an_unknown_filter_is_refused(ags):
 
 
 def test_page_exposes_the_counts_block(ags, requests_mock):
-    # For an API key this collapses to {"all": N} — the ticket aggregates it
-    # used to carry leaked the same internal workflow state the nested ticket
-    # object did, in summary form. `extra` passes the envelope through
-    # generically, so nothing here had to change to follow it.
+    # Without include_tickets this collapses to {"all": N}; `extra` passes the
+    # envelope through generically, so nothing here has to track its shape.
     requests_mock.get(FEEDBACKS, json=envelope([], counts={"all": 12}))
 
     page = ags.feedbacks.page()
 
     assert page.extra["counts"] == {"all": 12}
+
+
+def test_page_carries_the_ticket_aggregates_behind_the_gate(ags, requests_mock):
+    # With include_tickets=True the per-status tallies arrive alongside `all`
+    # (actions/closed/015 reversed their removal). Still pure pass-through.
+    counts = {"all": 3, "tickets": 3, "open_tickets": 2, "open": 1, "in_progress": 1, "done": 1}
+    requests_mock.get(FEEDBACKS, json=envelope([], counts=counts))
+
+    page = ags.feedbacks.page(include_tickets=True)
+
+    assert page.extra["counts"] == counts
+    assert requests_mock.last_request.qs["include_tickets"] == ["true"]
 
 
 def test_get(ags, requests_mock):
@@ -169,6 +254,16 @@ def test_update(ags, requests_mock):
     ags.feedbacks.update(5, comment="on reflection, fine")
 
     assert requests_mock.last_request.json() == {"comment": "on reflection, fine"}
+
+
+def test_update_accepts_the_slugs_and_drops_none(ags, requests_mock):
+    # None values never reach the wire, so update() can replace a slug but
+    # never clear one — documented on the method.
+    requests_mock.patch(f"{FEEDBACKS}5/", json={})
+
+    ags.feedbacks.update(5, topic="fit", reason=None)
+
+    assert requests_mock.last_request.json() == {"topic": "fit"}
 
 
 def test_update_validates_sentiment(ags):

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentsight:data-imports:import:v1",
+  "title": "AgentSight conversation import file (v1)",
+  "description": "The format for bulk-importing historical conversations and messages into AgentSight. Only fields that map 1:1 onto a storable column are accepted; unknown keys are an error rather than being ignored, so a typo like 'converstaion_id' fails loudly instead of silently dropping the value.",
+  "$comment": "Three contract rules cannot be expressed in JSON Schema and are enforced only by the backend (data_imports/validation.py): metadata nesting depth (max 10), metadata serialized size (max 16 KB), and each message timestamp being at or after its conversation's started_at. Passing this schema is necessary, never sufficient. Client-side validation against this file is a UX nicety; the backend is the authority.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "conversations"],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Must be exactly 1. Bumped only for a breaking format change; a file declaring an unknown version is rejected rather than guessed at."
+    },
+    "conversations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "description": "Every conversation in the file. conversation_id must be unique across the whole array, and must not already exist for this agent.",
+      "items": { "$ref": "#/$defs/conversation" }
+    }
+  },
+
+  "$defs": {
+    "conversation": {
+      "type": "object",
+      "title": "Conversation",
+      "additionalProperties": false,
+      "required": ["conversation_id", "started_at", "messages"],
+      "$comment": "Also the per-record subschema the backend validates each staged conversation against, so chunk validation and whole-file validation cannot diverge.",
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$",
+          "description": "Your system's identifier for the conversation. Unique within the file, and the key AgentSight deduplicates on — re-uploading a file whose ids already exist is rejected, never silently merged.",
+          "$comment": "The pattern requires at least one non-whitespace character and forbids NUL anywhere. Postgres rejects NUL in TEXT and JSONB, so an unchecked NUL would pass validation and then blow up mid-commit as an opaque 500."
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the conversation began. ISO 8601 with an explicit UTC offset or Z — a timestamp with no offset is ambiguous and would land the conversation in the wrong analytics bucket."
+        },
+        "name": {
+          "$ref": "#/$defs/optionalText",
+          "description": "Display title for the conversation."
+        },
+        "customer_id": {
+          "$ref": "#/$defs/optionalText",
+          "description": "Your identifier for the end user, used to group conversations by customer."
+        },
+        "language": {
+          "$ref": "#/$defs/optionalText",
+          "description": "Free-form language marker, e.g. 'en'. Stored verbatim, not validated against a language list."
+        },
+        "device": {
+          "$ref": "#/$defs/optionalText",
+          "description": "Free-form device or channel marker, e.g. 'web', 'ios'."
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata",
+          "description": "Arbitrary JSON object of your own fields, shown in the dashboard and filterable."
+        },
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2000,
+          "description": "The transcript. At least one message is required — a conversation with none is source noise, and duration analytics need at least one message timestamp. Order does not matter; messages are sorted by timestamp on import.",
+          "items": { "$ref": "#/$defs/message" }
+        }
+      }
+    },
+
+    "message": {
+      "type": "object",
+      "title": "Message",
+      "additionalProperties": false,
+      "required": ["sender", "content", "timestamp"],
+      "properties": {
+        "sender": {
+          "type": "string",
+          "pattern": "^\\s*(?:[Uu][Ss][Ee][Rr]|[Hh][Uu][Mm][Aa][Nn]|[Cc][Uu][Ss][Tt][Oo][Mm][Ee][Rr]|[Ee][Nn][Dd]_[Uu][Ss][Ee][Rr]|[Aa][Ss][Ss][Ii][Ss][Tt][Aa][Nn][Tt]|[Bb][Oo][Tt]|[Aa][Ii]|[Aa][Gg][Ee][Nn][Tt])\\s*$",
+          "description": "Who sent the message. Case-insensitive, surrounding whitespace ignored. Anything outside the alias map below — 'system', 'tool', 'function' — is an error: AgentSight stores a two-sided transcript and has no honest place to put those, so strip them before uploading.",
+          "$comment": "A case-insensitive pattern rather than an enum on purpose. JSON Schema enums are case-sensitive, so an enum would reject 'User' here while the backend accepts it — making client-side pre-validation stricter than the server, which is the worst failure mode for a migration tool.",
+          "x-agentsight-alias-map": {
+            "user": "end_user",
+            "human": "end_user",
+            "customer": "end_user",
+            "end_user": "end_user",
+            "assistant": "agent",
+            "bot": "agent",
+            "ai": "agent",
+            "agent": "agent"
+          }
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000,
+          "pattern": "^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$",
+          "description": "The message text, stored exactly as given. Must contain at least one non-whitespace character.",
+          "$comment": "Content is NOT sanitized on import — the live ingestion path stores raw text too, and render-time escaping is the frontend's job. Do not assume an imported transcript has been cleaned."
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the message was sent. ISO 8601 with an explicit offset or Z, and at or after the conversation's started_at (that comparison is checked by the backend, not by this schema)."
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata",
+          "description": "Arbitrary JSON object of your own fields for this message, e.g. the model that produced it."
+        }
+      }
+    },
+
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{1,2}-\\d{1,2}[T ]\\d{1,2}:\\d{1,2}(?::\\d{1,2}(?:\\.\\d{1,6})?)?\\s*(?:Z|[+-]\\d{2}:?\\d{2}|[+-]\\d{2})$",
+      "$comment": "The trailing group is mandatory: that is what enforces 'explicit offset or Z'. The pattern, not 'format', does the work — JSON Schema validators skip format assertions by default, and 'date-time' would accept a naive timestamp anyway. Shaped to match what django.utils.dateparse.parse_datetime accepts, so this schema never rejects a value the backend would take. The backend additionally rejects timestamps before 2000-01-01 or more than 5 minutes in the future."
+    },
+
+    "optionalText": {
+      "type": ["string", "null"],
+      "maxLength": 255,
+      "pattern": "^[^\\u0000]*$",
+      "$comment": "Optional fields accept an explicit null as well as being absent, because real exporters emit nulls for empty columns. Required fields never accept null."
+    },
+
+    "metadata": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/metadataObject" }
+      ]
+    },
+
+    "metadataObject": {
+      "type": "object",
+      "maxProperties": 50,
+      "propertyNames": {
+        "maxLength": 200,
+        "pattern": "^[^\\u0000]*$",
+        "not": { "enum": ["__proto__", "constructor", "prototype"] }
+      },
+      "additionalProperties": { "$ref": "#/$defs/metadataValue" },
+      "$comment": "Recursive, so the key-count and key-name rules apply at every level rather than only the top one. The forbidden key names are a prototype-pollution guard: harmless in Postgres, dangerous the moment stored JSON is spread into an object by a JS consumer, and the dashboard renders metadata. Nesting depth (max 10) and serialized size (max 16 KB) are NOT checked here — JSON Schema cannot express either."
+    },
+
+    "metadataValue": {
+      "anyOf": [
+        { "type": ["number", "boolean", "null"] },
+        { "type": "string", "pattern": "^[^\\u0000]*$" },
+        { "$ref": "#/$defs/metadataObject" },
+        { "type": "array", "items": { "$ref": "#/$defs/metadataValue" } }
+      ]
+    }
+  }
+}

@@ -38,11 +38,15 @@ status. Copy the paths exactly.
 
 :::info Recording data is the SDK's job, not this API's
 This page documents reading and managing. **Conversations, messages, tool calls,
-token usage, button clicks and attachments have exactly one way in: the
-[tracking SDK](/getting-started/quick-start).** There is no HTTP endpoint here
-for creating them, and that is a design decision rather than a gap — two ways to
-write the same row would mean two sets of semantics for how it reaches your
-dashboards, and only one of them could be the one that is tested.
+token usage, button clicks and attachments have exactly one way in for live
+traffic: the [tracking SDK](/getting-started/quick-start).** There is no HTTP
+endpoint here for creating them, and that is a design decision rather than a
+gap — two ways to write the same row would mean two sets of semantics for how it
+reaches your dashboards, and only one of them could be the one that is tested.
+Conversation history from a system you used *before* AgentSight is the one
+exception, and it does not arrive here either: it is a file you upload in the
+dashboard, described in
+[Importing existing history](/getting-started/importing-history).
 
 Two things you *can* create here are not recordings of a run: feedback, for the
 reason its [own section](#feedbacks) explains, and an action **definition** —
@@ -132,7 +136,14 @@ does not list. Ignore what you do not recognise.
 ```
 
 Both are `401`, and both mean the same class of problem: no usable credential.
-A key that is revoked, expired or not linked to an agent lands here too.
+`"Invalid API key."` specifically means the key string is malformed or unknown
+to this deployment — a key issued by a different environment (staging vs
+production) lands here. A revoked or expired key answers
+`"API key is inactive, expired or revoked."`, and a key with no agent binding
+answers `"API key is not linked to any agent."`.
+
+One route differs in status code only: `POST /api/ingest/` returns these same
+bodies as `403`, not `401`.
 
 :::warning One 401 that rotating your key will not fix
 ```json
@@ -195,10 +206,10 @@ Datetime filters accept the same form. **Booleans** are the lowercase strings
 GET /api/conversations/?has_tickets=true    →  count: 539
 ```
 
-That filter does not exist — the real one is `has_ticket`, and it is not on this
-plane at all. Nothing was applied, and the response is the entire result set
-wearing the appearance of a filtered one. A typo here does not error; it
-**widens** your result set, silently.
+That filter does not exist — the real one is `include_tickets`. Nothing was
+applied, and the response is the entire result set wearing the appearance of a
+filtered one. A typo here does not error; it **widens** your result set,
+silently.
 
 Two habits make that survivable: check `count` against what you expected, and
 copy filter names from the tables below rather than typing them. This is also
@@ -265,8 +276,10 @@ Retry-After: 30
 
 Rates are capacity controls rather than contract, so no numbers are published
 here and none should be inferred from what you observe. Retry reads; do not
-blindly retry writes, since nothing on this API is idempotent — a replayed
-feedback create is a second row, not a retried one.
+blindly retry writes, since almost nothing on this API is idempotent — a
+replayed feedback create is a second row, not a retried one. The one exception
+is [message feedback](#create-feedback-on-a-message), whose create updates the
+one vote per message and is safe to retry.
 
 ## Conversations
 
@@ -379,6 +392,7 @@ you and offers `list_full()` as the named opt-in.
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
 | `is_marked` | flagged conversations |
 | `include_deleted` | include soft-deleted rows — see [Deleting](#deleting-is-soft) |
+| `include_tickets` | **narrows to conversations with at least one ticket, and puts each row's tickets on the payload in full** — see the warning below |
 | `has_messages` | conversations that recorded any message |
 | `has_action` | conversations in which any tool or task ran |
 | `action_name` | conversations in which a *named* tool or task ran |
@@ -390,6 +404,22 @@ you and offers `list_full()` as the named opt-in.
 | `metadata_key` + `metadata_value` | one key, spelled out as two parameters |
 | `started_at_after`, `started_at_before` | when it began |
 | `ordering` | `started_at`, `ended_at`, `id`, `customer_id`, `is_marked`, `language` |
+
+:::warning `include_tickets=true` filters as well as includes
+It does two things at once: each returned conversation carries its `tickets`
+(title, status, priority, tags, timestamps and the full discussion thread
+under `comments`), **and the result set drops every conversation that has no
+ticket** — with no error. An agent with a thousand conversations and three
+ticketed ones answers with three rows, and the envelope's `count` is that
+ticketed count. Do not add it "just to see tickets" on a listing you expect to
+stay complete.
+
+The accepted spellings are `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`;
+anything else — the empty string included — answers `400` naming the
+parameter, rather than silently ignoring what you asked for. On
+[Get one conversation](#get-one-conversation) the parameter is accepted and
+ignored: detail carries tickets unconditionally.
+:::
 
 Combining them narrows:
 
@@ -572,7 +602,53 @@ curl "https://api.agentsight.io/api/conversations/732/" \
       "comment": "Quick and helpful, delivery moved as asked.",
       "created_at": "2026-08-17T10:32:38.050751Z"
     }
-  ]
+  ],
+  "tickets": [
+    {
+      "id": 61,
+      "title": "Courier ETA was wrong",
+      "status": "open",
+      "priority": "medium",
+      "tags": ["delivery"],
+      "created_at": "2026-08-18T09:12:04.118330Z",
+      "updated_at": "2026-08-18T09:40:11.902514Z",
+      "comments": [
+        {
+          "id": 204,
+          "author": "Maja K.",
+          "role": "reporter",
+          "body": "The bot promised 13:00, parcel came at 18:30.",
+          "created_at": "2026-08-18T09:12:04.120944Z"
+        },
+        {
+          "id": 209,
+          "author": "Dev team",
+          "role": "dev",
+          "body": "Carrier feed lag — switching to the live endpoint.",
+          "created_at": "2026-08-18T09:40:11.900012Z"
+        }
+      ]
+    }
+  ],
+  "token_usage": {
+    "totals": {
+      "prompt_tokens": 8210,
+      "completion_tokens": 1650,
+      "total_tokens": 9860
+    },
+    "cost_usd": "0.05242500",
+    "cost_sources": ["backend"],
+    "models": [
+      {
+        "model": "claude-sonnet-4-5",
+        "cost_source": "backend",
+        "cost_usd": "0.05242500",
+        "prompt_tokens": 8210,
+        "completion_tokens": 1650,
+        "total_tokens": 9860
+      }
+    ]
+  }
 }
 ```
 
@@ -584,7 +660,22 @@ belongs to it. `sender` is `end_user` or `agent`.
 
 This route always returns the whole conversation — asking for one by id is the
 case where you almost certainly want all of it, and `?full=` is a **list-only**
-parameter that this route ignores.
+parameter that this route ignores. `tickets` and `token_usage` arrive
+unconditionally for the same reason (and `?include_tickets=` is accepted and
+ignored here).
+
+`tickets` is every ticket filed against the conversation, discussion thread
+included, newest ticket first, thread messages oldest first.
+
+`token_usage` is `null` when nothing was recorded. `totals` names only the
+token columns that are non-zero for this conversation (`total_tokens` always),
+and `models` breaks the same columns down per model — tokens from different
+models are not the same unit. Costs are decimal **strings**, and `cost_source`
+is carried through rather than blended: `backend` means priced from the rate
+card, `reported` means the SDK's own figure was used, and `unpriced` means no
+price row matched — that zero is "we could not price this", never "this was
+free". One `models` entry per model *and* pricing source, so a partially
+repriced model shows both.
 
 `geo_location` is `null` unless an IP was recorded and resolved.
 
@@ -823,16 +914,19 @@ operator actions. If you need either, ask.
 
 ## Feedbacks
 
-Feedback is the one thing on this API you can create, and the exception proves
+Feedback is one of the few things on this API you can create — [tickets](#tickets)
+and [action declarations](#actions) are the others — and the exceptions prove
 the rule elsewhere. Everything else is telemetry — things that happened, which
 the SDK watched happen. Nothing about a run of your agent reveals whether the
 person on the other end was satisfied with it. Somebody has to say so, and the
 moment they say it is a click in your application, not an event any SDK could
 observe.
 
-Two kinds are reachable with an API key: **conversation** feedback (how one
-conversation went) and **agent** feedback (how the agent is doing overall,
-optionally scoped to an environment).
+Three kinds are reachable with an API key: **conversation** feedback (how one
+conversation went), **agent** feedback (how the agent is doing overall,
+optionally scoped to an environment) and **message** feedback (a reaction to
+one message in a conversation, carrying your application's own
+`topic`/`reason` slugs).
 
 ### List feedback
 
@@ -861,12 +955,15 @@ curl "https://api.agentsight.io/api/feedbacks/?sentiment=negative" \
       "agent": 20,
       "conversation": 733,
       "conversation_id": "demo-rag-search-956f",
+      "message": null,
       "user": null,
       "environment": "production",
       "environment_id": 39,
       "sentiment": "neutral",
       "category": null,
       "comment": "Answer was right but a bit terse.",
+      "topic": null,
+      "reason": null,
       "created_at": "2026-08-17T10:32:38.247146Z"
     }
   ],
@@ -876,22 +973,30 @@ curl "https://api.agentsight.io/api/feedbacks/?sentiment=negative" \
 
 </details>
 
-Newest first. The envelope carries one extra key, `counts`, which holds how many
-rows match the filters — the same number as `count`, and kept only because the
-envelope publishes it.
+Newest first. The envelope carries one extra key, `counts`. Plain, it holds
+`{"all": N}` — how many rows match the filters, the same number as `count`.
+Behind `?include_tickets=true` (below) the ticket aggregates arrive alongside:
+`tickets`, `open_tickets`, and one tally per ticket status (`backlog`, `open`,
+`in_progress`, `in_review`, `done`, `closed`). The tallies ignore any
+`ticket_status` filter on purpose, so a selected status does not zero the
+other buckets.
 
 | Filter | Selects on |
 |---|---|
-| `kind` | `conversation` or `agent` |
+| `kind` | `conversation`, `agent` or `message` |
 | `sentiment` | `positive`, `neutral` or `negative` |
 | `conversation` | one conversation, by numeric id |
-| `conversation_id` | one conversation, by business id |
+| `conversation_id` | one conversation, by business id — message votes included, since every vote knows its conversation |
+| `message` | one message's vote, by numeric id |
+| `topic`, `reason` | your own slugs, matched exactly |
 | `agent`, `user` | who it is about, and who left it |
 | `category` | the server-side category, where one is set |
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
 | `has_comment` | rows with free text, or rows without |
 | `comment_contains` | text inside the comment |
 | `created_at_after`, `created_at_before` | when it was left |
+| `include_tickets` | the gate to the ticket surface — see the warning below |
+| `has_ticket`, `ticket_status` | the promoted state — only alongside `include_tickets=true`; `ticket_status` repeats to OR (`?ticket_status=open&ticket_status=done`) |
 | `search` | across the searchable fields |
 | `ordering` | `created_at`, `id`, `kind`, `sentiment`, `category` |
 
@@ -899,23 +1004,33 @@ To go the other way — conversations that *have* feedback, rather than the
 feedback itself — filter conversations on `has_feedback` or
 `feedback_sentiment`.
 
-:::info Tickets are not on this surface
-`has_ticket` and `ticket_status` are refused rather than ignored:
+:::warning `include_tickets` narrows as it includes
+`?include_tickets=true` does two things at once: each returned row carries its
+nested `ticket` at full depth (title, status, priority, tags, timestamps,
+`comments_count` and the `comments` thread, oldest first), **and every
+feedback that was never promoted to a ticket is dropped** — with no error. Do
+not add it "just to see tickets" on a listing you expect to stay complete; the
+envelope's `count` is the promoted count. The accepted spellings are
+`1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`; anything else — the empty
+string included — answers `400`. Same contract as the conversations list.
+
+Without it, feedback payloads carry no `ticket` key, `counts` holds `all` and
+nothing else, and the two ticket filters are refused rather than ignored:
 
 ```json
-{ "has_ticket": "Tickets are not available on the API-key plane." }
+{ "has_ticket": "Ticket filters need ?include_tickets=true on the API-key plane." }
 ```
-
-Feedback payloads carry no nested ticket object, and `counts` holds `all` and
-nothing else. Tickets are internal workflow state; that is a boundary drawn on
-purpose, not a field that has yet to be added.
 :::
 
 ### Get one
 
 <span class="api-method get">GET</span> `/api/feedbacks/{id}/` — *read role*
 
-Returns a single row in the shape above.
+Returns a single row in the shape above, plus its nested `ticket`
+unconditionally — at the same full depth as the opted-in list, or `null` when
+the feedback was never promoted. Asking for one row by id is itself the
+explicit act, so no parameter is needed here (and `include_tickets` is
+accepted and ignored). The echo from a create still carries no `ticket` key.
 
 ### Create feedback on a conversation
 
@@ -943,12 +1058,15 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": 738,
   "conversation_id": "demo-delete-1786992718",
+  "message": null,
   "user": null,
   "environment": "development",
   "environment_id": 40,
   "sentiment": "positive",
   "category": null,
   "comment": "Fast and clear.",
+  "topic": null,
+  "reason": null,
   "created_at": "2026-08-17T18:52:44.956984Z"
 }
 ```
@@ -996,12 +1114,15 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": null,
   "conversation_id": null,
+  "message": null,
   "user": null,
   "environment": "production",
   "environment_id": 39,
   "sentiment": "negative",
   "category": null,
   "comment": "Slow at peak hours.",
+  "topic": null,
+  "reason": null,
   "created_at": "2026-08-17T18:52:46.379106Z"
 }
 ```
@@ -1012,13 +1133,48 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
 reports. `environment` is accepted on this kind only, and takes any slug the
 agent has.
 
-An invalid sentiment is a `400` on either kind:
+### Create feedback on a message
+
+<span class="api-method post">POST</span> `/api/feedbacks/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/feedbacks/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "message",
+    "message": 4821,
+    "sentiment": "negative",
+    "topic": "style",
+    "reason": "too_bold"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `kind` | yes | `"message"` |
+| `message` | yes | the numeric message id from the transcript |
+| `sentiment` | yes | `positive`, `neutral` or `negative` |
+| `topic`, `reason` | no | your own slugs, max 50 chars each — stored and counted, never interpreted |
+| `comment` | no | free text |
+
+A message holds **one vote**. The first POST answers `201 Created`; a repeat
+POST for the same message **updates the stored vote and answers `200 OK`** —
+fields you send are applied, fields you omit keep their stored value, an
+explicit `null` clears one. That makes this the one write on the API that is
+safe to retry. `conversation`, `agent` and `environment` are derived from the
+message, so supplying an environment is refused the same way it is on
+conversation feedback. The transcript carries the vote back nested on its
+message — `messages[n]["feedback"]` on the conversation payloads, `null` where
+no vote was cast.
+
+An invalid sentiment is a `400` on any kind:
 
 ```json
 { "sentiment": ["\"meh\" is not a valid choice."] }
 ```
 
-There is a third kind, `product`, which is not on this plane. Naming it —
+There is a fourth kind, `product`, which is not on this plane. Naming it —
 `?kind=product` on the list, or `"kind": "product"` in a payload — answers
 `403`. A product row reached by id is a `404` like any other row this key
 cannot see.
@@ -1028,7 +1184,8 @@ cannot see.
 <span class="api-method patch">PATCH</span> `/api/feedbacks/{id}/` — *write role*
 
 `sentiment` and `comment` are the changeable fields — plus `environment`, on
-agent-kind feedback only.
+agent-kind feedback only, and `topic`/`reason`, on message-kind feedback
+only.
 
 ```bash
 curl -X PATCH "https://api.agentsight.io/api/feedbacks/4/" \
@@ -1051,6 +1208,180 @@ curl -X DELETE "https://api.agentsight.io/api/feedbacks/4/" \
 `204 No Content`, and it is gone — unlike a conversation, feedback deletes for
 real. It is a statement somebody made, and withdrawing it means withdrawn rather
 than hidden. Asking for it afterwards is a `404`.
+
+## Tickets
+
+Tickets are the workflow items a team tracks against an agent — bugs and
+tasks, optionally anchored to the conversation they are about and to the
+feedback that prompted them. They were a dashboard-only surface until the
+key plane opened here; the full lifecycle is now reachable, which is what
+lets an agent file its own ticket when a guardrail trips instead of
+escalating into a transcript nobody reads.
+
+Everything is scoped to the one agent the key is bound to. Another agent's
+ticket id answers `404`, indistinguishable from an id that does not exist.
+
+**Writes are attributed to the key, not to a person.** A ticket or comment
+created with a key is authored as the API key's *name* (the label given at
+creation; the agent's name if that is blank), and comments are recorded with
+the role `agent` — alongside the human roles `dev` and `reporter` — so the
+dashboard can always tell machine-filed entries from human ones. Every write
+notifies the whole team, the key's owner included: file tickets
+deliberately, not on every failed turn.
+
+:::warning Nothing here is idempotent
+There is no dedupe key on this API. A retried create files a second ticket;
+a retried comment posts twice. Automation that files tickets should guard
+its own retries — list first, or track what it filed.
+:::
+
+### List tickets
+
+<span class="api-method get">GET</span> `/api/tickets/` — *read role*
+
+```bash
+curl "https://api.agentsight.io/api/tickets/?status=open&status=in_progress" \
+  -H "Authorization: Api-Key ags_YOUR_KEY"
+```
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "count": 1,
+  "page_size": 15,
+  "total_pages": 1,
+  "current_page": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 57,
+      "agent": 20,
+      "title": "Timeout in checkout",
+      "status": "open",
+      "priority": "high",
+      "tags": ["checkout"],
+      "environment": "production",
+      "environment_id": 39,
+      "conversation": {
+        "id": 733,
+        "conversation_id": "demo-rag-search-956f",
+        "name": "Refund",
+        "environment": "production",
+        "environment_id": 39
+      },
+      "feedback": {
+        "id": 3,
+        "kind": "conversation",
+        "sentiment": "negative",
+        "comment": "It hung and never answered.",
+        "created_at": "2026-08-17T10:32:38.247146Z"
+      },
+      "comments": [
+        {
+          "id": 12,
+          "author": "CI bot",
+          "role": "agent",
+          "body": "Reproduced on the last three runs.",
+          "created_at": "2026-08-18T09:00:00Z"
+        }
+      ],
+      "comments_count": 1,
+      "created_at": "2026-08-17T10:40:00Z",
+      "updated_at": "2026-08-18T09:00:00Z"
+    }
+  ]
+}
+```
+
+</details>
+
+Newest first. Every row carries its full `comments` thread — there is no
+summary depth on this route. `conversation` and `feedback` are nested
+context summaries, `null` when the ticket is not anchored.
+
+| Filter | Selects on |
+|---|---|
+| `status` | the lifecycle — `backlog`, `open`, `in_progress`, `in_review`, `done`, `closed`; repeats to OR (`?status=open&status=done`) |
+| `priority` | `low`, `medium` or `high` |
+| `conversation` | the anchored conversation, by numeric id |
+| `conversation_id` | the anchored conversation, by business id |
+| `has_conversation`, `has_feedback` | anchored rows, or unanchored ones |
+| `tags` | comma-separated; matches tickets carrying **any** of the named tags |
+| `created_at_after`, `created_at_before` | when it was filed |
+| `updated_at_after`, `updated_at_before` | when it last moved |
+| `search` | text inside the title |
+| `ordering` | `created_at`, `updated_at`, `priority`, `status`, `title` |
+
+There is no `environment` filter: a ticket records the environment it was
+created in, but the route does not select on it.
+
+### Get one
+
+<span class="api-method get">GET</span> `/api/tickets/{id}/` — *read role*
+
+One ticket in the shape above. The discussion thread is already on it; the
+nested comments route below exists as the write path, and as a paginated
+read for very long threads.
+
+### Create a ticket
+
+<span class="api-method post">POST</span> `/api/tickets/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/tickets/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Timeout in checkout", "priority": "high", "conversation_id": 733}'
+```
+
+`title` is the one required field. `status` defaults to `open`;
+`environment` takes a slug (`production` unless you say otherwise) and is
+**write-once** — it records where the problem was observed and cannot be
+changed later. `conversation_id` here is the **numeric** conversation id
+(the business-string spelling belongs to the list filter); `feedback_id`
+records the feedback that prompted the ticket — product feedback is
+rejected, and a ticket created from conversation feedback inherits that
+feedback's conversation unless you anchor one explicitly. Both links must
+belong to your agent; a foreign id is a `400`.
+
+The ticket is authored as the key's name and the team is notified.
+
+### Update and delete
+
+<span class="api-method patch">PATCH</span> `/api/tickets/{id}/` — *write role*
+
+`title`, `status`, `priority` and `tags` change freely; `environment`
+answers `400` (write-once, above). Updates fire no notification.
+
+<span class="api-method delete">DELETE</span> `/api/tickets/{id}/` — *write role*
+
+`204 No Content`, and the discussion thread goes with it. Prefer closing
+(`{"status": "closed"}`) — deletion is for tickets that should never have
+existed.
+
+### The discussion thread
+
+<span class="api-method get">GET</span> `/api/tickets/{id}/comments/` — *read role*
+
+The thread as its own paginated list, oldest first — the same rows every
+ticket payload embeds as `comments`.
+
+<span class="api-method post">POST</span> `/api/tickets/{id}/comments/` — *write role*
+
+```bash
+curl -X POST "https://api.agentsight.io/api/tickets/57/comments/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"body": "Reproduced on the last three runs."}'
+```
+
+`body` is the whole contract. The comment is recorded with the role `agent`
+and authored as the key's name whatever else is sent — a `role` in the
+payload is ignored on this plane, so machine entries can never pass as
+human ones. The team is notified.
 
 ## Actions
 
@@ -1702,8 +2033,7 @@ absence is a decision:
 
 | | Why |
 |---|---|
-| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run. |
-| **Tickets** | Internal workflow state. No routes, no nested objects, and the ticket filters are refused rather than ignored. |
+| **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run — and neither is filing a [ticket](#tickets), which is a workflow item somebody decided to open. |
 | **Buttons** | Recorded completely, but nothing projects them into a readable table yet — a list here would answer "no clicks" to everyone. Read them as [spans](#what-spans-are-good-for). |
 | **Message and action-log writes** | Same rule as recording: they belong to the SDK. |
 | **Admin and dashboard routes** | Session-authenticated, and not part of any integration contract. |

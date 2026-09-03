@@ -2,15 +2,20 @@
 name: agentsight-integration
 description: >
   Integrate AgentSight — conversation analytics and observability for AI
-  agents — into an application. Use this skill whenever the task involves
-  AgentSight in any form: installing or configuring the agentsight Python SDK,
+  agents — into an application. Use this skill when the codebase does not
+  yet record to AgentSight: installing and wiring the agentsight Python SDK,
   adding conversation/agent/chatbot analytics or tracking (conversations,
-  turns, messages, tools, tokens, cost, escalations, feedback), an
-  AGENTSIGHT_* environment variable or ags_ API key, embedding the AgentSight
-  client dashboard, reading recorded data via the AgentSight API, or debugging
-  why an AgentSight metric or chart is empty — even when the user just says
-  "add analytics to my agent" or "instrument my chatbot" without naming a
-  file or the word AgentSight appears only in the codebase.
+  turns, messages, tools, tokens, cost, escalations, feedback) where none
+  exists — even when the user just says "add analytics to my agent" or
+  "instrument my chatbot" without naming AgentSight — or extending an
+  existing integration to a new service or repo. It runs code-first
+  discovery, a consent-aware interview, SDK wiring, and file-exporter
+  verification before any claim of success. For day-to-day work in an
+  already-integrated codebase (changing tracking code, reading data,
+  embedding the dashboard, debugging metrics), use the agentsight skill
+  instead; to bring conversations that already happened in a previous system
+  into AgentSight — backfill, bulk import, historical migration — use the
+  agentsight-migration skill.
 ---
 
 # Integrating AgentSight
@@ -22,11 +27,16 @@ modes are silent: nothing on the tracking plane ever raises, so a wrong
 integration produces plausible wrong data, not errors. Your job is to produce
 a **first-pass-correct** integration, and to prove it before reporting done.
 
-Two planes, one product:
-
-- **Tracking** (`import agentsight`) — records; never raises, never blocks.
-- **Data** (`from agentsight.api import AgentSight`) — reads and manages;
-  always raises. Also the home of feedback creation and action labelling.
+**The other skills.** The sibling `agentsight` skill is the knowledge home —
+the full SDK and API surface, metrics, embed, debugging. This skill is the
+workflow that gets a codebase from zero to correctly integrated; it links
+into the knowledge files below and adds the interview and verification
+discipline around them. Once a repo is integrated, day-to-day work belongs to
+the `agentsight` skill. The third sibling, `agentsight-migration`, owns the
+conversations that happened *before* cutover: this skill records what happens
+next, migration brings the history over as a file the developer uploads. They
+run in that order and neither substitutes for the other — so when a developer
+asks for their old conversations, finish here and route them there.
 
 Published docs: `https://docs.agentsight.io` — every page has a copy-as-
 markdown button and the site serves raw markdown, so fetch pages directly
@@ -34,18 +44,22 @@ when you need more than the references here. Never contradict them.
 
 ## Reference files
 
-Read them when their subject enters the work — not all up front:
+Read them when their subject enters the work — not all up front. The
+knowledge files live in the sibling `agentsight` skill (the skills ship and
+install together); if the `../agentsight/` paths are missing, that skill
+was not installed alongside this one — install both, or fetch the matching
+pages from `docs.agentsight.io`.
 
 | File | Read when |
 |---|---|
 | [references/interview.md](references/interview.md) | always, before asking the developer anything — the question protocol, tiers, defaults, and the `AGENTSIGHT.md` record |
-| [references/sdk-tracking.md](references/sdk-tracking.md) | always, before writing integration code — the full tracking surface |
-| [references/streaming-and-lifetime.md](references/streaming-and-lifetime.md) | any handler streams, defers, queues, uses websockets or thread pools — and for `shutdown()` wiring, which is every integration |
-| [references/frameworks.md](references/frameworks.md) | the app calls any LLM — coverage tables, stand-down rules, `model_hint()`, the not-captured list |
-| [references/metrics-and-fields.md](references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments — what powers what on the dashboard |
-| [references/data-plane.md](references/data-plane.md) | wiring feedback, labelling actions, reading data back, non-Python services, REST details |
-| [references/embed.md](references/embed.md) | the developer wants the client-facing dashboard in their own product |
-| [references/verification.md](references/verification.md) | always, before claiming done — the file-exporter loop and checklist |
+| [../agentsight/references/sdk-tracking.md](../agentsight/references/sdk-tracking.md) | always, before writing integration code — the full tracking surface |
+| [../agentsight/references/streaming-and-lifetime.md](../agentsight/references/streaming-and-lifetime.md) | any handler streams, defers, queues, uses websockets or thread pools — and for `shutdown()` wiring, which is every integration |
+| [../agentsight/references/frameworks.md](../agentsight/references/frameworks.md) | the app calls any LLM — coverage tables, stand-down rules, `model_hint()`, the not-captured list |
+| [../agentsight/references/metrics-and-fields.md](../agentsight/references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments — what powers what on the dashboard |
+| [../agentsight/references/data-plane.md](../agentsight/references/data-plane.md) | wiring feedback, labelling actions, reading data back, non-Python services, REST details |
+| [../agentsight/references/embed.md](../agentsight/references/embed.md) | the developer wants the client-facing dashboard in their own product |
+| [references/verification.md](references/verification.md) | always, before claiming done — the checklist and the report; the loop mechanics are in [../agentsight/references/debugging.md](../agentsight/references/debugging.md) |
 
 ## The workflow
 

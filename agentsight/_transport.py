@@ -161,12 +161,14 @@ class Transport:
         """Send a request and hand back the response, whatever its status.
 
         Retries are applied here so both entry points get them, and only to
-        GET: no write on this API is known-idempotent enough to replay blindly.
-        ``POST /api/feedbacks/`` in particular would create a second row, and
-        no amount of server-side pacing makes replaying it safe — so a write
-        that comes back throttled is raised as :class:`RateLimitError` carrying
-        ``retry_after``, and the caller decides. A GET has no such problem and
-        is retried, honouring ``Retry-After`` when the server sends one.
+        GET: writes are never replayed automatically. Most creates are not
+        idempotent — a replayed ``POST /api/feedbacks/`` files a second row
+        for every kind except message feedback, whose create updates the one
+        vote per message and is the single write a caller may safely retry by
+        hand. So a write that comes back throttled is raised as
+        :class:`RateLimitError` carrying ``retry_after``, and the caller
+        decides. A GET has no such problem and is retried, honouring
+        ``Retry-After`` when the server sends one.
         """
         method = method.upper()
         url = _settings.join_url(self.endpoint, path)

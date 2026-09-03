@@ -7,7 +7,7 @@ from agentsight.api._pagination import Page, PageIterator
 from agentsight.api.resources._base import Resource
 from agentsight.exceptions import ValidationError
 
-_UPDATABLE = ("sentiment", "comment")
+_UPDATABLE = ("sentiment", "comment", "topic", "reason")
 
 
 class Feedbacks(Resource):
@@ -27,16 +27,20 @@ class Feedbacks(Resource):
     feedback, no span kind, and no inference: you call this when your user
     clicks the thumb.
 
-    Feedback comes in three kinds server-side. Two are reachable with an API
-    key: ``conversation`` (how a specific conversation went) and ``agent``
-    (how the agent is doing overall, optionally scoped to an environment).
-    The third, ``product``, is staff-only and has no method here.
+    Feedback comes in four kinds server-side. Three are reachable with an API
+    key: ``conversation`` (how a specific conversation went), ``agent`` (how
+    the agent is doing overall, optionally scoped to an environment) and
+    ``message`` (a reaction to one message in a conversation, carrying your
+    application's own ``topic``/``reason`` slugs). The fourth, ``product``,
+    is staff-only and has no method here.
 
     Everything goes through ``/api/feedbacks/``. The older
     ``/api/conversation-feedbacks/`` route that earlier SDK versions posted to
     is deprecated and scheduled for removal, and it silently discarded the
     ``metadata`` field those versions sent — which is why no method here takes
-    one.
+    one. The structured "why" that ``metadata`` never delivered lives on
+    message feedback instead: ``topic`` and ``reason`` are slugs you define,
+    stored and counted by AgentSight and never interpreted by it.
     """
 
     # -- reading -----------------------------------------------------------
@@ -47,32 +51,46 @@ class Feedbacks(Resource):
         Filters: ``agent``, ``category``, ``comment_contains``,
         ``conversation`` (pk), ``conversation_id`` (string),
         ``created_at_after``, ``created_at_before``, ``environment`` (or
-        ``env``), ``has_comment``, ``kind``, ``ordering``, ``search``,
-        ``sentiment``, ``user``.
+        ``env``), ``has_comment``, ``has_ticket``, ``include_tickets``,
+        ``kind``, ``message`` (pk), ``ordering``, ``reason``, ``search``,
+        ``sentiment``, ``ticket_status``, ``topic``, ``user``.
 
-        Tickets are not filterable here — see :meth:`get`.
+        **``include_tickets=True`` also narrows the result set** — it returns
+        only feedback that was promoted to a ticket, and each of those rows
+        then carries the nested ``ticket`` at full depth (title, status,
+        priority, tags, ``comments_count`` and the ``comments`` thread).
+        Adding it merely to see tickets loses every unpromoted row; without
+        it, feedback payloads carry no ``ticket`` key at all.
+
+        ``has_ticket`` and ``ticket_status`` work only alongside
+        ``include_tickets=True`` — on their own the backend answers 400.
+        ``ticket_status`` accepts a list and ORs it:
+        ``ticket_status=["open", "in_progress"]``.
         """
         return PageIterator(self._fetch, self._filters(filters))
 
     def page(self, number: int = 1, **filters: Any) -> Page:
-        """One page, with the aggregate count the envelope carries.
+        """One page, with the aggregate counts the envelope carries.
 
-        ``Page.extra["counts"]`` holds ``{"all": N}`` — how many rows match the
-        filters, which is the same number as ``Page.count`` and is kept only
-        because the envelope publishes it.
-
-        Earlier versions of this client documented ticket aggregates here too
-        (``tickets``, ``open_tickets``, and the per-status tallies). Those are
-        internal workflow state and are no longer sent to an API key.
+        Without ``include_tickets=True``, ``Page.extra["counts"]`` holds
+        ``{"all": N}`` — how many rows match the filters, the same number as
+        ``Page.count``. With it, the ticket aggregates arrive alongside:
+        ``tickets``, ``open_tickets``, and one tally per ticket status
+        (``backlog``, ``open``, ``in_progress``, ``in_review``, ``done``,
+        ``closed``). The tallies ignore any ``ticket_status`` filter on
+        purpose, so a selected status does not zero the other buckets.
         """
         return PageIterator(self._fetch, self._filters(filters)).page(number)
 
     def get(self, feedback_id: int) -> Dict[str, Any]:
         """One feedback row.
 
-        No ``ticket`` key: tickets are internal workflow state and are not
-        exposed on the API-key plane, so the field is absent rather than null
-        on every payload here — list, retrieve and the echo from a create.
+        Carries the nested ``ticket`` unconditionally — at full depth,
+        discussion thread included — or ``null`` when the feedback was never
+        promoted. Asking for one row by id is itself the explicit act, so no
+        parameter is needed here; only the *list* keeps tickets behind
+        ``include_tickets=True``. (The echo from a create still has no
+        ``ticket`` key.)
         """
         return self._request("GET", f"/api/feedbacks/{int(feedback_id)}/")
 
@@ -109,6 +127,49 @@ class Feedbacks(Resource):
             payload["comment"] = comment
         return self._request("POST", "/api/feedbacks/", json=payload)
 
+    def create_for_message(
+        self,
+        message: int,
+        sentiment: str,
+        comment: Optional[str] = None,
+        *,
+        topic: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record a reaction to one message. *Write role.* **Safe to retry.**
+
+        One vote per message: repeating the call for the same message UPDATES
+        the stored vote instead of filing a second row (the server answers 200
+        rather than 201; this client returns the row either way). That makes
+        it the one write on this API that is safe to retry. Fields you send
+        are applied, fields you omit keep their stored value — a bare repeat
+        of a thumb never wipes an earlier ``topic``/``reason``.
+
+        ``message`` is the integer pk from the transcript
+        (``conversations.get(...)["messages"][n]["id"]``); messages have no
+        string alias. ``sentiment`` is ``positive``, ``neutral`` or
+        ``negative``. ``topic`` and ``reason`` are your application's own
+        slugs (max 50 chars) — AgentSight stores and counts them and never
+        interprets them, so ``GROUP BY topic`` on your side is the point:
+        e.g. ``topic="style", reason="too_bold"``.
+        """
+        if isinstance(message, bool) or not isinstance(message, int):
+            raise ValidationError(
+                f"message must be an integer pk, got {type(message).__name__}"
+            )
+        payload: Dict[str, Any] = {
+            "kind": "message",
+            "message": message,
+            "sentiment": _require_sentiment(sentiment),
+        }
+        if comment:
+            payload["comment"] = comment
+        if topic:
+            payload["topic"] = topic
+        if reason:
+            payload["reason"] = reason
+        return self._request("POST", "/api/feedbacks/", json=payload)
+
     def create_for_agent(
         self,
         sentiment: str,
@@ -143,7 +204,16 @@ class Feedbacks(Resource):
         return self._request("POST", "/api/feedbacks/", json=payload)
 
     def update(self, feedback_id: int, **fields: Any) -> Dict[str, Any]:
-        """Change a feedback's ``sentiment`` or ``comment``. *Write role.*"""
+        """Change a feedback's ``sentiment``, ``comment``, ``topic`` or
+        ``reason``. *Write role.*
+
+        The slugs are accepted on message-kind feedback only — the backend
+        rejects them on the other kinds rather than dropping them. ``None``
+        values are dropped before the request, so clearing a stored slug is
+        not possible through this method; repeat
+        :meth:`create_for_message` for the message instead if you need a
+        different pair.
+        """
         unknown = sorted(set(fields) - set(_UPDATABLE))
         if unknown:
             raise ValidationError(

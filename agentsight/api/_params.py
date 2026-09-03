@@ -41,6 +41,10 @@ CONVERSATION_FILTERS = frozenset(
         "has_feedback",
         "has_messages",
         "include_deleted",
+        # Filters AND includes: narrows to conversations with at least one
+        # ticket, and each returned row then carries its tickets at full
+        # depth. See Conversations.list for the caveat callers get wrong.
+        "include_tickets",
         "is_marked",
         "language",
         "message_contains",
@@ -67,18 +71,62 @@ FEEDBACK_FILTERS = frozenset(
         "env",
         "environment",
         "has_comment",
+        # The gate to the ticket surface of this route: narrows to feedback
+        # rows that carry a ticket, and opens the nested ``ticket`` (at full
+        # depth, discussion thread included), the per-status ``counts``, and
+        # the two ticket filters below. Without it those filters answer 400
+        # and payloads carry no ticket data. Same name and coupling as the
+        # conversations twin; see Feedbacks.list.
+        "include_tickets",
+        "has_ticket",
         "kind",
+        # Message-kind feedback (integer message pk) and its host-defined
+        # slugs. Exact-match on the slugs, server-side.
+        "message",
         "ordering",
+        "reason",
         "search",
         "sentiment",
+        # Accepts a list — ``ticket_status=["open", "in_progress"]`` ORs, sent
+        # as repeated keys.
+        "ticket_status",
+        "topic",
         "user",
     }
 )
-#: ``has_ticket`` and ``ticket_status`` are deliberately absent. Tickets are
-#: internal workflow state and are not on the API-key plane at all: the nested
-#: ``ticket`` object is omitted from every feedback payload, the ``counts``
-#: envelope carries only ``all``, and both filters now return 400. Refusing
-#: them here turns that into an error naming the supported filters.
+
+#: ``/api/tickets/`` — the workflow items filed against this agent.
+#:
+#: No ``agent`` (same reasoning as ACTION_FILTERS below) and no
+#: ``environment``: the route has no environment filter — a ticket records the
+#: environment it was created in, but the backend does not filter on it.
+#: ``conversation`` is the integer pk and ``conversation_id`` the business
+#: string, the same split the feedback route makes.
+TICKET_FILTERS = frozenset(
+    {
+        "conversation",
+        "conversation_id",
+        "created_at_after",
+        "created_at_before",
+        "has_conversation",
+        "has_feedback",
+        "ordering",
+        "priority",
+        "search",
+        # Accepts a list — ``status=["open", "in_progress"]`` ORs, sent as
+        # repeated keys.
+        "status",
+        # Comma-separated: ``tags="checkout,billing"`` matches tickets
+        # carrying ANY of the named tags.
+        "tags",
+        "updated_at_after",
+        "updated_at_before",
+    }
+)
+
+#: The ticket lifecycle, as the dashboard's board columns order it.
+TICKET_STATUSES = ("backlog", "open", "in_progress", "in_review", "done", "closed")
+TICKET_PRIORITIES = ("low", "medium", "high")
 
 #: Note the absence of ``agent``: an API key is bound to exactly one agent and
 #: the scoping is applied before any filter runs, so the parameter could only
