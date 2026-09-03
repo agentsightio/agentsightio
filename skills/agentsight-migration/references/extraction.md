@@ -48,6 +48,8 @@ customers in one transcript.
   smaller.
 - **Ordered by timestamp within each conversation**, explicitly sorted, not
   inherited from row order.
+- **Every `conversation_id` carries the agreed prefix.** Apply it in one
+  place in the exporter, and let the step 9 reconciliation assert it.
 - **Outside the repo, or gitignored in the same edit.** These are full
   customer transcripts.
 

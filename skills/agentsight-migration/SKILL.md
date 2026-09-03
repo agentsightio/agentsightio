@@ -31,7 +31,10 @@ else, brought over once as a bulk import.
 obtain. **The deliverable is a file on disk**, handed to the user with the
 instruction to drop it on `/{agent_id}/migrate` in their dashboard. Say this in
 your first reply; do not discover it at step 9, and never ask the user for
-dashboard credentials or a password.
+dashboard credentials or a password. **You also make no request to the
+AgentSight API**: the contract you work from ships inside the skill, and
+nothing in a file-on-disk deliverable needs it — not an API key, not an
+endpoint, not a "check what already exists" read.
 
 **The other skills.** Three skills, split on one axis: the tense and location
 of the data. This one is conversations that happened somewhere else.
@@ -57,10 +60,11 @@ installed alongside this one — install both, or fetch the matching pages from
 |---|---|
 | [references/mapping-interview.md](references/mapping-interview.md) | always, before asking the user anything — the three waves, the lossy-row protocol, and the `AGENTSIGHT_MIGRATION.md` record |
 | [references/contract.md](references/contract.md) | before mapping a single field — file shape, senders, timestamps, metadata, and what an import does not carry |
+| [contract/](contract/) | with contract.md — the shipped snapshot of the server's schema, limits and example; `MANIFEST.json` names the backend commit they were taken from |
 | [references/extraction.md](references/extraction.md) | writing the exporter — the source shapes and the properties the output must have |
 | [references/verification.md](references/verification.md) | always, before handing over any file — running the validator, reading its exit code, and the reconciliation arithmetic |
 | [../agentsight/references/metrics-and-fields.md](../agentsight/references/metrics-and-fields.md) | the user asks what an imported conversation will and will not show on the dashboard |
-| [../agentsight/references/data-plane.md](../agentsight/references/data-plane.md) | reading imported conversations back afterwards, or checking existing ids before the import |
+| [../agentsight/references/data-plane.md](../agentsight/references/data-plane.md) | reading imported conversations back afterwards — the sibling skill's job, and never a step of this one |
 
 ## The workflow
 
@@ -74,19 +78,24 @@ hazard in the product**: live recording and the import dedup on the same
 `(agent, conversation_id)` pair, so a scheme that collides silently rejects
 rows, and a scheme that diverges splits one customer's history in two.
 
-### 1. Fetch the contract — live, never from memory
+### 1. Read the contract — from the shipped snapshot, never from memory
 
-```bash
-curl -H "Authorization: Api-Key $AGENTSIGHT_API_KEY" \
-     https://api.agentsight.io/api/imports/schema/
-```
+The skill ships the server's contract in `contract/`:
 
-Same for `/api/imports/limits/` and `/api/imports/example/`. The trailing
-slash is mandatory. These three are the only import routes an `ags_` key can
-read; anonymous is a 401, so the key must be sent. **If the fetch fails, stop
-and ask the user to paste the schema** — do not reconstruct it. `/limits/`
-carries every cap including `max_open_runs_per_agent` and
-`max_import_file_bytes`, so no number in this skill is ever written down.
+| File | What it is |
+|---|---|
+| `contract/limits.json` | every cap — `max_conversations_per_run`, `max_messages_per_conversation`, `max_content_length`, the metadata caps, `max_open_runs_per_agent`, `max_import_file_bytes` — so no number in this skill is ever written down |
+| `contract/import_v1.schema.json` | the JSON Schema the dashboard, the server and the validator all compile from |
+| `contract/example_import.json` | a known-good file |
+| `contract/MANIFEST.json` | the backend commit and date the three were taken from — quote it in the final report |
+
+Read `limits.json` now and take every cap from it. **Do not curl anything for
+these**: not `api.agentsight.io`, not a local instance, not another port. The
+three contract routes exist on the API for humans; they are not part of this
+workflow, and neither is an API key. If `contract/` is missing, the install is
+incomplete — stop and say so; never reconstruct the contract from memory. A
+server newer than the snapshot rejects at upload with a named error code, and
+the recovery is a refreshed skill, not a fetch.
 
 ### 2. Inspect the source — silent and read-only
 
@@ -114,7 +123,10 @@ left exactly as it was found: no schema change, no status column, no
 
 Present what you determined, then run the three waves in
 mapping-interview.md. Wave 2's counts are only computable once Wave 1 has
-settled the sender map and the timezone, so the waves cannot be merged.
+settled the sender map and the timezone, so the waves cannot be merged. Each
+wave is its own turn — ask, wait for the answer, then ask the next — including
+under plan mode: never one questionnaire, and never decisions written into a
+plan file on the user's behalf.
 
 ### 4. Write AGENTSIGHT_MIGRATION.md
 
@@ -135,8 +147,9 @@ metadata, and one from each end of the date range.
 python3 scripts/validate_import.py pilot.json
 ```
 
-**Run it and paste its output.** Exit 0 is the only pass; see
-verification.md for what each code means.
+No key, no flags, no network: it reads the shipped snapshot. **Run it and
+paste its output.** Exit 0 is the only pass; see verification.md for what each
+code means.
 
 ### 7. Pilot gate — stop here
 
@@ -158,13 +171,24 @@ plan.
 Run the validator over **all parts at once** — cross-file duplicate ids are
 invisible to a per-file run. Then reconcile against the source: conversation
 count, message count, and min/max timestamp, computed from the files and
-compared to the same three queries against the database. Report the numbers,
-the decisions taken, and the timezone as an assumption the user owns.
+compared to the same three queries against the database — and assert that
+every `conversation_id` in the files carries the prefix agreed in Wave 1; a
+file without it does not leave your hands. Report the numbers, the decisions
+taken, and the timezone as an assumption the user owns.
 
 ## Hard rules
 
 - **You cannot upload.** The file is the deliverable. Never claim an import
   was performed, and never ask for dashboard credentials.
+- **No request to the AgentSight API.** The contract ships with the skill,
+  the file is the deliverable, and the server re-validates on upload — so
+  there is no request to make: no contract fetch, no API key, no endpoint, no
+  probing of local ports. A newer server contract shows up at upload as a
+  named rejection, never as a wrong file here.
+- **Every id is prefixed.** The prefix is agreed in Wave 1 (`legacy-` or the
+  user's own); bare source ids never go into the file. Collisions after
+  upload are the server's `conversation_already_exists` plus run-scoped undo —
+  there is no pre-check, and you do not query for one.
 - **Read-only against the source.** It is a live system belonging to someone
   who has not agreed to let you write to it. "Migration" here means moving
   data *out* into a file; it never means a schema migration, and you never

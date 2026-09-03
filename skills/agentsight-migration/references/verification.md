@@ -17,28 +17,24 @@ the JSON is not a substitute for it at any point in the workflow.
 ## Running it
 
 ```bash
-export AGENTSIGHT_API_KEY=ags_...
 python3 scripts/validate_import.py export-part-01.json export-part-02.json
 ```
 
-It needs `jsonschema`; if it is missing the script says so and validates
-nothing rather than half-checking. It fetches the schema and the limits from
-the same routes step 1 used, so what it enforces is what the server enforces
-today, not what was true when the script was written.
+No key, no endpoint, no network. It needs `jsonschema`; if it is missing the
+script says so and validates nothing rather than half-checking. It reads the
+schema and the limits from the skill's `contract/` snapshot, so what it
+enforces is the server's contract at the backend commit `contract/MANIFEST.json`
+names — the same documents step 1 read. The server re-validates on upload, so
+a rule newer than the snapshot shows up there as a named rejection.
 
 **Pass every part file in one invocation.** Duplicate conversation ids across
 parts are the single failure a per-file run cannot see, and they are common —
 a `WHERE` clause with an overlapping boundary produces them silently.
 
-If the environment genuinely cannot reach the API, `--schema path/to/schema.json`
-validates against a local copy the user pasted. The report then prints an
-`OFFLINE` banner naming every cap that came from the script's fallback table
-instead of from the server. Say that in your report too; do not quietly present
-an offline run as a checked one.
-
-Other flags: `--endpoint` for a non-default deployment, `--api-key` if the
-environment variable is not available (it lands in shell history, so prefer the
-variable), `--max-examples` to print more than ten findings per code.
+Two flags, neither of which a migration normally needs: `--contract DIR`
+validates against another copy of the contract directory (only for testing a
+freshly refreshed snapshot), and `--max-examples` prints more than ten
+findings per code.
 
 ## Exit codes
 
@@ -47,11 +43,11 @@ variable), `--max-examples` to print more than ten findings per code.
 | 0 | Every check the script can make ran and found nothing |
 | 1 | Findings — the file has contract violations, or is not valid JSON |
 | 2 | Usage: bad arguments, or a file that cannot be read |
-| 3 | **No verdict.** The contract fetch failed, the key was rejected, or `jsonschema` is missing. **Nothing was validated** |
+| 3 | **No verdict.** `jsonschema` is missing, or the shipped `contract/` directory could not be read — a broken install. **Nothing was validated** |
 
-Exit 3 is not a pass and not a failure. Treat it as a blocked step: fix the
-fetch, or use `--schema`, and run again. Never report progress on the strength
-of a 3.
+Exit 3 is not a pass and not a failure. Treat it as a blocked step: install
+`jsonschema`, or reinstall the skill so `contract/` is complete, and run
+again. Never report progress on the strength of a 3.
 
 ## Reading the report
 
@@ -108,6 +104,10 @@ scope filters the interview settled:
 1. conversation count
 2. message count
 3. min and max `started_at`
+
+and one assertion the source cannot answer: every `conversation_id` in the
+files carries the prefix agreed in Wave 1. A file without it does not leave
+your hands, because the validator cannot know what a prefix is for.
 
 Any gap is either a filter the export applied and the query did not, or a lossy
 decision from Wave 2 — and in the second case the gap should equal the counts

@@ -29,8 +29,10 @@ curl -H "Authorization: Api-Key $AGENTSIGHT_API_KEY" \
 ```
 
 `/api/imports/limits/` and `/api/imports/example/` alongside it. These three
-are the only import routes an API key can read, and they are what an agent
-building the file should fetch rather than working from memory.
+are the only import routes an API key can read. They are there for a human
+with `curl`, or for tooling that wants the live document; an agent using the
+migration skill below works from the skill's own shipped copy of the same
+three documents and makes no request at all.
 
 ## Where the file comes from
 
@@ -61,7 +63,9 @@ Then: *"import my conversation history into AgentSight from this database"*.
 dashboard-only — an API key gets a 403 on every one of them — so the agent
 hands you a file and you drop it on the migrate page yourself. That is
 deliberate: an import writes tens of thousands of rows into a customer-facing
-dashboard, and a human starts it.
+dashboard, and a human starts it. The skill is offline by design: it needs no
+API key and makes no request to AgentSight, because the contract it validates
+against ships inside it and the server re-validates everything on upload.
 
 ## What it asks you
 
@@ -94,7 +98,8 @@ unaffected.
 ## How a large history arrives
 
 One file is one import, and the caps are published in
-`/api/imports/limits/` — conversations per import, a browser-side file size,
+`/api/imports/limits/` (and shipped with the migration skill as
+`contract/limits.json`) — conversations per import, a browser-side file size,
 and how many imports can be open at once for an agent. A history past any of
 them is split into numbered parts and uploaded in sequence.
 

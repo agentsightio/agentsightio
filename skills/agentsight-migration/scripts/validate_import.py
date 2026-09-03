@@ -10,9 +10,13 @@ to agree by being looser, this script is looser. Every rule is a port of one
 that exists in the backend's `validation.py` or the dashboard's
 `lib/imports/*`; a rule with no home there is a bug in this file.
 
-It performs read-only HTTP -- two GETs against the contract routes, never a
-POST. It cannot create an import run and it cannot upload: those routes are
-dashboard-only, and an `ags_` key gets 403 on every one of them.
+It makes no network request. The contract it checks against ships with the
+skill in `../contract/`: a snapshot of the server's schema, limits and example
+taken from an ags_backend checkout by tests/skills/regenerate_corpus.py
+(MANIFEST.json names the commit). The server re-validates on upload, so a
+contract newer than the snapshot shows up there as a named rejection -- never
+as a wrong file here. This script cannot create an import run and cannot
+upload: those routes are dashboard-only.
 
 WHAT THIS CANNOT CHECK, ever:
 
@@ -25,18 +29,15 @@ So a clean report means "nothing in these files is wrong on its own". It never
 means the upload will succeed, and it says nothing at all about whether the
 timestamps are in the timezone you think they are.
 
-Exit codes: 0 clean | 1 findings | 2 usage | 3 no verdict (nothing validated).
+Exit codes: 0 clean | 1 findings | 2 usage | 3 no verdict (jsonschema missing,
+or the shipped contract unreadable -- nothing validated).
 """
 
 import argparse
-import hashlib
 import json
 import math
-import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,7 +46,6 @@ try:
 except ImportError:  # pragma: no cover - exercised by hand, not in CI
     Draft202012Validator = None
 
-DEFAULT_ENDPOINT = "https://api.agentsight.io"
 NUL = "\x00"
 MAX_DETAIL = 160
 TEXT_FIELDS = ("conversation_id", "name", "customer_id", "language", "device")
@@ -97,9 +97,10 @@ DATETIME_RE = re.compile(
     r"\s*(?P<tzinfo>Z|[+-]\d{2}(?::?\d{2})?)?$"
 )
 
-# Neither of these is served by /api/imports/limits/, so they are the only two
-# numbers in this file that cannot be read from the contract. Worth raising
-# with the backend: every third-party validator will hardcode them.
+# Neither of these is in limits.json -- the server enforces them but does not
+# publish them -- so they are the only two numbers in this file that cannot be
+# read from the contract. Worth raising with the backend: every third-party
+# validator will hardcode them.
 EARLIEST_TIMESTAMP = datetime(2000, 1, 1, tzinfo=timezone.utc)
 FUTURE_TOLERANCE = timedelta(minutes=5)
 # The server evaluates now()+5min at UPLOAD time, hours after this runs. A
@@ -107,21 +108,6 @@ FUTURE_TOLERANCE = timedelta(minutes=5)
 # ceiling is deliberately looser. A broken export is off by years, not by an
 # hour.
 UPLOAD_GRACE = timedelta(hours=1)
-
-# Used only with --schema, for the caps a JSON Schema has no way to state.
-FALLBACK_LIMITS = {
-    "schema_version": 1,
-    "max_metadata_bytes": 16 * 1024,
-    "max_metadata_depth": 10,
-    "max_metadata_keys_per_level": 50,
-    "max_metadata_key_length": 200,
-    "max_import_file_bytes": 200 * 1024 * 1024,
-}
-
-# sha256 of the schema this script's golden corpus was last regenerated
-# against. Compared to the fetched document at every run; a mismatch is a
-# notice, never a behaviour change -- the served schema always governs.
-VERIFIED_SCHEMA_SHA256 = "874a57157cecfdd4cdb1ed7df8189803872c61cf938bfe25575a10f796b4c81a"
 
 
 class Finding:
@@ -142,53 +128,79 @@ class Finding:
 # --------------------------------------------------------------------------
 
 
-def fetch(url, api_key):
-    """GET one contract route. Raises RuntimeError with something actionable."""
-    request = urllib.request.Request(url, headers={"Authorization": f"Api-Key {api_key}"})
+# The contract ships with the skill: a snapshot of the server's schema, limits
+# and example, taken from an ags_backend checkout by
+# tests/skills/regenerate_corpus.py. MANIFEST.json names the backend commit.
+CONTRACT_DIR = Path(__file__).resolve().parent.parent / "contract"
+SCHEMA_FILE = "import_v1.schema.json"
+LIMITS_FILE = "limits.json"
+MANIFEST_FILE = "MANIFEST.json"
+
+# Every key this script indexes off the limits document. A snapshot missing
+# one is exit 3 up front, not a KeyError halfway through the second file.
+REQUIRED_LIMIT_KEYS = (
+    "schema_version",
+    "max_conversations_per_run",
+    "max_chunk_request_bytes",
+    "max_import_file_bytes",
+    "max_metadata_bytes",
+    "max_metadata_depth",
+)
+
+
+def load_contract(contract_dir):
+    """Return (schema, limits, manifest) from the shipped snapshot.
+
+    Raises RuntimeError naming what is wrong. The manifest is optional: a
+    hand-assembled copy still validates, it just cannot say which backend
+    commit it came from.
+    """
+    contract_dir = Path(contract_dir)
+    schema = _read_json(contract_dir / SCHEMA_FILE)
+    limits = _read_json(contract_dir / LIMITS_FILE)
+    manifest_path = contract_dir / MANIFEST_FILE
+    manifest = _read_json(manifest_path) if manifest_path.exists() else {}
+
+    if not isinstance(limits, dict):
+        raise RuntimeError(f"{LIMITS_FILE} is not a JSON object")
+    missing = [key for key in REQUIRED_LIMIT_KEYS if key not in limits]
+    if missing:
+        raise RuntimeError(f"{LIMITS_FILE} lacks {', '.join(missing)}")
+
+    # Two caps the server enforces in Python but publishes only through the
+    # schema (data_imports/tests/test_contract_drift.py::test_metadata_key_rules
+    # pins them to limits.py). Read them off the schema rather than restating
+    # them here.
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read()
-    except urllib.error.HTTPError as exc:
-        hint = ""
-        if exc.code == 401:
-            hint = " -- the ags_ key was rejected or missing (set AGENTSIGHT_API_KEY)."
-        elif exc.code == 403:
-            hint = " -- this key cannot read the contract routes."
-        elif exc.code == 404:
-            hint = " -- check the endpoint, and note the trailing slash is required."
-        raise RuntimeError(f"GET {url} returned {exc.code}{hint}") from exc
-    except Exception as exc:  # network, DNS, TLS
-        raise RuntimeError(f"GET {url} failed: {exc}") from exc
+        metadata_object = schema["$defs"]["metadataObject"]
+        limits = dict(limits)
+        limits["max_metadata_keys_per_level"] = metadata_object["maxProperties"]
+        limits["max_metadata_key_length"] = metadata_object["propertyNames"]["maxLength"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(f"{SCHEMA_FILE} carries no metadataObject caps ({exc!r})") from exc
+    return schema, limits, manifest
 
 
-def load_contract(endpoint, api_key, schema_path):
-    """Return (schema, limits, source_description, fallback_keys)."""
-    if schema_path:
-        raw = Path(schema_path).read_bytes()
-        schema = json.loads(raw)
-        limits = dict(FALLBACK_LIMITS)
-        limits["schema_version"] = _schema_version(schema, limits["schema_version"])
-        limits["max_conversations_per_run"] = _root_int(schema, "conversations", "maxItems")
-        return schema, limits, f"local file {schema_path}", sorted(FALLBACK_LIMITS)
+def _read_json(path):
+    try:
+        return json.loads(path.read_bytes())
+    except OSError as exc:
+        raise RuntimeError(f"cannot read {path.name}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{path.name} is not valid JSON: {exc}") from exc
 
-    if not api_key:
-        raise RuntimeError(
-            "no API key. Set AGENTSIGHT_API_KEY (or pass --api-key) so the contract "
-            "routes can be read; they require an ags_ key, anonymous is a 401."
+
+def describe_contract(manifest, limits):
+    """The report's header line: which snapshot this run checked against."""
+    version = limits.get("schema_version")
+    commit = str(manifest.get("commit") or "")[:12]
+    exported = str(manifest.get("exported_at") or "")[:10]
+    if commit and exported:
+        return (
+            f"shipped snapshot -- ags_backend@{commit} exported {exported}, "
+            f"schema_version {version}"
         )
-    base = endpoint.rstrip("/")
-    schema = json.loads(fetch(f"{base}/api/imports/schema/", api_key))
-    limits = json.loads(fetch(f"{base}/api/imports/limits/", api_key))
-    return schema, limits, f"fetched from {base}/api/imports/", []
-
-
-def _schema_version(schema, default):
-    node = schema.get("properties", {}).get("schema_version", {})
-    return node.get("const", default)
-
-
-def _root_int(schema, prop, keyword):
-    return schema.get("properties", {}).get(prop, {}).get(keyword)
+    return f"unversioned snapshot, schema_version {version}"
 
 
 def build_validator(schema):
@@ -601,18 +613,8 @@ def render(findings, warnings, stats, contract, max_examples):
         f"AgentSight import pre-flight -- {stats['files']} file(s), "
         f"{stats['conversations']:,} conversations, {stats['messages']:,} messages",
         f"Contract: {contract['source']}",
+        "",
     ]
-    if contract.get("digest") and contract["digest"] != VERIFIED_SCHEMA_SHA256:
-        out.append(
-            "          NOTE: the served schema differs from the revision this script "
-            "was tested against; codes below may be stale."
-        )
-    if contract.get("fallback"):
-        out.append(
-            "          OFFLINE: these caps came from this script's fallback table, "
-            "not from the server: " + ", ".join(contract["fallback"])
-        )
-    out.append("")
 
     if not findings:
         out.append("PASSED -- no findings.")
@@ -652,17 +654,14 @@ def render(findings, warnings, stats, contract, max_examples):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Validate AgentSight import part files against the served contract."
+        description="Validate AgentSight import part files against the shipped contract snapshot."
     )
     parser.add_argument("files", nargs="+", metavar="FILE", help="import part files, in order")
-    parser.add_argument("--endpoint", default=None, help="API base URL")
     parser.add_argument(
-        "--api-key",
-        default=None,
-        help="ags_ key. Prefer AGENTSIGHT_API_KEY: a key here lands in shell history.",
-    )
-    parser.add_argument(
-        "--schema", default=None, help="validate against a local schema copy instead of fetching"
+        "--contract",
+        default=str(CONTRACT_DIR),
+        metavar="DIR",
+        help="another copy of the contract directory; only for testing a refreshed snapshot",
     )
     parser.add_argument("--max-examples", type=int, default=10, help="findings shown per code")
     args = parser.parse_args(argv)
@@ -676,34 +675,24 @@ def main(argv=None):
         )
         return 3
 
-    endpoint = args.endpoint or os.environ.get("AGENTSIGHT_API_ENDPOINT") or DEFAULT_ENDPOINT
-    api_key = args.api_key or os.environ.get("AGENTSIGHT_API_KEY")
     try:
-        schema, limits, source, fallback = load_contract(endpoint, api_key, args.schema)
+        schema, limits, manifest = load_contract(args.contract)
     except Exception as exc:
         print(
-            f"validate_import.py: could not read the import contract.\n    {exc}\n"
-            f"Nothing was validated. Fix the fetch, or pass --schema with a local copy "
-            f"of import_v1.schema.json pasted from the dashboard's format guide.",
+            f"validate_import.py: could not read the shipped contract at {args.contract}.\n"
+            f"    {exc}\n"
+            f"The skill install is incomplete: reinstall it, or pass --contract DIR pointing "
+            f"at a complete copy. Nothing was validated.",
             file=sys.stderr,
         )
         return 3
-
-    for key, value in FALLBACK_LIMITS.items():
-        limits.setdefault(key, value)
 
     ctx = {
         "validator": build_validator(schema),
         "limits": limits,
         "latest": datetime.now(timezone.utc) + FUTURE_TOLERANCE + UPLOAD_GRACE,
     }
-    contract = {
-        "source": source,
-        "fallback": fallback,
-        "digest": hashlib.sha256(
-            json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest(),
-    }
+    contract = {"source": describe_contract(manifest, limits)}
 
     findings, warnings, seen_ids = [], [], {}
     stats = {"files": len(args.files), "conversations": 0, "messages": 0}

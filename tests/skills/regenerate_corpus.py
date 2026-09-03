@@ -1,28 +1,42 @@
 #!/usr/bin/env python3
-"""Regenerate the golden agreement corpus for `validate_import.py`.
+"""Refresh the shipped contract snapshot and the golden agreement corpus.
 
-The shipped validator is a third implementation of rules that already exist
-twice (the backend's `data_imports/validation.py`, the dashboard's
-`lib/imports/pre-validate.ts`). Nothing at runtime reads two of them, so they
-can drift for a release and the only symptom is a file this script accepts and
-the server rejects -- or, far worse, one this script rejects and the server
-would have taken, which costs the user real rows.
+Two checked-in artifacts derive from the backend and go stale the moment its
+import contract moves. This script rewrites both from one `ags_backend`
+checkout, so they can only ever move together.
 
-This is the guard, in the shape of `data_imports/tests/test_contract_drift.py`:
-a checked-in artifact asserted against the code that produced it.
+    skills/agentsight-migration/contract/          what the SERVER publishes
+        import_v1.schema.json                      copied byte-for-byte
+        example_import.json                        copied byte-for-byte
+        limits.json                                limits_payload() -- no file in the backend
+        MANIFEST.json                              backend commit, export time, digest
 
     fixtures/import_contract/validator_corpus.json     the hostile inputs
     fixtures/import_contract/validator_expected.json   what the SERVER says
 
-`test_validate_import.py::AgreementTests` replays the corpus through the
-validator and asserts it produces the same (index, code, field) triples. This
-script rewrites the expected file from the real `validate_chunk`.
+The snapshot is the only contract `validate_import.py` reads -- the migration
+skill makes no network request -- so a stale copy is a file the validator
+accepts and the server rejects, or the reverse. The corpus guards the
+validator's hand-written half: it is a third implementation of rules that
+already exist twice (the backend's `data_imports/validation.py`, the
+dashboard's `lib/imports/pre-validate.ts`), and nothing at runtime reads two
+of them, so the only symptom of drift is a file this script accepts and the
+server rejects -- or, far worse, one it rejects and the server would have
+taken, which costs the user real rows.
+
+This is the guard, in the shape of `data_imports/tests/test_contract_drift.py`:
+checked-in artifacts asserted against the code that produced them.
+`test_validate_import.py::TestAgreement` replays the corpus and asserts the
+same (index, code, field) triples; `TestSnapshot` pins the snapshot's digest.
 
 HOW TO RUN IT -- from an `ags_backend` checkout, with its virtualenv active:
 
     DJANGO_SETTINGS_MODULE=AgentSight.settings \
     PYTHONPATH=/path/to/ags_backend \
     python3 /path/to/agentsight/tests/skills/regenerate_corpus.py
+
+It prints the new contract digest; paste it into CORPUS_CONTRACT_SHA256 in
+test_validate_import.py and commit everything in one change.
 
 **No database is touched.** `validate_chunk`'s only queries are the two `IN`
 lookups in `_duplicate_errors`, and both model managers are stubbed out below,
@@ -42,12 +56,16 @@ Also not here: anything time-dependent. `validate_chunk` computes its future
 ceiling as `now() + 5min`, so every timestamp below sits in 2016.
 """
 
+import hashlib
 import json
 import os
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "import_contract"
+CONTRACT_DIR = Path(__file__).resolve().parents[2] / "skills" / "agentsight-migration" / "contract"
 BASE = "2016-06-01T10:00:00Z"
 
 
@@ -322,6 +340,67 @@ def _stub_managers():
     ImportStagedConversation.objects = _Empty()
 
 
+def contract_digest(schema_bytes, example_bytes, limits):
+    """sha256 over the three documents: the two files as bytes, limits canonical.
+
+    `test_validate_import.py::TestSnapshot` recomputes this from the shipped
+    files and compares it to both MANIFEST.json and its own pinned constant,
+    so keep the arithmetic here and there identical.
+    """
+    canonical = json.dumps(limits, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(schema_bytes + b"\n" + example_bytes + b"\n" + canonical).hexdigest()
+
+
+def _backend_commit(backend_dir):
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=backend_dir,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:  # not a checkout, or git is missing -- the manifest says so
+        return "unknown"
+
+
+def _write_contract_snapshot():
+    """Copy the three contract documents out of the configured backend.
+
+    The schema and the example are files there and are copied byte-for-byte.
+    The limits document is not: the server builds it per request from the
+    constants in `data_imports/limits.py`, so it is called here and dumped.
+    """
+    import data_imports
+    from data_imports.schema.loader import EXAMPLE_PATH, SCHEMA_PATH
+    from data_imports.serializers import limits_payload
+
+    schema_bytes = Path(SCHEMA_PATH).read_bytes()
+    example_bytes = Path(EXAMPLE_PATH).read_bytes()
+    limits = limits_payload()
+    backend_dir = Path(data_imports.__file__).resolve().parent.parent
+
+    manifest = {
+        "source": "ags_backend",
+        "commit": _backend_commit(backend_dir),
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "contract_sha256": contract_digest(schema_bytes, example_bytes, limits),
+    }
+
+    CONTRACT_DIR.mkdir(parents=True, exist_ok=True)
+    (CONTRACT_DIR / "import_v1.schema.json").write_bytes(schema_bytes)
+    (CONTRACT_DIR / "example_import.json").write_bytes(example_bytes)
+    (CONTRACT_DIR / "limits.json").write_text(
+        json.dumps(limits, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (CONTRACT_DIR / "MANIFEST.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
+
+
 def main():
     corpus = build_corpus()
     FIXTURES.mkdir(parents=True, exist_ok=True)
@@ -345,6 +424,8 @@ def main():
         return 1
 
     _stub_managers()
+    manifest = _write_contract_snapshot()
+
     # Unsaved, pk pinned: the stubs above mean it is never queried with.
     run = ImportRun(id=0, agent_id=0, staged_conversations=0, declared_conversations=10**6)
 
@@ -359,6 +440,9 @@ def main():
         json.dumps(expected, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     print(f"wrote {len(corpus)} cases to {FIXTURES}")
+    print(f"wrote the contract snapshot to {CONTRACT_DIR} (ags_backend@{manifest['commit'][:12]})")
+    print(f"contract_sha256 = {manifest['contract_sha256']}")
+    print("  -> set CORPUS_CONTRACT_SHA256 in tests/skills/test_validate_import.py to this value")
     return 0
 
 

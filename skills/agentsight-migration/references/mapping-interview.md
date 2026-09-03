@@ -45,18 +45,23 @@ analytics reports by design, so history imported to `development` is present
 in the transcripts and absent from every chart, which reads as a bug. Ask;
 never infer it from the agent's name.
 
-**2. Which field is `conversation_id`, and does it need a prefix?** Present
-the candidates you found. Then three follow-ups, because the column being
+**2. Which field is `conversation_id`, and which prefix goes on it?** Present
+the candidates you found. Then two follow-ups, because the column being
 unique in the source is not the question:
 
 - Is it **stable** — does the same thread keep the same id across a restart,
   a re-open, a support handoff?
 - Is it **PII**? Ids built from an email or a phone number end up in a URL
   and in the customer-facing dashboard.
-- Could it **collide with live tracking**? If AgentSight is already recording
-  for this agent, or is about to, an overlapping id is rejected, not merged.
-  A `legacy-` prefix is the usual answer and it cannot be changed later
-  without undoing the whole run.
+
+Then the prefix — and it is *which*, not *whether*. Every imported id carries
+one: offer `legacy-`, take the user's own string if they prefer, and never
+offer bare source ids. Dedup is on `(agent, conversation_id)` and rejects
+rather than merges, so an id that live tracking has already written, or will
+write, fails the whole run; the prefix is what keeps the two id spaces apart,
+and it cannot be changed later without undoing the run. Do not go and look at
+what already exists in AgentSight — there is no request in this workflow, and
+the prefix makes the answer the same either way.
 
 **3. The sender mapping**, presented as the real distinct values with their
 counts. The eight standard spellings map themselves; what needs an answer is
@@ -180,7 +185,7 @@ conversations updated in the last 24 hours* — an open thread imported today
 cannot receive its later messages, because live tracking will be rejected as a
 duplicate id.
 
-**Part sizing.** *Default: parts comfortably under the served
+**Part sizing.** *Default: parts comfortably under the shipped
 `max_conversations_per_run` and `max_import_file_bytes`, sized so each upload
 finishes in a few minutes.* Mention the open-run cap
 (`max_open_runs_per_agent`) if the history needs more parts than that — it
@@ -208,7 +213,7 @@ answer changes; a later run treats it as binding.
 - Scope: <date range, filters, what was excluded and why>
 
 ## Identity
-- conversation_id: <source field>  prefix: <none | legacy->
+- conversation_id: <source field>  prefix: <legacy- | the user's own — never none>
 - Stable across restarts: <yes/no>   Contains PII: <yes/no>
 - Collides with live tracking: <yes/no — and how that was settled>
 

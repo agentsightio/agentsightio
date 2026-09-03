@@ -2,14 +2,16 @@
 
 What the file has to look like, and what each field costs you if you get it
 wrong. Everything here is the *shape* of the contract; **every number lives in
-the served `/api/imports/limits/` document and none of them are written down
-in this file.** Fetch that document in step 1 and read the caps off it. A cap
-restated in prose is a cap that drifts, and the failure it produces is a file
-the user waits through an upload to have rejected.
+the shipped `contract/limits.json` and none of them are written down in this
+file.** Read that document in step 1 and take the caps off it. A cap restated
+in prose is a cap that drifts, and the failure it produces is a file the user
+waits through an upload to have rejected.
 
-The authority is `GET /api/imports/schema/` — a JSON Schema (draft 2020-12)
-that the dashboard, the server and the shipped validator all compile from.
-This file explains it; it does not replace it.
+The authority is the server's JSON Schema (draft 2020-12), shipped here as
+`contract/import_v1.schema.json` — the dashboard, the server and the shipped
+validator all compile from it. `contract/MANIFEST.json` names the backend
+commit the snapshot was taken from. This file explains the schema; it does not
+replace it, and nothing here is fetched.
 
 ## Contents
 
@@ -34,7 +36,7 @@ One JSON object, two keys:
 }
 ```
 
-`schema_version` is the integer the served limits document reports as
+`schema_version` is the integer `contract/limits.json` reports as
 `schema_version` — the literal `1` in a string (`"1"`) is a rejection, not a
 coercion. `conversations` is a non-empty array. There is a cap on its length
 (`max_conversations_per_run`) and an advisory cap on the file's byte size
@@ -93,7 +95,7 @@ adjacent agent message, and either way say what it does to the counts).
 
 **`agent` here means the assistant side of this transcript.** It has nothing
 to do with the AgentSight agent the import is uploaded to. Read the alias
-table off the served schema's `x-agentsight-alias-map` annotation rather than
+table off the shipped schema's `x-agentsight-alias-map` annotation rather than
 from memory if you need to show it to the user.
 
 ## Timestamps
@@ -129,9 +131,10 @@ reveals the error.
 Optional at both levels, an object or `null`. Values may be strings, numbers,
 booleans, `null`, nested objects, or arrays of those.
 
-Four rules bound it, all read from the served limits document:
-`max_metadata_bytes` on its serialized size, `max_metadata_depth` on nesting,
-a per-level key count, and a key-length cap. Three reserved key names
+Four rules bound it: `max_metadata_bytes` on its serialized size and
+`max_metadata_depth` on nesting, both in `limits.json`; a per-level key count
+and a key-length cap, which the schema itself carries on `metadataObject`
+(`maxProperties`, `propertyNames.maxLength`). Three reserved key names
 (`__proto__`, `constructor`, `prototype`) are refused anywhere.
 
 Two things about the size rule that matter when you are choosing what to put
@@ -174,9 +177,11 @@ agent is rejected — `conversation_already_exists` — and never merged into. T
 consequences worth stating to the user: re-uploading a part file is safe
 (it cannot double-import), and a `conversation_id` scheme that collides with
 what live tracking already writes will reject rows rather than combine them.
-If the source ids could collide, a `legacy-` prefix is the usual answer, and
-it is a Wave 1 question because it cannot be changed afterwards without an
-undo.
+That is why every imported id carries a prefix — `legacy-` unless the user
+names their own — and why it is a Wave 1 question: it cannot be changed
+afterwards without an undo. There is no pre-check against the live data and
+you do not make one; the prefix settles the question before upload, and the
+server's `conversation_already_exists` plus undo settles it after.
 
 **An import is all-or-nothing and undoable as a unit.** The first error fails
 the whole run and nothing is written; a committed run can be undone from the
