@@ -141,6 +141,11 @@ head-of-table sample proves nothing. Take one per lossy category the user
 chose to keep, the longest transcript, one with non-ASCII content, the richest
 metadata, and one from each end of the date range.
 
+It lands at `agentsight_migration/pilot.json`. This is the first transcript
+file the run creates, so the `agentsight_migration/*.json` line goes into
+`.gitignore` **before** it does — check whether an existing rule already
+covers it, and add it if not.
+
 ### 6. Validate
 
 ```bash
@@ -162,9 +167,11 @@ Wait for their answer. Do not export the full history first.
 ### 8. Full export
 
 Numbered part files split on conversation boundaries — never mid-conversation
-— plus a manifest recording, per part, its conversation count, message count,
-and id range. One file is one upload, so the parts are also the user's upload
-plan.
+— plus `manifest.json` recording, per part, its conversation count, message
+count and id range. One file is one upload, so the parts are also the user's
+upload plan. Everything goes in `agentsight_migration/` beside the exporter
+that wrote it. Delete the pilot once the parts supersede it: a pilot that is
+a subset of a part would fail the run on `conversation_already_exists`.
 
 ### 9. Re-validate, reconcile, report
 
@@ -204,8 +211,26 @@ taken, and the timezone as an assumption the user owns.
 - **`sender: "agent"` is the assistant side of the transcript**, not the
   AgentSight agent that owns the import. They are unrelated concepts with the
   same word, and confusing them mislabels every message in the file.
-- **Exported files are full customer transcripts.** Write them outside the
-  repo, or add them to `.gitignore` in the same edit that creates them.
+- **The export stays in the project, in `agentsight_migration/`, and the
+  ignore rule lands first.** One directory at the repo root holds the whole
+  job — the exporter, the manifest and the part files:
+
+  ```
+  agentsight_migration/export_import_file.py     the exporter — tracked, it is code
+  agentsight_migration/manifest.json             per-part counts and id ranges
+  agentsight_migration/pilot.json                the step-5 sample
+  agentsight_migration/<agent>-legacy-part-01.json   the parts
+  ```
+
+  `agentsight_migration/*.json` goes into `.gitignore` **before** the first
+  JSON is written, so there is never a moment when a transcript is untracked
+  and unignored. The glob covers the pilot, every part and the manifest —
+  which is ignored too, because ids can be PII — and leaves the exporter
+  trackable, which is what you want: it is the repeatable half. Do not write
+  any of it outside the project. The user has to find these next to the code
+  they came from, an absolute path under `/home` is invisible to anyone else
+  who clones the repo, and nothing in the project would record that the
+  export ever happened.
 - **Verification is the validator's exit code, never your reading of the
   file.** You cannot check a 16 KB metadata rule or a depth rule by eye.
 - **Passing the validator is necessary, never sufficient.** It cannot see

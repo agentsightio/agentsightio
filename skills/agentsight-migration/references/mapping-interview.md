@@ -248,7 +248,9 @@ actions, feedback, attachments or geolocation. Those charts stay empty for
 imported history permanently.
 
 ## Export
-- Parts: <n> files, split on conversation boundaries
-- Manifest: <path>
-- Files are customer transcripts — <gitignored / written outside the repo>
+- Exporter: agentsight_migration/export_import_file.py
+- Parts: <n> files in agentsight_migration/, split on conversation boundaries
+- Manifest: agentsight_migration/manifest.json
+- Files are customer transcripts — ignored by `agentsight_migration/*.json`
+  in .gitignore, added <date>, before the first file was written
 ```

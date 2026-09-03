@@ -122,7 +122,9 @@ the shift was the right one.
 ## The report to the user
 
 Lead with what to do next — which file to upload, in what order, to which
-agent, at `/{agent_id}/migrate`. Then:
+agent, at `/{agent_id}/migrate`. Name each file by its **repo-relative
+path** under `agentsight_migration/`, and say once that the directory's JSON
+is gitignored, so nobody commits a transcript or deletes one as stray. Then:
 
 - The validator's output, pasted, with its exit code.
 - The reconciliation numbers, and any gap explained.
