@@ -98,6 +98,18 @@ conversation-id counts; the full date range; how many conversations have zero
 messages. `SELECT` only — no temp tables, no `ANALYZE`, no writes of any kind
 against a system that is still someone's production database.
 
+Connect in a way that *cannot* write, not merely in a way that does not. Ask
+for a read-only role or a replica; when all you are given is a read-write
+credential, pin the session read-only (`SET default_transaction_read_only =
+on` on Postgres, `SET SESSION TRANSACTION READ ONLY` on MySQL, a
+`file:...?mode=ro` URI on SQLite) so a slip is an error rather than a change.
+Reading through the source application's own ORM is fine; letting it "fix"
+anything is not — a framework that reports unapplied migrations is describing
+the source, not asking you to change it. The only migration this skill
+performs is the one in its name, and it ends in a JSON file. The source is
+left exactly as it was found: no schema change, no status column, no
+"exported" flag.
+
 ### 3. Findings summary, then the interview
 
 Present what you determined, then run the three waves in
@@ -154,7 +166,11 @@ the decisions taken, and the timezone as an assumption the user owns.
 - **You cannot upload.** The file is the deliverable. Never claim an import
   was performed, and never ask for dashboard credentials.
 - **Read-only against the source.** It is a live system belonging to someone
-  who has not agreed to let you write to it.
+  who has not agreed to let you write to it. "Migration" here means moving
+  data *out* into a file; it never means a schema migration, and you never
+  run one — not `manage.py migrate`, not `alembic upgrade`, not a hand-written
+  `ALTER` — whatever the source framework says about unapplied changes.
+  Prefer a credential that cannot write over a promise not to.
 - **Never assume a timezone.** Ask, always, even when the column looks
   obvious. Localize with `zoneinfo.ZoneInfo`, never a fixed `timedelta`
   offset — a fixed offset is wrong for half of every year in any region with

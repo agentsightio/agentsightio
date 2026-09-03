@@ -59,6 +59,27 @@ the export from a replica if the user mentions one has one. If the table is
 large enough that a full scan is a real cost, say so and let the user pick the
 window rather than deciding for them.
 
+Make the read-only-ness structural. Ask for a read-only role or a replica DSN
+before accepting a read-write one; when the read-write one is all there is,
+pin the session so a mistake fails instead of landing:
+
+```sql
+SET default_transaction_read_only = on;   -- Postgres, for the session
+SET SESSION TRANSACTION READ ONLY;        -- MySQL / MariaDB
+```
+
+```python
+sqlite3.connect("file:app.db?mode=ro", uri=True)   # SQLite
+```
+
+Reading through the source application's own ORM is fine — sometimes it is
+the fastest way to see the shape. Letting it change anything is not. A
+Django `manage.py` that warns of unapplied migrations, an Alembic head that
+is behind, a Prisma schema that has drifted: each is describing the source,
+not asking you to update it, and none of them is the migration this skill's
+name refers to. The exporter leaves the source exactly as it found it: no
+schema change, no status column, no "exported" flag written back.
+
 ## A consequence, not a rule
 
 Ten conversations can be assembled by hand. A full history cannot.

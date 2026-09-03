@@ -204,6 +204,7 @@ answer changes; a later run treats it as binding.
 ## Source
 - System: <what it is>
 - Read from: <table / export / connection, read-only>
+- Credential: <read-only role | replica | read-write session pinned READ ONLY>
 - Scope: <date range, filters, what was excluded and why>
 
 ## Identity
