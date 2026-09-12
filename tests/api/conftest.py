@@ -12,6 +12,7 @@ BASE = "https://api.test.agentsight.io"
 
 CONVERSATIONS = f"{BASE}/api/conversations/"
 FEEDBACKS = f"{BASE}/api/feedbacks/"
+TRACK = f"{BASE}/api/track/"
 ACTIONS = f"{BASE}/api/actions/"
 TICKETS = f"{BASE}/api/tickets/"
 USAGE = f"{BASE}/api/token-usage/"
