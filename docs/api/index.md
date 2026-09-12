@@ -210,6 +210,7 @@ ags.spans.list(kind="button")
 | Namespace | What it covers |
 |---|---|
 | [`conversations`](./conversations.md) | reading, filtering and managing them |
+| [`messages`](./messages.md) | one message by pk, and the metadata your application attaches to it afterwards |
 | [`feedbacks`](./feedbacks.md) | the feedback surface, and the one place this records |
 | [`tickets`](./tickets.md) | the agent's workflow items — full CRUD, filed as the machine |
 | [`actions`](./actions.md) | action definitions, their logs, their labels |

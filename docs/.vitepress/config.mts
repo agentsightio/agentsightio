@@ -126,6 +126,7 @@ export default defineConfig({
         items: [
           { text: 'The API client', link: '/api/' },
           { text: 'Conversations', link: '/api/conversations' },
+          { text: 'Messages', link: '/api/messages' },
           { text: 'Feedbacks', link: '/api/feedbacks' },
           { text: 'Tickets', link: '/api/tickets' },
           { text: 'Actions', link: '/api/actions' },
