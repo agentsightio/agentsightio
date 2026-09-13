@@ -912,6 +912,120 @@ it, unrecoverably.
 There is also **no undelete route**. Permanent removal, and reversal, are
 operator actions. If you need either, ask.
 
+## Messages
+
+A message is reachable on its own by the integer `id` a transcript row carries.
+There is no list route — messages come nested in
+[`GET /api/conversations/{id}/`](#get-one-conversation) — and no business id
+of their own, because the SDK never asked you to name one. Two things you can
+do with one: read it, and edit the `metadata` document your application
+recorded with it — the document the dashboard's message templates render
+inside the bubble. In Python, [`ags.messages`](/api/messages).
+
+### Get one message
+
+<span class="api-method get">GET</span> `/api/track/{id}/` — *read role*
+
+```bash
+curl "https://api.agentsight.io/api/track/4821/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY"
+```
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 4821,
+  "conversation": 738,
+  "content": "Order A-1 ships tomorrow.",
+  "sender": "agent",
+  "timestamp": "2026-08-17T18:52:31.104233Z",
+  "metadata": { "model_route": "fast" },
+  "action_name": null,
+  "attachments": [],
+  "action_logs": [],
+  "button": null,
+  "feedback": null
+}
+```
+
+</details>
+
+The same row as in the transcript: attachments carry signed URLs that expire
+after one hour, `feedback` is the message's one vote or `null`, and
+`action_name` is set only on the rows the SDK records for a tool call.
+
+### Edit a message's metadata
+
+<span class="api-method patch">PATCH</span> `/api/track/{id}/` — *write role*
+
+```bash
+curl -X PATCH "https://api.agentsight.io/api/track/4821/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {
+      "model_route": "fast",
+      "visualization": {"status": "completed", "after_url": "https://cdn.example.com/rooms/4821-after.jpg"}
+    }
+  }'
+```
+
+<details>
+<summary><code>200 OK</code></summary>
+
+```json
+{
+  "id": 4821,
+  "conversation": 738,
+  "content": "Order A-1 ships tomorrow.",
+  "sender": "agent",
+  "timestamp": "2026-08-17T18:52:31.104233Z",
+  "metadata": {
+    "model_route": "fast",
+    "visualization": { "status": "completed", "after_url": "https://cdn.example.com/rooms/4821-after.jpg" }
+  },
+  "action_name": null,
+  "attachments": [],
+  "action_logs": [],
+  "button": null,
+  "feedback": null
+}
+```
+
+</details>
+
+`metadata` is the one field of a message this contract lets you change. The
+route is a plain update and would take others, but a message's content, sender
+and timestamp are what the SDK observed, and a transcript rewritten from
+outside has two authors — fields other than `metadata` are outside this
+contract and may stop being accepted without notice.
+
+:::warning `metadata` replaces the whole document
+Keys you leave out are gone, not preserved — the same rule as on a
+[conversation](#update-several-fields). Read the message, merge locally, and
+write the result back — or use
+[`update_metadata()`](/api/messages#changing-metadata-without-replacing-it)
+in the Python client, which does exactly that for you.
+
+The read-modify-write is not atomic on either path. A message is normally
+written once, by the turn that recorded it, and enriched afterwards by one
+job, so the window matters less than it does on a conversation — but two jobs
+merging into the same message at the same moment can still lose one of the two
+updates.
+:::
+
+Why this write exists when [recording does not](#not-on-this-surface): some of
+what your application knows about a message only exists after the turn — a
+picture generated for it in the background, a verdict from a later check — and
+it belongs on the message it is about, where the message templates render it.
+Recording a second message for it instead would place it after whatever the
+person said in the meantime.
+
+A `404` here means what it means everywhere on this page: no such message on
+this agent. A read key gets `403`.
+
 ## Feedbacks
 
 Feedback is one of the few things on this API you can create — [tickets](#tickets)
@@ -2035,7 +2149,7 @@ absence is a decision:
 |---|---|
 | **Recording data** | The [tracking SDK](/getting-started/quick-start) is the only way in. One writer means one set of semantics for how a row reaches your dashboards. Declaring an [action](#actions) is not an exception — that is a definition, not a record of a run — and neither is filing a [ticket](#tickets), which is a workflow item somebody decided to open. |
 | **Buttons** | Recorded completely, but nothing projects them into a readable table yet — a list here would answer "no clicks" to everyone. Read them as [spans](#what-spans-are-good-for). |
-| **Message and action-log writes** | Same rule as recording: they belong to the SDK. |
+| **Message content and action-log writes** | Same rule as recording: they belong to the SDK. A message's *metadata* is the exception — [editable after the fact](#messages), because what an application learns about a message after the turn has nowhere else to live. |
 | **Admin and dashboard routes** | Session-authenticated, and not part of any integration contract. |
 
 ## Next

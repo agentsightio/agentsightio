@@ -8,9 +8,10 @@ description: >
   AGENTSIGHT_* environment variable or ags_ API key present — and the task
   touches it in any form: writing or changing tracking code (conversations,
   turns, messages, tools, streaming handlers), reading or managing recorded
-  data via the API client or REST (feedback, actions, usage and cost,
-  spans), embedding the client dashboard, debugging why a metric or chart
-  is empty, or answering any question about the SDK or API surface. For a
+  data via the API client or REST (feedback, actions, message metadata
+  after the turn, usage and cost, spans), embedding the client dashboard,
+  debugging why a metric or chart is empty, or answering any question about
+  the SDK or API surface. For a
   codebase not yet integrated, or bringing a new service online, use the
   agentsight-integration skill instead; for loading conversations that
   already happened in a previous system into AgentSight — backfill, bulk
@@ -69,6 +70,12 @@ These hold for every line of tracking code, not just the first integration:
   `keep_open()`) — otherwise latency records as ~0 and the answer lands in an
   orphan exchange. Get the shapes from
   [references/streaming-and-lifetime.md](references/streaming-and-lifetime.md).
+- **What arrives after the turn goes onto the message, never into a new one.**
+  A job that finishes later — a generated picture, a verdict — edits the
+  recorded message's metadata (`ags.messages.update_metadata`); a message
+  recorded then would land after whatever the user said since, and the
+  conversation's metadata is not where the dashboard's templates look.
+  [references/data-plane.md](references/data-plane.md#messages-metadata-after-the-turn).
 - **The escalation metric is name-keyed**: only actions named exactly
   `fallback_to_human`, `open_ticket`, `ticket`, or `contact_human` count.
 - **A wrong environment fails silently**: `development` is excluded from
@@ -97,6 +104,6 @@ Read them when their subject enters the work — not all up front:
 | [references/streaming-and-lifetime.md](references/streaming-and-lifetime.md) | any handler streams, defers, queues, uses websockets or thread pools — and for `shutdown()`/`flush()` wiring |
 | [references/frameworks.md](references/frameworks.md) | the app calls any LLM — coverage tables, stand-down rules, `model_hint()`, the not-captured list |
 | [references/metrics-and-fields.md](references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments — what powers what on the dashboard |
-| [references/data-plane.md](references/data-plane.md) | wiring feedback, labelling actions, reading data back, non-Python services, REST details |
+| [references/data-plane.md](references/data-plane.md) | wiring feedback, labelling actions, enriching a message's metadata after the turn, reading data back, non-Python services, REST details |
 | [references/embed.md](references/embed.md) | the client-facing dashboard embedded in the developer's own product |
 | [references/debugging.md](references/debugging.md) | any "why is this empty/wrong?" question, and after any change to tracking code — the file-exporter loop and the symptom table |
