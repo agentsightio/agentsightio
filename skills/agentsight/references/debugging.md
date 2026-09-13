@@ -60,6 +60,7 @@ one of these records confidently wrong data rather than raising.
 | Conversations exist but can't be found by the id support quotes | A generated or per-visit id was recorded instead of the durable business id. There is no repair for already-recorded threads — fix the id source. |
 | The Source chart is empty | `source` is recorded but not yet surfaced anywhere — this one is not a bug. |
 | A recent change isn't visible yet | Spans batch on `export_interval_ms` (default 5 s) and SIGTERM does not flush — an orderly `shutdown()` does. Short-lived processes need `flush()` after the turn ends. |
+| A message template in the dashboard shows nothing under a message | Every key the template binds must resolve on that message's **own** metadata — null and empty arrays count as missing. Usual causes: the value was written onto the conversation instead of the message, or a bound key is null (a failed job's image URL). Read `ags.messages.get(pk)["metadata"]`; to add what is missing after the fact, [data-plane.md](data-plane.md#messages-metadata-after-the-turn). The agent's `show_message_metadata` flag must be on. |
 | Embed shows an error or an empty container | Different surface entirely — see [embed.md](embed.md): origin allow-list, token state, container height. |
 
 ## The live smoke test

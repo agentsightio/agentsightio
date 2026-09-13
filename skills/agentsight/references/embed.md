@@ -86,3 +86,18 @@ The embed's conversation and feedback views are searched by the
 conversation-id choice matters: a stable, human-recognizable id is what the developer's
 client will paste into the embed's search; a generated id makes every lookup
 a dead end.
+
+## Message metadata in the transcript
+
+A transcript message's `metadata` renders inside its bubble — in the dashboard
+and in the embed — through **message templates**: per agent, created in the
+AgentSight dashboard by an Owner or Editor (not on the API-key plane, so
+describe the template to the developer; you cannot create it). A template
+binds dot-path keys and renders sanitized HTML with `{{key.path}}` tokens and
+`{{#each key.path}}…{{/each}}` over arrays, **only on messages where every
+bound key resolves** — null and empty arrays count as missing, so a block
+hides itself when its data is absent. Images open in a lightbox. The
+`show_message_metadata` flag must be on (default on). Conversation metadata
+has no template — it is a raw key/value tab only — which is why per-message
+results belong on the message:
+[data-plane.md](data-plane.md#messages-metadata-after-the-turn).

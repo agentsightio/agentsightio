@@ -41,8 +41,11 @@ class AgentSight:
     This client reads and manages; it does not record. It cannot create
     conversations, messages, buttons, action logs or attachments — those belong
     to the tracking SDK, and having two ways to write the same row would mean
-    two sets of semantics for how it projects into the dashboards. The three
-    things it does create are not records of a run: feedback, which no span
+    two sets of semantics for how it projects into the dashboards. (Metadata
+    on a message that already exists is the one message field it edits —
+    ``messages.update_metadata()`` — because what an application learns about
+    a message after the turn is not something tracking could have observed.)
+    The three things it does create are not records of a run: feedback, which no span
     could ever observe; an action *definition*, which declares a capability
     tracking then adopts by name; and tickets, which are workflow items a
     team (or the agent itself) files rather than telemetry.
@@ -83,11 +86,13 @@ class AgentSight:
         from agentsight.api.resources.actions import Actions
         from agentsight.api.resources.conversations import Conversations
         from agentsight.api.resources.feedbacks import Feedbacks
+        from agentsight.api.resources.messages import Messages
         from agentsight.api.resources.spans import Spans
         from agentsight.api.resources.tickets import Tickets
         from agentsight.api.resources.usage import Usage
 
         self.conversations = Conversations(self)
+        self.messages = Messages(self)
         self.feedbacks = Feedbacks(self)
         self.tickets = Tickets(self)
         self.actions = Actions(self)

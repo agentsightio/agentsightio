@@ -57,7 +57,7 @@ pages from `docs.agentsight.io`.
 | [../agentsight/references/streaming-and-lifetime.md](../agentsight/references/streaming-and-lifetime.md) | any handler streams, defers, queues, uses websockets or thread pools — and for `shutdown()` wiring, which is every integration |
 | [../agentsight/references/frameworks.md](../agentsight/references/frameworks.md) | the app calls any LLM — coverage tables, stand-down rules, `model_hint()`, the not-captured list |
 | [../agentsight/references/metrics-and-fields.md](../agentsight/references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments — what powers what on the dashboard |
-| [../agentsight/references/data-plane.md](../agentsight/references/data-plane.md) | wiring feedback, labelling actions, reading data back, non-Python services, REST details |
+| [../agentsight/references/data-plane.md](../agentsight/references/data-plane.md) | wiring feedback, labelling actions, enriching a message's metadata after the turn, reading data back, non-Python services, REST details |
 | [../agentsight/references/embed.md](../agentsight/references/embed.md) | the developer wants the client-facing dashboard in their own product |
 | [references/verification.md](references/verification.md) | always, before claiming done — the checklist and the report; the loop mechanics are in [../agentsight/references/debugging.md](../agentsight/references/debugging.md) |
 

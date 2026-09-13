@@ -173,6 +173,13 @@ developer: *inference would put the wrong text in a transcript your client
 reads — a rewritten prompt instead of what the human typed — so the SDK only
 records the strings you hand it.*
 
+`metadata` on a message is what the dashboard's message templates render inside
+the bubble, so it is where per-message structure belongs. It is written with
+the message; to change it once the turn is over — a result that only exists
+later — use the data plane's `ags.messages.update_metadata()`
+([data-plane.md](data-plane.md#messages-metadata-after-the-turn)), never a
+second message.
+
 ## Tools and tasks
 
 A tool is a unit of work with a measured duration, and it becomes an

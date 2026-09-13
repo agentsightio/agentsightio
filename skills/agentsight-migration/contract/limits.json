@@ -1,0 +1,13 @@
+{
+  "max_chunk_request_bytes": 5242880,
+  "max_chunks_per_run": 400,
+  "max_content_length": 100000,
+  "max_conversations_per_chunk": 500,
+  "max_conversations_per_run": 100000,
+  "max_import_file_bytes": 209715200,
+  "max_messages_per_conversation": 2000,
+  "max_metadata_bytes": 16384,
+  "max_metadata_depth": 10,
+  "max_open_runs_per_agent": 3,
+  "schema_version": 1
+}

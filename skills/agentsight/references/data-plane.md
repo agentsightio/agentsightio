@@ -1,9 +1,10 @@
 # The data plane: API client and REST surface
 
-Reading and managing what was recorded — and the two things that are *created*
-here rather than by the tracking SDK: feedback, and action definitions. Unlike
-the tracking plane, **everything here raises on failure**; that is the point
-of a read client.
+Reading and managing what was recorded — the two things that are *created*
+here rather than by the tracking SDK, feedback and action definitions — and the
+one thing *edited after the fact*: a message's metadata. Unlike the tracking
+plane, **everything here raises on failure**; that is the point of a read
+client.
 
 Full references: `docs.agentsight.io/api/` (Python client) and
 `docs.agentsight.io/getting-started/api-reference` (REST).
@@ -13,6 +14,7 @@ Full references: `docs.agentsight.io/api/` (Python client) and
 - [Recording is not on this surface](#recording-is-not-on-this-surface)
 - [The client](#the-client)
 - [Conversations](#conversations)
+- [Messages: metadata after the turn](#messages-metadata-after-the-turn)
 - [Feedback — the one thing to wire](#feedback--the-one-thing-to-wire)
 - [Actions: labelling for the dashboard](#actions-labelling-for-the-dashboard)
 - [Usage and cost](#usage-and-cost)
@@ -33,7 +35,14 @@ honestly:
   service that does the recording; add a small Python component that owns the
   recording; or accept the gap, named in the report.
 - What any language **can** do over REST: create feedback, declare and label
-  actions, and read everything back.
+  actions, edit the metadata of a message that already exists, and read
+  everything back.
+
+Creating is not editing. A message the tracking SDK already recorded can have
+its **metadata** changed here afterwards — [the one write on a
+message](#messages-metadata-after-the-turn) this plane allows. Its content,
+sender and timestamp cannot: they are the transcript, and the transcript stays
+tracking's.
 
 There is one other way conversations get in, and it is not this surface
 either: a **bulk import of historical conversations**, uploaded as a JSON file
@@ -61,14 +70,16 @@ ags.environments()          # ['production', 'development', …] — the authori
   parameter. Reading two agents means two keys.
 - Roles: a key is `read` or `write`. Recording and every write here need
   `write`; `me()["role"]` is the only way to know in advance.
-- Namespaces: `ags.conversations`, `ags.feedbacks`, `ags.actions`,
-  `ags.usage`, `ags.spans`.
+- Namespaces: `ags.conversations`, `ags.messages`, `ags.feedbacks`,
+  `ags.actions`, `ags.usage`, `ags.spans`.
 - Lists paginate; iterate the returned pages/iterator rather than assuming one
   page. The client refuses filter names it does not recognise **before
   sending** — deliberately, because on the raw REST surface an unknown query
   parameter is ignored and silently widens the result set.
 - Conversation arguments accept the numeric id or the business string id
-  (`"wa-3859"`) interchangeably; string ids are resolved and cached.
+  (`"wa-3859"`) interchangeably; string ids are resolved and cached. Messages
+  have no business id — `ags.messages` takes the integer pk only, and refuses
+  a string rather than looking it up.
 
 ## Conversations
 
@@ -81,6 +92,9 @@ ags.environments()          # ['production', 'development', …] — the authori
 - `get(conv, full=True)`, `attachments(conv)`, `metadata_keys()`,
   `metadata_values(key)`, `resolve(conv)`, `rename(conv, name)`,
   `mark(conv, is_marked=True)`, `update(conv, **fields)`.
+- A transcript message's `id` is its pk — the handle `ags.messages` and
+  `feedbacks.create_for_message` take. `list()` summaries carry no messages;
+  `get()` and `list_full()` do.
 - `update_metadata(conv, metadata=None, *, remove=None)` — reads before it
   writes, so it merges against the server state; use this (not the tracking
   call) when the conversation is closed or another process wrote the previous
@@ -88,6 +102,58 @@ ags.environments()          # ['production', 'development', …] — the authori
 - `delete(conv)` — **soft, and the only kind.** The conversation leaves lists
   and dashboards; there is no purge on this surface. State this plainly when
   retention or erasure comes up.
+
+## Messages: metadata after the turn
+
+```python
+message = ags.messages.get(4821)                                    # read role
+ags.messages.update_metadata(4821, {"visualization": record})      # write role
+ags.messages.update_metadata(4821, remove=["draft"])
+ags.messages.update(4821, metadata={"visualization": record})      # replaces the whole document
+await asyncio.to_thread(ags.messages.update_metadata, 4821, data)  # off an event loop
+```
+
+Message metadata — the document `agent_message(content, metadata=…)` recorded
+with the message — is what the dashboard's **message templates** render inside
+the bubble; conversation metadata is only a raw key/value tab. So what the
+application learns about a message *after* the turn — a picture generated for
+it in the background, a verdict from a later check, a score — belongs on that
+message, next to what the turn wrote, and this namespace is the only way to put
+it there once the turn is over. Needs `agentsight >= 0.1.4`; on older versions
+`ags.messages` is an `AttributeError`.
+
+**Never record a second message for it.** The tracking plane orders a
+transcript by what it observed, so a message recorded when the job finishes
+lands after whatever the user said in the meantime — the same mechanism as the
+orphan half-exchange in [debugging.md](debugging.md), except deliberate and
+harder to spot. Editing the metadata of the message that exists reorders
+nothing.
+
+- **The pk only.** Messages have no business id; the argument is the integer
+  `id` a transcript row carries (`ags.conversations.get(conv)["messages"][n]["id"]`).
+  A string is refused, not looked up. No `list()` and no create — messages come
+  nested in their conversation.
+- **Metadata is the only field.** `update()` takes nothing else; content,
+  sender and timestamp stay what tracking observed.
+- `update_metadata()` reads the stored document, merges, writes it back — the
+  conversation twin's rules: **shallow** (a nested dict is replaced whole),
+  **nothing filtered** (`None`, `False`, `0`, `""` are stored as given),
+  `remove` the only delete, an absent key in `remove` a no-op. Two round trips,
+  not atomic — two jobs enriching the same message at the same moment can lose
+  one update. It raises rather than merging into `{}` when the server withholds
+  the field, so it never blanks a document by accident.
+- `update(metadata=…)` **replaces** the document; keys not sent are gone.
+- Write role for both; blocking, like the rest of this client.
+
+What the dashboard then shows is decided by a **message template** — per
+agent, created in the AgentSight dashboard by an Owner or Editor (not reachable
+with an API key: describe the template to the developer, you cannot create
+it). A template binds dot-path keys and renders its HTML with `{{key.path}}`
+tokens (`{{#each key.path}}…{{/each}}` over arrays) **only when every bound
+key resolves on that message** — null and empty arrays count as missing, so a
+failed job whose image URL is null hides an image block by itself. Images open
+in a lightbox. The agent's `show_message_metadata` flag must be on (default
+on).
 
 ## Feedback — the one thing to wire
 
@@ -184,9 +250,16 @@ For reading and feedback from another language:
   copy filter names from the reference.
 - A row belonging to another agent answers `404`, indistinguishable from
   absent — by design. `403` is about the key (read role attempting a write).
+- One message: `GET /api/track/{pk}/` (read role); `PATCH /api/track/{pk}/`
+  with `{"metadata": {...}}` (write role) edits its metadata and **replaces
+  the whole document**, so read first, merge, write back. Content, sender and
+  timestamp are outside the contract.
 - `429` carries `Retry-After` in seconds — honour it. Rate numbers are
   capacity controls, not contract; none are published. Retry reads; do not
-  blindly retry writes — nothing on this API is idempotent.
+  blindly retry writes — nothing on this API is idempotent, with two
+  exceptions: `create_for_message` (one vote per message, a repeat updates it)
+  and a message-metadata `PATCH` resent with the same body (it is the
+  read-merge-write around it that can lose a concurrent edit, not the write).
 
 ## Exceptions
 

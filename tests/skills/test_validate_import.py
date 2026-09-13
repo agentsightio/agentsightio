@@ -7,12 +7,13 @@ at all. So the interesting half of this suite is `TestFalseRejections`, and the
 authority for everything is `TestAgreement`, which replays a corpus generated
 by the backend's own `validate_chunk` (see `regenerate_corpus.py`).
 
-Everything runs offline: the validator is pointed at a checked-in copy of
-`import_v1.schema.json` with `--schema`, never at the network.
+Everything runs offline, as the validator itself does: it reads the skill's
+shipped `contract/` directory and never touches the network.
 """
 
 import importlib.util
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,27 +21,35 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "skills" / "agentsight-migration" / "scripts" / "validate_import.py"
+CONTRACT_DIR = ROOT / "skills" / "agentsight-migration" / "contract"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "import_contract"
+REGENERATE = Path(__file__).resolve().parent / "regenerate_corpus.py"
 BASE = "2016-06-01T10:00:00Z"
 
+# The contract digest the golden corpus was last regenerated against. When it
+# stops matching the shipped snapshot, the contract moved: re-run
+# regenerate_corpus.py from an ags_backend checkout and paste the digest it
+# prints here, in the same commit as the refreshed snapshot and corpus.
+CORPUS_CONTRACT_SHA256 = "701b2baa28afca351de36a6b8a17ed8d3b0caa27dd9ddf3bdab9a75d55f49755"
 
-def _load():
-    spec = importlib.util.spec_from_file_location("validate_import", SCRIPT)
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-vi = _load()
-SCHEMA_FILE = FIXTURES / "import_v1.schema.json"
-SCHEMA = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+vi = _load("validate_import", SCRIPT)
+rc = _load("regenerate_corpus", REGENERATE)
+SCHEMA, LIMITS, MANIFEST = vi.load_contract(CONTRACT_DIR)
 
 
 @pytest.fixture(scope="module")
 def ctx():
     return {
         "validator": vi.build_validator(SCHEMA),
-        "limits": dict(vi.FALLBACK_LIMITS),
+        "limits": dict(LIMITS),
         "latest": datetime.now(timezone.utc) + vi.FUTURE_TOLERANCE + vi.UPLOAD_GRACE,
     }
 
@@ -143,9 +152,9 @@ class TestAgreement:
         ):
             assert code in seen, f"{code} has no corpus case"
 
-    def test_the_served_example_is_clean(self, ctx):
+    def test_the_shipped_example_is_clean(self, ctx):
         """If the canonical example fails this validator, the validator is wrong."""
-        example = json.loads((FIXTURES / "example_import.json").read_text(encoding="utf-8"))
+        example = json.loads((CONTRACT_DIR / "example_import.json").read_text(encoding="utf-8"))
         assert check(example["conversations"], ctx) == []
 
 
@@ -158,7 +167,7 @@ class TestFalseRejections:
     def test_metadata_pretty_over_but_compact_under_the_cap(self, ctx):
         """Guards `separators=(",", ":")`. Pretty-printing must not count."""
         metadata = {"trace": [f"value_{i:04d}" for i in range(1100)]}
-        cap = vi.FALLBACK_LIMITS["max_metadata_bytes"]
+        cap = LIMITS["max_metadata_bytes"]
         assert len(json.dumps(metadata, indent=4).encode()) > cap
         assert len(json.dumps(metadata, separators=(",", ":")).encode()) <= cap
         assert codes([conversation(metadata=metadata)], ctx) == []
@@ -166,12 +175,12 @@ class TestFalseRejections:
     def test_non_ascii_metadata_is_measured_with_ensure_ascii_false(self, ctx):
         """Guards `ensure_ascii=False`. \\uXXXX escaping would inflate this 6x."""
         metadata = {"note": "こんにちは" * 900}
-        cap = vi.FALLBACK_LIMITS["max_metadata_bytes"]
+        cap = LIMITS["max_metadata_bytes"]
         assert len(json.dumps(metadata, separators=(",", ":")).encode()) > cap
         assert codes([conversation(metadata=metadata)], ctx) == []
 
     def test_metadata_exactly_at_the_byte_cap(self, ctx):
-        cap = vi.FALLBACK_LIMITS["max_metadata_bytes"]
+        cap = LIMITS["max_metadata_bytes"]
         assert codes([conversation(metadata=sized_metadata(cap))], ctx) == []
         assert codes([conversation(metadata=sized_metadata(cap + 1))], ctx) == [
             "metadata_too_large"
@@ -427,7 +436,8 @@ def write(tmp_path, payload, name="part.json"):
 
 
 def run_cli(argv):
-    return vi.main(["--schema", str(SCHEMA_FILE)] + argv)
+    """The default path: no flags, the shipped snapshot."""
+    return vi.main(argv)
 
 
 class TestEnvelope:
@@ -481,10 +491,35 @@ class TestEnvelope:
 
 
 class TestCli:
-    def test_no_key_and_no_schema_is_no_verdict(self, tmp_path, capsys):
+    def test_bare_invocation_validates_against_the_shipped_snapshot(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
-        assert vi.main([path]) == 3
-        assert "Nothing was validated" in capsys.readouterr().err
+        assert vi.main([path]) == 0
+        assert "shipped snapshot" in capsys.readouterr().out
+
+    def test_contract_flag_reads_another_directory(self, tmp_path, capsys):
+        copy = tmp_path / "contract"
+        shutil.copytree(CONTRACT_DIR, copy)
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+        assert vi.main(["--contract", str(copy), path]) == 0
+        assert "PASSED" in capsys.readouterr().out
+
+    def test_an_unreadable_snapshot_is_no_verdict(self, tmp_path, capsys):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+        assert vi.main(["--contract", str(empty), path]) == 3
+        err = capsys.readouterr().err
+        assert "Nothing was validated" in err and "reinstall" in err
+
+    def test_a_partial_snapshot_names_the_missing_cap(self, tmp_path, capsys):
+        copy = tmp_path / "contract"
+        shutil.copytree(CONTRACT_DIR, copy)
+        limits = json.loads((copy / "limits.json").read_text(encoding="utf-8"))
+        del limits["max_metadata_bytes"]
+        (copy / "limits.json").write_text(json.dumps(limits), encoding="utf-8")
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+        assert vi.main(["--contract", str(copy), path]) == 3
+        assert "max_metadata_bytes" in capsys.readouterr().err
 
     def test_missing_jsonschema_is_no_verdict(self, tmp_path, monkeypatch, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
@@ -520,17 +555,96 @@ class TestCli:
         run_cli([path])
         assert "conversation_already_exists" in capsys.readouterr().out
 
-    def test_the_offline_banner_names_every_fallback_cap(self, tmp_path, capsys):
+    def test_the_banner_names_the_snapshot_commit_and_version(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
         run_cli([path])
         out = capsys.readouterr().out
-        assert "OFFLINE" in out and "max_metadata_bytes" in out
+        assert MANIFEST["commit"][:12] in out
+        assert f"schema_version {LIMITS['schema_version']}" in out
 
-    def test_the_schema_digest_tripwire_matches_the_checked_in_schema(self):
-        """If this fails, regenerate the corpus — the contract moved."""
-        import hashlib
+    def test_a_conversation_past_the_chunk_budget_warns(self, tmp_path, capsys):
+        """`max_chunk_request_bytes` is a warning, never a finding: the dashboard
+        cannot pack such a conversation, but the server would accept it."""
+        count = LIMITS["max_chunk_request_bytes"] // 100_000 + 2
+        record = conversation(messages=[message(content="c" * 100_000) for _ in range(count)])
+        path = write(tmp_path, {"schema_version": 1, "conversations": [record]})
+        assert run_cli([path]) == 0
+        out = capsys.readouterr().out
+        assert "WARNINGS" in out and "chunk budget" in out
 
-        digest = hashlib.sha256(
-            json.dumps(SCHEMA, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        assert digest == vi.VERIFIED_SCHEMA_SHA256
+    def test_the_script_imports_no_network_module(self):
+        """The skill's promise, stated as a test: the validator never goes online."""
+        import re
+
+        source = SCRIPT.read_text(encoding="utf-8")
+        imported = re.findall(r"^\s*(?:import|from)\s+([\w.]+)", source, re.MULTILINE)
+        for module in imported:
+            assert not module.startswith(("urllib", "http", "socket", "requests")), module
+        for needle in ("AGENTSIGHT_API", "api.agentsight.io"):
+            assert needle not in source, needle
+
+
+# ---------------------------------------------------------------------------
+# The shipped snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshot:
+    """`contract/` is the only contract the validator ever reads."""
+
+    # The eleven keys `limits_payload()` publishes -- the same literal set
+    # data_imports/tests/test_limits_drift.py::LimitsPayloadKeyTests pins.
+    LIMIT_KEYS = {
+        "schema_version",
+        "max_conversations_per_run",
+        "max_conversations_per_chunk",
+        "max_chunks_per_run",
+        "max_chunk_request_bytes",
+        "max_messages_per_conversation",
+        "max_content_length",
+        "max_metadata_bytes",
+        "max_metadata_depth",
+        "max_open_runs_per_agent",
+        "max_import_file_bytes",
+    }
+
+    raw_limits = json.loads((CONTRACT_DIR / "limits.json").read_text(encoding="utf-8"))
+
+    def test_limits_json_publishes_exactly_the_served_keys(self):
+        assert set(self.raw_limits) == self.LIMIT_KEYS
+        for key, value in self.raw_limits.items():
+            assert isinstance(value, int) and not isinstance(value, bool) and value > 0, key
+
+    def test_the_limits_agree_with_the_schema(self):
+        assert LIMITS["schema_version"] == SCHEMA["properties"]["schema_version"]["const"]
+        assert (
+            LIMITS["max_conversations_per_run"]
+            == SCHEMA["properties"]["conversations"]["maxItems"]
+        )
+        metadata_object = SCHEMA["$defs"]["metadataObject"]
+        assert LIMITS["max_metadata_keys_per_level"] == metadata_object["maxProperties"]
+        assert LIMITS["max_metadata_key_length"] == metadata_object["propertyNames"]["maxLength"]
+
+    def test_the_example_validates_at_the_file_root(self):
+        from jsonschema import Draft202012Validator
+
+        example = json.loads((CONTRACT_DIR / "example_import.json").read_text(encoding="utf-8"))
+        assert list(Draft202012Validator(SCHEMA).iter_errors(example)) == []
+
+    def test_the_manifest_names_its_origin(self):
+        assert set(MANIFEST) >= {"source", "commit", "exported_at", "contract_sha256"}
+        assert MANIFEST["source"] == "ags_backend"
+
+    def test_the_snapshot_digest_matches_the_corpus_pin(self):
+        """If this fails, the contract moved: re-run regenerate_corpus.py from an
+        ags_backend checkout and update CORPUS_CONTRACT_SHA256."""
+        digest = rc.contract_digest(
+            (CONTRACT_DIR / "import_v1.schema.json").read_bytes(),
+            (CONTRACT_DIR / "example_import.json").read_bytes(),
+            self.raw_limits,
+        )
+        assert digest == MANIFEST["contract_sha256"], "MANIFEST.json does not describe these files"
+        assert digest == CORPUS_CONTRACT_SHA256, (
+            "the snapshot moved: re-run tests/skills/regenerate_corpus.py from an "
+            "ags_backend checkout and update CORPUS_CONTRACT_SHA256"
+        )

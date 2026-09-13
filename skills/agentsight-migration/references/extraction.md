@@ -48,8 +48,16 @@ customers in one transcript.
   smaller.
 - **Ordered by timestamp within each conversation**, explicitly sorted, not
   inherited from row order.
-- **Outside the repo, or gitignored in the same edit.** These are full
-  customer transcripts.
+- **Every `conversation_id` carries the agreed prefix.** Apply it in one
+  place in the exporter, and let the step 9 reconciliation assert it.
+- **In the project, in `agentsight_migration/`, gitignored before the first
+  file exists.** The exporter is `agentsight_migration/export_import_file.py`
+  and it writes `pilot.json`, the numbered parts and `manifest.json` beside
+  itself, at the repo root. `agentsight_migration/*.json` is in `.gitignore`
+  first — these are full customer transcripts, and the manifest carries ids
+  that may be PII — which leaves the exporter itself tracked, as code should
+  be. Never under `/home` somewhere: the user would be handed an absolute
+  path, and no clone of the repo could find any of it.
 
 ## Read-only, and slowly
 
