@@ -20,6 +20,8 @@ USAGE_SUMMARY = f"{USAGE}summary/"
 SPANS = f"{BASE}/api/spans/"
 TRACES = f"{BASE}/api/traces/"
 ME = f"{BASE}/api/me/"
+# IDENTITY's agent_id, below: the namespace reads it off /api/me/.
+DATA_ENTITIES = f"{BASE}/api/agents/7/data-entities/"
 
 def environment(slug, pk=1, is_production=False):
     """One environment exactly as ``AgentEnvironmentSerializer`` sends it.
@@ -47,6 +49,7 @@ IDENTITY = {
         environment("production", 1, is_production=True),
         environment("development", 2),
     ],
+    "capabilities": ["gzip-ingest", "data-entities"],
 }
 
 

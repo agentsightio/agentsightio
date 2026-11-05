@@ -33,6 +33,11 @@ CONVERSATION_FILTERS = frozenset(
         "customer_id",
         "customer_id__icontains",
         "customer_ip_address",
+        # A key, matched case-insensitively. The second names the rows with no
+        # entity (True) or the rows with any entity (False). Same pair on the
+        # feedback, ticket and usage routes.
+        "data_entity",
+        "data_entity_unassigned",
         "device",
         "env",
         "environment",
@@ -68,6 +73,8 @@ FEEDBACK_FILTERS = frozenset(
         "conversation_id",
         "created_at_after",
         "created_at_before",
+        "data_entity",
+        "data_entity_unassigned",
         "env",
         "environment",
         "has_comment",
@@ -108,6 +115,8 @@ TICKET_FILTERS = frozenset(
         "conversation_id",
         "created_at_after",
         "created_at_before",
+        "data_entity",
+        "data_entity_unassigned",
         "has_conversation",
         "has_feedback",
         "ordering",
@@ -153,6 +162,8 @@ USAGE_FILTERS = frozenset(
         "conversation",
         "conversation_id",
         "cost_source",
+        "data_entity",
+        "data_entity_unassigned",
         "environment",
         "incomplete",
         "model",
@@ -229,6 +240,15 @@ def build(
         raise ValidationError(
             f"unknown {what} filter(s): {', '.join(unknown)}. "
             f"Supported: {', '.join(sorted(allowed))}"
+        )
+
+    # The backend reads a blank key as no filter at all, so an empty variable
+    # would answer with every tenant's rows.
+    entity = filters.get("data_entity")
+    if isinstance(entity, str) and not entity.strip():
+        raise ValidationError(
+            "data_entity must not be blank: it would match every data entity. "
+            "Pass a key, or data_entity_unassigned=True for the rows with none."
         )
 
     rename = ENV_ALIAS if rename is None else rename

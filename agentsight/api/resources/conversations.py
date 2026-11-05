@@ -50,7 +50,8 @@ class Conversations(Resource):
 
         Filters mirror the backend's: ``action_name``, ``conversation_id``,
         ``customer_id``, ``customer_id__icontains``, ``customer_ip_address``,
-        ``device``, ``environment`` (or ``env``), ``feedback_sentiment``,
+        ``data_entity``, ``data_entity_unassigned``, ``device``,
+        ``environment`` (or ``env``), ``feedback_sentiment``,
         ``has_action``, ``has_feedback``, ``has_messages``,
         ``include_deleted``, ``include_tickets``, ``is_marked``,
         ``language``, ``message_contains``, ``metadata``, ``metadata_key``,
@@ -68,6 +69,12 @@ class Conversations(Resource):
 
         Soft-deleted conversations are excluded unless you pass
         ``include_deleted=True``.
+
+        ``data_entity`` takes a key, case-insensitively; a blank one is refused
+        rather than sent, because the backend would read it as no filter.
+        ``data_entity_unassigned=True`` selects conversations with no entity,
+        ``False`` those with any. Every row carries its ``data_entity`` key, or
+        ``None``.
         """
         return self._list(filters, full=False)
 
@@ -165,7 +172,8 @@ class Conversations(Resource):
 
         Accepts ``name``, ``is_marked``, ``customer_id``, ``device``,
         ``language`` and ``metadata``. The identity fields — ``conversation_id``,
-        ``started_at``, ``agent`` — are immutable server-side.
+        ``started_at``, ``agent`` — are immutable server-side, and so is a
+        conversation's ``data_entity``: the first key that reaches it stays.
 
         Every one of those except ``is_marked`` is also stamped on every span,
         so if this conversation is open *in this process* the new value is

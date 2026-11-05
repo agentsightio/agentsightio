@@ -43,9 +43,13 @@ class Tickets(Resource):
         """Tickets on this agent, newest first.
 
         Filters: ``conversation`` (pk), ``conversation_id`` (string),
-        ``created_at_after``, ``created_at_before``, ``has_conversation``,
-        ``has_feedback``, ``ordering``, ``priority``, ``search`` (title),
-        ``status``, ``tags``, ``updated_at_after``, ``updated_at_before``.
+        ``created_at_after``, ``created_at_before``, ``data_entity``,
+        ``data_entity_unassigned``, ``has_conversation``, ``has_feedback``,
+        ``ordering``, ``priority``, ``search`` (title), ``status``, ``tags``,
+        ``updated_at_after``, ``updated_at_before``.
+
+        The data entity pair follows the ticket's conversation, so a ticket
+        with none appears under neither.
 
         ``status`` accepts a list and ORs it —
         ``status=["open", "in_progress"]``. ``tags`` is comma-separated and

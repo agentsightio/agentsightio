@@ -50,10 +50,14 @@ class Feedbacks(Resource):
 
         Filters: ``agent``, ``category``, ``comment_contains``,
         ``conversation`` (pk), ``conversation_id`` (string),
-        ``created_at_after``, ``created_at_before``, ``environment`` (or
-        ``env``), ``has_comment``, ``has_ticket``, ``include_tickets``,
-        ``kind``, ``message`` (pk), ``ordering``, ``reason``, ``search``,
-        ``sentiment``, ``ticket_status``, ``topic``, ``user``.
+        ``created_at_after``, ``created_at_before``, ``data_entity``,
+        ``data_entity_unassigned``, ``environment`` (or ``env``),
+        ``has_comment``, ``has_ticket``, ``include_tickets``, ``kind``,
+        ``message`` (pk), ``ordering``, ``reason``, ``search``, ``sentiment``,
+        ``ticket_status``, ``topic``, ``user``.
+
+        The data entity pair follows the feedback's conversation, so
+        agent-kind feedback, which has none, appears under neither.
 
         **``include_tickets=True`` also narrows the result set** — it returns
         only feedback that was promoted to a ticket, and each of those rows
