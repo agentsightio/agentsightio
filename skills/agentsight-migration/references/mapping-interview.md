@@ -45,6 +45,10 @@ analytics reports by design, so history imported to `development` is present
 in the transcripts and absent from every chart, which reads as a bug. Ask;
 never infer it from the agent's name.
 
+If the source mixes several clients of one agent, say so now: the import format has
+no data entity field today, so imported conversations land Unassigned, and a
+conversation's entity can be set later only by a tracked span that carries a key.
+
 **2. Which field is `conversation_id`, and which prefix goes on it?** Present
 the candidates you found. Then two follow-ups, because the column being
 unique in the source is not the question:

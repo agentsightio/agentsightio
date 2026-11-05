@@ -22,8 +22,8 @@ Work through it against the JSON, not from memory:
 1. **The conversation block carries the agreed fields.** The right
    `conversation_id` (the durable business id, not a generated `conv_…`),
    plus every field the interview settled: `customer_id`, `device`,
-   `language`, and the rest. A field that was agreed but absent means the
-   plumbing didn't reach the call.
+   `language`, `data_entity`, and the rest. A field that was agreed but absent
+   means the plumbing didn't reach the call.
 2. **Turn durations are plausible.** A streaming exchange whose turn lasted
    ~0.1 ms means `wrap()` is missing or in the wrong place. The turn should
    span the whole answer.
@@ -48,6 +48,13 @@ Work through it against the JSON, not from memory:
    arguments, the unhashed id). This check is the promise made in the
    data-consent question, kept.
 8. **The environment tag is what the deployment intends.**
+9. **The data entity is right, on every path that opens a conversation.** When the
+   interview settled a key source, exercise two different clients and confirm each
+   conversation block carries its own key:
+   `jq '.conversations[] | {conversation_id, data_entity}' <dump>/*.json`.
+   Check `open_conversation()` too if it is wired. This one earns its place because
+   nothing corrects it later: the first key a conversation receives is permanent,
+   and a missing one reads as Unassigned, not as an error.
 
 If the run was the no-key fallback, stop here: hand over the dump, the
 checklist results, and the switch-to-live steps. That is a complete

@@ -1,7 +1,8 @@
 # The data plane: API client and REST surface
 
-Reading and managing what was recorded — the two things that are *created*
-here rather than by the tracking SDK, feedback and action definitions — and the
+Reading and managing what was recorded — the things that are *created* here
+rather than by the tracking SDK, feedback, action definitions and data entities
+— and the
 one thing *edited after the fact*: a message's metadata. Unlike the tracking
 plane, **everything here raises on failure**; that is the point of a read
 client.
@@ -17,6 +18,7 @@ Full references: `docs.agentsight.io/api/` (Python client) and
 - [Messages: metadata after the turn](#messages-metadata-after-the-turn)
 - [Feedback — the one thing to wire](#feedback--the-one-thing-to-wire)
 - [Actions: labelling for the dashboard](#actions-labelling-for-the-dashboard)
+- [Data entities](#data-entities)
 - [Usage and cost](#usage-and-cost)
 - [Spans and traces](#spans-and-traces)
 - [REST notes for non-Python callers](#rest-notes-for-non-python-callers)
@@ -60,7 +62,7 @@ also **not a second way to record live traffic**: dedup is on
 from agentsight.api import AgentSight
 
 ags = AgentSight()          # key from AGENTSIGHT_API_KEY; or AgentSight("ags_…")
-ags.me()                    # the preflight: agent id/name, role, environment slugs
+ags.me()                    # the preflight: agent id/name, role, environment slugs, the entity cap
 ags.environments()          # ['production', 'development', …] — the authoritative list
 ```
 
@@ -71,7 +73,7 @@ ags.environments()          # ['production', 'development', …] — the authori
 - Roles: a key is `read` or `write`. Recording and every write here need
   `write`; `me()["role"]` is the only way to know in advance.
 - Namespaces: `ags.conversations`, `ags.messages`, `ags.feedbacks`,
-  `ags.actions`, `ags.usage`, `ags.spans`.
+  `ags.actions`, `ags.data_entities`, `ags.usage`, `ags.spans`.
 - Lists paginate; iterate the returned pages/iterator rather than assuming one
   page. The client refuses filter names it does not recognise **before
   sending** — deliberately, because on the raw REST surface an unknown query
@@ -202,6 +204,47 @@ and the first real call adopts the row. There is no `delete()` — every
 recorded invocation hangs off the definition. `logs(id)` lists invocations.
 Default: function names as-is, with a labelling pass proposed to the developer.
 
+## Data entities
+
+Tracking creates an entity the first time a key arrives, so none of this is needed
+to start. This is for naming one, declaring one ahead of its traffic, and deleting
+or restoring one. Needs `agentsight >= 0.2.0`; on a backend without the
+`data-entities` capability every call raises `NotFoundError`.
+
+```python
+ags.data_entities.list(include_deleted=False)       # lazy, like every list
+ags.data_entities.get(12)
+ags.data_entities.create("hotel-paris", name="Hotel Paris", description="…", metadata={…})
+ags.data_entities.update(12, name="Hotel Paris (Opéra)")   # name, description, metadata
+ags.data_entities.delete(12)                        # soft, safe to repeat
+ags.data_entities.restore(12)
+ags.me(refresh=True)["data_entities"]               # limit, active_count, overflow_count, overflow_at
+```
+
+- **The integer `id` names a row, and a key is refused.** Find it from `list()`,
+  comparing keys case-insensitively.
+- **The key is permanent**: `update(key=…)` raises locally. An empty `name` goes
+  back to the key. `metadata` is replaced whole, and `None` clears it.
+- **`create` raises `ValidationError`** on a key that exists in any casing,
+  including on a deleted row (keys stay reserved), or at 500 active entities.
+  `restore` raises at the cap too.
+- **Conversations are not moved here.** The first key that reaches a conversation
+  stays, and `conversations.update(data_entity=…)` raises.
+
+**Filters**, on `conversations`, `feedbacks`, `tickets` and `usage`:
+`data_entity="hotel-paris"` (any casing), `data_entity_unassigned=True` (no
+entity), `data_entity_unassigned=False` (any entity). Conversation and usage rows
+carry `data_entity`, the key or `None`. A blank `data_entity` is refused locally,
+because the server reads it as no filter; `None` means not filtered. Spans do not
+take the pair.
+
+On a backend without the `data-entities` capability the client raises
+`ValidationError` when the list is read, before requesting anything: that backend
+would ignore the filter and return every row. Do not catch it and retry unfiltered.
+
+**Never treat a filter as a tenant boundary.** A key sees its whole agent. Scoped
+embed tokens are the enforced boundary: [embed.md](embed.md).
+
 ## Usage and cost
 
 ```python
@@ -239,6 +282,12 @@ For reading and feedback from another language:
 - Auth on every request: `Authorization: Api-Key ags_YOUR_KEY`. Keys are
   issued in the dashboard, shown **once** at creation, revocable. Never in a
   browser or client-side code.
+- Data entities live at `/api/agents/{agent_id}/data-entities/`, with the agent id
+  from `GET /api/me/`; a foreign agent id answers `404`. Filters are
+  `?data_entity=<key>` and `?data_entity_unassigned=true|false`, and a blank
+  `data_entity` reads as no filter, so never build one from a value that can be
+  empty. A backend whose `capabilities` lack `data-entities` ignores both and
+  returns every row: check first, since over REST nothing refuses for you.
 - `GET /api/me/` is the preflight: agent, role, environment slugs. The 401
   worth catching separately: *"Agent does not have an active subscription or
   development phase"* — the credential is fine, the account is not; rotating

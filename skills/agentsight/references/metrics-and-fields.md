@@ -104,3 +104,47 @@ Set once per deployment (`AGENTSIGHT_ENVIRONMENT` or `init(environment=…)`;
 for QA and load-test traffic (or `enabled=False` when it should not be
 recorded at all). An unrecognised slug errors in the logs at startup; on a
 conversation it costs the environment tag, never the data.
+
+## Data entities: one agent, many clients
+
+One central agent serving many clients, each with its own data: one
+hotel-booking agent, many hotels. This is the native shape for it. Each
+conversation carries a key the developer chooses, the dashboard filters by it,
+and an embed token can be pinned to one client. `metadata` gives none of that,
+and one agent per client multiplies agents and keys.
+
+```python
+with agentsight.conversation(session_id, data_entity=hotel_code):
+    ...
+```
+
+| Situation | Result |
+|---|---|
+| No key | Unassigned; nothing is created. Existing conversations are all here. |
+| Unknown key | entity created on first sight, named after its key |
+| Known key, any casing | linked; `"Hotel-Paris"` and `"hotel-paris"` are one entity, first spelling kept |
+| Key of a deleted entity | linked anyway; flagged as still receiving traffic, with Restore |
+| Unknown key, agent at 500 active | Unassigned, and the agent's overflow counter goes up; known keys keep working |
+| Later key, different from the one set | ignored; the first stays |
+| Later key, none set yet | linked now, and earlier usage moves with it |
+
+- **Choose the source carefully, because both the key and the link are permanent.**
+  A key cannot be renamed (its display `name` can), and a conversation cannot be
+  moved to another entity. Use a stable identifier, never a session or user id.
+  Ask the developer which one; do not guess.
+- **A default or per-conversation keys, not both.** `init(data_entity=…)` /
+  `AGENTSIGHT_DATA_ENTITY` means the deployment serves one client. A key named on
+  the conversation, or on a turn before anything is recorded, beats the default.
+  Anything recorded first goes out under the default and the first key sticks:
+  `open_conversation(cid)` without the key is the usual case.
+- **Uploads.** `upload_attachments()` sends the key only inside the conversation's
+  own scope. Elsewhere it sends none, and the next span supplies it.
+- **Independent of environments.** One entity list per agent, across environments,
+  and filters compose. Analytics stay production-only, and the entity filter
+  narrows that report. The Development Mode probe stays agent-wide.
+- **Filters are not isolation.** An API key sees its whole agent, so a filter only
+  narrows what the developer's own code reads. To show a client only its own
+  data, use a scoped embed token: [embed.md](embed.md).
+- **Coverage.** Analytics report, conversations, feedback, tickets, token usage,
+  saved reports. Agent-level feedback and tickets without a conversation appear
+  only under All. Imported history has no entity today.
