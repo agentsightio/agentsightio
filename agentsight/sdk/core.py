@@ -22,6 +22,7 @@ from agentsight.sdk import watchdog
 from agentsight.sdk.exporter import SDK_NAME, SDK_VERSION, AgentSightSpanExporter
 from agentsight.sdk.file_exporter import FileSpanExporter
 from agentsight.sdk.processors import TurnBufferingProcessor
+from agentsight.sdk.serialization import data_entity_key, warn_once
 
 logger = logging.getLogger("agentsight")
 
@@ -48,6 +49,7 @@ class _State:
         self.exporter: Optional[SpanExporter] = None
         self.tracer = None
         self.environment: Optional[str] = None
+        self.data_entity: Optional[str] = None
         self.turn_timeout_ms: int = watchdog.DEFAULT_TIMEOUT_MS
         #: What init() resolved, kept for the data-plane calls (attachment
         #: uploads) that share the key but not the span pipeline. The key is
@@ -96,11 +98,47 @@ def default_environment() -> Optional[str]:
     return _settings.normalize_environment(_state.environment)
 
 
+def default_data_entity() -> Optional[str]:
+    """The deployment-wide data entity from ``init(data_entity=...)`` or
+    ``AGENTSIGHT_DATA_ENTITY``. Conversations that don't name their own inherit
+    it; one that does always wins.
+
+    Unlike the environment there is nothing to re-resolve: any key is valid, so
+    the value is settled once ``init()`` has cleaned it.
+    """
+    return _state.data_entity
+
+
+def note_data_entity_configured() -> None:
+    """A data entity is in use: say so now if the backend will ignore it.
+
+    Sets the flag before checking, as the preflight sets its answer before
+    checking. Whichever side runs second sees both and warns, so the order of
+    "configured" and "answered" cannot lose the warning, and ``warn_once`` keeps
+    a tie to one line.
+    """
+    _settings.note_data_entity_configured()
+    _warn_if_data_entity_ignored()
+
+
+def _warn_if_data_entity_ignored() -> None:
+    """Announce it rather than drop anything: an older backend discards the
+    field harmlessly, and this warning is the only sign that it did."""
+    if _settings.data_entity_ignored():
+        warn_once(
+            "data-entities",
+            "AgentSight: this backend does not support data entities, so it "
+            "ignores data_entity: conversations land there without one, and "
+            "nothing else changes. Upgrade the backend to use them.",
+        )
+
+
 def init(
     api_key: Optional[str] = None,
     *,
     endpoint: Optional[str] = None,
     environment: Optional[str] = None,
+    data_entity: Optional[str] = None,
     auto_instrument: Union[bool, Sequence[str]] = True,
     export_interval_ms: int = 5000,
     max_queue_size: int = 2048,
@@ -151,6 +189,11 @@ def init(
     becomes acceptable to ``init(environment=...)`` and
     ``conversation(environment=...)``. Passing ``False`` therefore also
     disables custom environment discovery, leaving only the built-in pair.
+
+    ``data_entity`` (or ``AGENTSIGHT_DATA_ENTITY``) is the deployment's default
+    data entity, for a deployment that serves one tenant. The preflight is also
+    what warns when the backend does not support data entities, so with it off
+    that warning cannot fire.
     """
     with _state.lock:
         if _state.enabled:
@@ -240,6 +283,13 @@ def init(
             _state.environment = _check_environment(
                 environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
             )
+            # Each cleaned on its own, so a blank argument counts as absent and
+            # the variable still applies.
+            _state.data_entity = data_entity_key(data_entity) or data_entity_key(
+                os.getenv(_settings.ENV_DATA_ENTITY)
+            )
+            if _state.data_entity:
+                _settings.note_data_entity_configured()
             _state.turn_timeout_ms = turn_timeout_ms
             _state.api_key = resolved_key
             _state.endpoint = resolved_endpoint
@@ -340,8 +390,12 @@ def _verify_key(api_key: str, endpoint: str) -> None:
         )
         return
     except NotFoundError:
-        # A backend older than /api/me/. Says nothing about the key.
+        # A backend older than /api/me/. Says nothing about the key, but it
+        # does answer what the backend can do: this route predates the
+        # capability list, so it advertises nothing.
         logger.debug("key preflight: %s has no /api/me/ route", endpoint)
+        _settings.learn_capabilities(())
+        _warn_if_data_entity_ignored()
         return
     except Exception as exc:
         logger.debug("key preflight did not complete: %s", exc)
@@ -370,8 +424,19 @@ def _verify_key(api_key: str, endpoint: str) -> None:
     # assumed because the SDK is published and a self-hosted backend can lag
     # it; see AgentSightSpanExporter._post for the full reasoning. Its own
     # try/except for the same reason as the environments above.
+    #
+    # Only a real identity counts as an answer. An empty 200 from something in
+    # the way proves nothing about the backend. Absent capabilities are read as
+    # an empty list, while a malformed value is handed over as it came so
+    # learn_capabilities can refuse it: "missing" and "malformed" are different
+    # answers, and data_entity_ignored() depends on telling them apart.
     try:
-        _settings.learn_capabilities((identity or {}).get("capabilities") or ())
+        if isinstance(identity, dict) and identity.get("agent_id") is not None:
+            raw_capabilities = identity.get("capabilities")
+            _settings.learn_capabilities(
+                () if raw_capabilities is None else raw_capabilities
+            )
+            _warn_if_data_entity_ignored()
     except Exception as exc:
         logger.debug("key preflight could not read the capabilities: %s", exc)
 

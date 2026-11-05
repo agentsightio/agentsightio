@@ -97,6 +97,9 @@ def conversation_attributes() -> Dict[str, Any]:
     Stamped onto each span rather than sent once, because a conversation has
     no single owning span: it outlives any one process, so there is nothing to
     attach it to. The exporter groups by these to rebuild the Conversation row.
+
+    Taken through ``snapshot()``, which also notes that something now carries
+    them: every span creator comes through here.
     """
     scope = current_conversation()
-    return dict(scope.attributes) if scope else {}
+    return scope.snapshot() if scope else {}

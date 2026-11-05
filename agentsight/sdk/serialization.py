@@ -102,6 +102,40 @@ def clamp_field(name: str, value: Optional[str]) -> Optional[str]:
     return value[:MAX_FIELD_LENGTH]
 
 
+def data_entity_key(value: Any) -> Optional[str]:
+    """A data entity key as ingest will take it, or ``None`` for no key.
+
+    Trimmed, because the key is matched after trimming and a stray space must
+    not read as a different tenant. Empty means absent: passing the argument is
+    the opt-in, and a blank value has opted into nothing. Clamped for the same
+    reason as every other conversation field.
+
+    NUL and surrogate characters drop the key instead of being stripped. Ingest
+    refuses them, so one would cost the whole batch; and removing the character
+    could quietly merge the key into a different tenant's, which is worse than
+    the conversation going unassigned.
+    """
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else to_text(value)
+    text = text.strip()
+    if not text:
+        return None
+    key = clamp_field("data_entity", text)
+    if key is None:  # pragma: no cover - clamp_field only returns None for None
+        return None
+    if any(char == "\x00" or "\ud800" <= char <= "\udfff" for char in key):
+        warn_once(
+            "data_entity:unsendable",
+            "AgentSight: data_entity %r contains a character the API refuses "
+            "(NUL or an unpaired surrogate) and has been dropped; this "
+            "conversation is recorded without a data entity.",
+            key,
+        )
+        return None
+    return key
+
+
 def valid_ip(value: Optional[str]) -> Optional[str]:
     """The address if it parses, otherwise ``None`` and one warning.
 

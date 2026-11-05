@@ -26,6 +26,7 @@ ENV_API_KEY = "AGENTSIGHT_API_KEY"
 ENV_ENDPOINT = "AGENTSIGHT_API_ENDPOINT"
 ENV_APP_URL = "AGENTSIGHT_APP_URL"
 ENV_ENVIRONMENT = "AGENTSIGHT_ENVIRONMENT"
+ENV_DATA_ENTITY = "AGENTSIGHT_DATA_ENTITY"
 
 SDK_NAME = "agentsight-python"
 
@@ -111,12 +112,19 @@ def _reset_environments_for_tests() -> None:
 
 #: Optional backend behaviours, learned the same way the environments are:
 #: ``GET /api/me/`` advertises them, the key preflight records them here, and
-#: nothing is assumed until it has. ``gzip-ingest`` is the one that exists
-#: today — ``POST /api/ingest/`` accepts ``Content-Encoding: gzip``.
+#: nothing is assumed until it has. ``gzip-ingest`` means ``POST /api/ingest/``
+#: accepts ``Content-Encoding: gzip``; ``data-entities`` means the backend
+#: reads ``data_entity`` off a conversation, where an older one drops it.
 GZIP_INGEST = "gzip-ingest"
+DATA_ENTITIES = "data-entities"
 
 _capabilities_lock = threading.Lock()
 _capabilities: "set[str]" = set()
+#: Whether the backend has told us what it can do, as opposed to us not having
+#: heard. ``has_capability`` is False in both cases, so this is the only thing
+#: that can tell "absent" from "unknown".
+_capabilities_answered = False
+_data_entity_configured = False
 
 
 def learn_capabilities(names: Iterable[object]) -> None:
@@ -129,20 +137,27 @@ def learn_capabilities(names: Iterable[object]) -> None:
     because a capability learned by accident turns into an encoding some
     backend cannot decode. Nothing here raises: this runs on a thread nobody
     joins, and the module's contract forbids it.
+
+    A list of strings counts as an answer even when it names nothing we know,
+    including an empty one. Anything else says nothing either way, so what the
+    backend can do stays unknown, though valid entries in a mixed list are
+    still learned.
     """
+    global _capabilities_answered
     if isinstance(names, (str, bytes, dict)):
         return
     try:
+        entries = list(names)
         cleaned = {
             name.strip().lower()
-            for name in names
+            for name in entries
             if isinstance(name, str) and name.strip()
         }
     except Exception:
         return
-    if not cleaned:
-        return
+    well_formed = all(isinstance(name, str) for name in entries)
     with _capabilities_lock:
+        _capabilities_answered = _capabilities_answered or well_formed
         _capabilities.update(cleaned)
 
 
@@ -158,9 +173,33 @@ def has_capability(name: str) -> bool:
         return name in _capabilities
 
 
+def note_data_entity_configured() -> None:
+    """Record that this process is sending a data entity."""
+    global _data_entity_configured
+    with _capabilities_lock:
+        _data_entity_configured = True
+
+
+def data_entity_ignored() -> bool:
+    """A data entity is configured and the backend has confirmed it lacks them.
+
+    True only on both counts. An unanswered preflight proves nothing, and a
+    process with no key to send has nothing to warn about.
+    """
+    with _capabilities_lock:
+        return (
+            _data_entity_configured
+            and _capabilities_answered
+            and DATA_ENTITIES not in _capabilities
+        )
+
+
 def _reset_capabilities_for_tests() -> None:
+    global _capabilities_answered, _data_entity_configured
     with _capabilities_lock:
         _capabilities.clear()
+        _capabilities_answered = False
+        _data_entity_configured = False
 
 
 def resolve_api_key(explicit: Optional[str] = None) -> Optional[str]:

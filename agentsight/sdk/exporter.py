@@ -179,8 +179,8 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
     #: conversation_id -> the raw metadata value last parsed for that block.
     #: Every span in a conversation carries the same serialized document, so
     #: without this the same string is parsed once per span. A local dict, not
-    #: a key on ``block``: the block is serialized straight to JSON and ingest
-    #: rejects fields it does not know.
+    #: a key on ``block``: the block is serialized straight to JSON, and this
+    #: bookkeeping is not part of the wire format.
     last_raw: Dict[str, Any] = {}
     #: id(resource) -> its attributes as a dict, built once per export call.
     #: In practice one process has one resource, so this is one entry. Keyed
@@ -201,6 +201,12 @@ def build_payload(spans: Sequence[ReadableSpan]) -> Dict[str, Any]:
 
         for kwarg, attribute in ConversationAttributes.BY_KWARG.items():
             if attribute in attributes:
+                # The one field where the first span wins. A conversation's
+                # entity is set once, by the first key that arrives, so a later
+                # span must not replace it here or the outcome would depend on
+                # where a batch boundary happened to fall.
+                if kwarg == "data_entity" and kwarg in block:
+                    continue
                 block[kwarg] = attributes[attribute]
         # Compared by raw value, not truthiness: `{}` is a real instruction
         # ("clear it") and must still travel, while a *changed* document —

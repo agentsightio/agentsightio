@@ -161,6 +161,106 @@ def test_resolves_conversation_and_environment_from_the_active_scope(
     assert upsert == {"conversation_id": "conv-9", "environment": "production"}
 
 
+# --- the data entity on the early row -----------------------------------------
+#
+# A conversation keeps the first key that reaches it, and this request usually
+# gets there before the spans do. So a key sent here has to be the one the spans
+# will carry, and when that cannot be known nothing is sent: a write without a
+# key leaves the entity open, and a wrong one is permanent.
+
+
+def test_the_owning_scope_sends_its_data_entity(sdk, requests_mock):
+    stub_happy_backend(requests_mock)
+
+    with ags.conversation("conv-9", data_entity="hotel-paris"):
+        ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})
+
+    upsert = sent_to(requests_mock, CONVERSATIONS_URL)[0].json()
+    assert upsert["data_entity"] == "hotel-paris"
+
+
+def test_naming_the_scopes_own_conversation_still_sends_it(sdk, requests_mock):
+    stub_happy_backend(requests_mock)
+
+    with ags.conversation("conv-9", data_entity="hotel-paris"):
+        ags.upload_attachments(
+            {"filename": "f.png", "data": PNG_BYTES}, conversation_id="conv-9"
+        )
+
+    assert sent_to(requests_mock, CONVERSATIONS_URL)[0].json()["data_entity"] == "hotel-paris"
+
+
+def test_a_default_reaches_the_early_row_through_the_scope(sdk, requests_mock, monkeypatch):
+    monkeypatch.setattr(core._state, "data_entity", "hotel-rome")
+    stub_happy_backend(requests_mock)
+
+    with ags.conversation("conv-9"):
+        ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})
+
+    assert sent_to(requests_mock, CONVERSATIONS_URL)[0].json()["data_entity"] == "hotel-rome"
+
+
+def test_another_conversations_scope_does_not_lend_its_data_entity(sdk, requests_mock):
+    """The one that would file a hotel's upload under a different hotel."""
+    stub_happy_backend(requests_mock)
+
+    with ags.conversation("conv-paris", data_entity="hotel-paris"):
+        ags.upload_attachments(
+            {"filename": "f.png", "data": PNG_BYTES}, conversation_id="conv-rome"
+        )
+
+    upsert = sent_to(requests_mock, CONVERSATIONS_URL)[0].json()
+    assert upsert["conversation_id"] == "conv-rome"
+    assert "data_entity" not in upsert
+
+
+def test_the_default_alone_does_not_stamp_a_conversation_outside_any_scope(
+    sdk, requests_mock, monkeypatch
+):
+    """The conversation may be tracked under its own key with the spans still
+    queued, and this request would then win over them."""
+    monkeypatch.setattr(core._state, "data_entity", "hotel-rome")
+    stub_happy_backend(requests_mock)
+
+    ags.upload_attachments(
+        {"filename": "f.png", "data": PNG_BYTES}, conversation_id="conv-9"
+    )
+
+    assert "data_entity" not in sent_to(requests_mock, CONVERSATIONS_URL)[0].json()
+
+
+def test_an_upload_counts_as_recorded_for_the_default(sdk, requests_mock, monkeypatch):
+    """The upsert has carried the default to the backend, which keeps the first
+    key. A turn naming another one afterwards must not switch the spans."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    stub_happy_backend(requests_mock)
+
+    with ags.conversation("conv-9") as scope:
+        ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})
+        with ags.turn(data_entity="hotel-paris"):
+            ags.user_message("hi")
+
+    assert sent_to(requests_mock, CONVERSATIONS_URL)[0].json()["data_entity"] == "the-default"
+    assert scope.attributes["agentsight.conversation.data_entity"] == "the-default"
+
+
+def test_an_upload_refused_after_the_row_exists_still_counts(sdk, requests_mock, monkeypatch):
+    """The row was created with the default before the bytes were refused, and
+    no span followed to say so. The backend has the key all the same."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    requests_mock.post(CONVERSATIONS_URL, json={"id": 7})
+    requests_mock.post(ATTACHMENTS_URL, status_code=503, json={"detail": "no storage"})
+
+    with ags.conversation("conv-9") as scope:
+        with pytest.raises(UploadError):
+            ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})
+        with ags.turn(data_entity="hotel-paris"):
+            ags.user_message("hi")
+
+    assert sent_to(requests_mock, CONVERSATIONS_URL)[0].json()["data_entity"] == "the-default"
+    assert scope.attributes["agentsight.conversation.data_entity"] == "the-default"
+
+
 def test_no_conversation_anywhere_is_a_caller_error(sdk, requests_mock):
     with pytest.raises(ValueError, match="conversation"):
         ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})

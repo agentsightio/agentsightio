@@ -6,6 +6,7 @@ right spans, the right attributes, and — just as important — nothing at all
 when there is nothing to record.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -693,6 +694,466 @@ def test_init_environment_is_inherited_by_conversations(spans, monkeypatch):
     by_id = {c["conversation_id"]: c for c in payload["conversations"]}
     assert by_id["c-inherit"]["environment"] == "development"
     assert by_id["c-explicit"]["environment"] == "production"
+
+
+# ---------------------------------------------------------------------------
+# Data entities: one key, on everything the conversation records
+# ---------------------------------------------------------------------------
+
+
+def test_a_data_entity_reaches_every_span_and_the_block(spans):
+    """Every kind, because each is created by a different path and a key missing
+    from one of them is a span the row could be rebuilt without."""
+
+    @ags.tool
+    def look_up(city):
+        return city
+
+    @ags.task
+    def plan():
+        return "ok"
+
+    with ags.conversation("c-entity", data_entity="hotel-paris"):
+        with ags.turn("ask"):
+            ags.user_message("hi")
+            look_up("paris")
+            plan()
+            record_llm_call(**from_openai(OpenAIUsage(prompt=10, completion=5), "gpt-4o"))
+            ags.agent_message("hello")
+        ags.button("feedback", "Helpful?", "yes")
+        ags.record_attachments([{"name": "a.pdf"}])
+        ags.update_metadata({"seen": True})
+
+    finished = spans.get_finished_spans()
+    kinds = {s.attributes[SpanAttributes.KIND] for s in finished}
+    assert kinds == {
+        SpanKind.TURN,
+        SpanKind.TOOL,
+        SpanKind.TASK,
+        SpanKind.LLM,
+        SpanKind.BUTTON,
+        SpanKind.ATTACHMENT,
+        SpanKind.CONVERSATION,
+    }
+    for span in finished:
+        assert span.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+    (block,) = build_payload(finished)["conversations"]
+    assert block["data_entity"] == "hotel-paris"
+
+
+def test_no_data_entity_sends_nothing_at_all(spans):
+    """Absent is the default for every existing integration, and it has to stay
+    byte-identical to what they send today."""
+    with ags.conversation("c-none"):
+        with ags.turn():
+            ags.user_message("hi")
+
+    finished = spans.get_finished_spans()
+    assert ConversationAttributes.DATA_ENTITY not in finished[0].attributes
+    assert "data_entity" not in build_payload(finished)["conversations"][0]
+
+
+def test_open_conversation_carries_a_data_entity(spans):
+    ags.open_conversation("c-visit", data_entity="hotel-paris")
+
+    (block,) = build_payload(spans.get_finished_spans())["conversations"]
+    assert block["data_entity"] == "hotel-paris"
+
+
+def test_the_conversation_decorator_keeps_a_data_entity_on_every_call(spans):
+    """The decorator rebuilds its scope per call from the stored kwargs, so a
+    field missing from those is lost with no error."""
+
+    @ags.conversation(data_entity="hotel-paris")
+    def handle():
+        with ags.turn():
+            ags.user_message("hi")
+
+    handle()
+    handle()
+
+    blocks = build_payload(spans.get_finished_spans())["conversations"]
+    assert [b["data_entity"] for b in blocks] == ["hotel-paris", "hotel-paris"]
+
+
+def test_the_turn_decorator_forwards_a_data_entity(spans):
+    @ags.turn(id_from="session", data_entity="hotel-paris")
+    def handle(session):
+        ags.user_message("hi")
+
+    handle("c-turn")
+
+    (block,) = build_payload(spans.get_finished_spans())["conversations"]
+    assert block["conversation_id"] == "c-turn"
+    assert block["data_entity"] == "hotel-paris"
+
+
+def test_a_default_data_entity_is_inherited_and_can_be_overridden(spans, monkeypatch):
+    monkeypatch.setattr(core._state, "data_entity", "hotel-rome")
+
+    with ags.conversation("c-inherit"):
+        with ags.turn():
+            ags.user_message("hi")
+    with ags.conversation("c-explicit", data_entity="hotel-paris"):
+        with ags.turn():
+            ags.user_message("hi")
+    with ags.conversation("c-blank", data_entity="   "):
+        with ags.turn():
+            ags.user_message("hi")
+
+    payload = build_payload(spans.get_finished_spans())
+    by_id = {c["conversation_id"]: c for c in payload["conversations"]}
+    assert by_id["c-inherit"]["data_entity"] == "hotel-rome"
+    assert by_id["c-explicit"]["data_entity"] == "hotel-paris"
+    assert by_id["c-blank"]["data_entity"] == "hotel-rome"
+
+
+def test_a_decorated_handler_picks_up_a_default_set_after_decoration(spans, monkeypatch):
+    """Decoration happens at import, which is before init()."""
+
+    @ags.conversation()
+    def handle():
+        with ags.turn():
+            ags.user_message("hi")
+
+    monkeypatch.setattr(core._state, "data_entity", "hotel-rome")
+    handle()
+
+    (block,) = build_payload(spans.get_finished_spans())["conversations"]
+    assert block["data_entity"] == "hotel-rome"
+
+
+# -- a turn joins the conversation it runs in --------------------------------
+#
+# turn() takes the conversation's fields too. A turn that runs inside an open
+# conversation hands them to it: they fill what the conversation has not said
+# and replace nothing, so a decorator's constants cannot undo, call after call,
+# what the conversation learned in between.
+
+
+def _block(spans, conversation_id):
+    payload = build_payload(spans.get_finished_spans())
+    return {c["conversation_id"]: c for c in payload["conversations"]}[conversation_id]
+
+
+def test_the_with_form_of_turn_gives_its_fields_to_the_conversation(spans):
+    with ags.conversation("c-with"):
+        with ags.turn(data_entity="hotel-paris", device="mobile"):
+            ags.user_message("hi")
+
+    block = _block(spans, "c-with")
+    assert block["data_entity"] == "hotel-paris"
+    assert block["device"] == "mobile"
+    # Applied before the turn starts, so the turn's own span carries them.
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert turn.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+
+def test_a_decorated_turn_gives_its_fields_to_the_conversation_it_runs_in(spans):
+    @ags.turn(data_entity="hotel-paris", language="fr")
+    def handle():
+        ags.user_message("hi")
+
+    with ags.conversation("c-nested"):
+        handle()
+
+    block = _block(spans, "c-nested")
+    assert block["data_entity"] == "hotel-paris"
+    assert block["language"] == "fr"
+
+
+def test_an_async_decorated_turn_does_the_same(spans):
+    @ags.turn(data_entity="hotel-paris")
+    async def handle():
+        ags.user_message("hi")
+
+    async def main():
+        async with ags.conversation("c-async"):
+            await handle()
+
+    asyncio.run(main())
+
+    assert _block(spans, "c-async")["data_entity"] == "hotel-paris"
+
+
+def test_fields_on_a_turn_outside_any_conversation_still_record_nothing(spans):
+    with ags.turn(data_entity="hotel-paris"):
+        ags.user_message("hi")
+
+    assert spans.get_finished_spans() == ()
+
+
+def test_a_turn_that_names_the_open_conversation_joins_it(spans):
+    """A second scope for the same id hid the first for the length of the call:
+    the conversation's own fields went missing from the turn's spans, and a
+    metadata update made inside was lost when the call returned."""
+
+    @ags.turn(id_from="session")
+    def handle(session):
+        ags.user_message("hi")
+        ags.update_metadata({"seen": True})
+
+    with ags.conversation("c-same", data_entity="hotel-paris", customer_id="u-1") as scope:
+        handle("c-same")
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert turn.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+    assert turn.attributes[ConversationAttributes.CUSTOMER_ID] == "u-1"
+    assert scope.metadata == {"seen": True}
+    assert _block(spans, "c-same")["metadata"] == {"seen": True}
+
+
+def test_an_id_that_is_not_a_string_still_names_the_open_conversation(spans):
+    @ags.turn(id_from=lambda arguments: arguments["session"])
+    def handle(session):
+        ags.user_message("hi")
+
+    with ags.conversation("42", data_entity="hotel-paris"):
+        handle(42)
+
+    assert _block(spans, "42")["data_entity"] == "hotel-paris"
+
+
+def test_a_turn_for_another_conversation_still_opens_its_own(spans):
+    @ags.turn(id_from="session", data_entity="hotel-rome")
+    def handle(session):
+        ags.user_message("hi")
+
+    with ags.conversation("c-outer", data_entity="hotel-paris"):
+        handle("c-other")
+        with ags.turn():
+            ags.user_message("outer")
+
+    assert _block(spans, "c-other")["data_entity"] == "hotel-rome"
+    assert _block(spans, "c-outer")["data_entity"] == "hotel-paris"
+
+
+def test_a_streaming_turn_that_joins_keeps_the_conversation_while_it_drains(spans):
+    @ags.turn(id_from="session")
+    def handler(session):
+        def body():
+            yield "chunk"
+            ags.agent_message("answered")
+
+        return body()
+
+    with ags.conversation("c-stream", data_entity="hotel-paris"):
+        stream = handler("c-stream")
+    list(stream)  # drained after the conversation's block has exited
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert messages(turn) == [("agent", "answered")]
+    assert turn.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+
+def test_a_turn_never_replaces_what_the_conversation_already_says(spans):
+    with ags.conversation("c-keep", device="mobile", metadata={"plan": "pro"}):
+        with ags.turn(
+            device="desktop",
+            language="en",
+            metadata={"plan": "free", "channel": "web"},
+        ):
+            ags.user_message("hi")
+
+    block = _block(spans, "c-keep")
+    assert block["device"] == "mobile"
+    assert block["language"] == "en"
+    assert block["metadata"] == {"plan": "pro", "channel": "web"}
+
+
+def test_a_decorators_constants_do_not_undo_what_the_conversation_learned(spans):
+    """The decorator's fields are the same on every call. Replacing instead of
+    filling would reset, on each one, whatever happened since the last."""
+
+    @ags.turn(metadata={"escalated": False}, name="New chat")
+    def handle():
+        ags.user_message("hi")
+
+    with ags.conversation("c-learn") as scope:
+        handle()
+        ags.update_metadata({"escalated": True})
+        scope.set_fields({"name": "Refund"})
+        handle()
+
+        assert scope.metadata == {"escalated": True}
+
+    assert _block(spans, "c-learn")["name"] == "Refund"
+
+
+def test_a_fill_does_not_follow_a_decorated_conversation_into_its_next_call(spans):
+    @ags.conversation()
+    def handle(key):
+        with ags.turn(data_entity=key):
+            ags.user_message("hi")
+
+    handle("hotel-paris")
+    handle(None)
+
+    first, second = build_payload(spans.get_finished_spans())["conversations"]
+    assert first["data_entity"] == "hotel-paris"
+    assert "data_entity" not in second
+
+
+class _Unprintable:
+    def __str__(self):
+        raise RuntimeError("no string form")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"metadata": "abc"},
+        {"no_such_field": 1},
+        {"customer_ip_address": "not-an-ip"},
+        {"device": _Unprintable()},
+    ],
+    ids=["metadata-not-a-dict", "unknown-keyword", "bad-ip", "value-that-raises"],
+)
+def test_bad_fields_on_a_turn_never_raise(spans, fields):
+    """This runs on the way into the caller's own block."""
+
+    @ags.turn(**fields)
+    def handle():
+        ags.user_message("decorated")
+
+    with ags.conversation("c-bad"):
+        with ags.turn(**fields):
+            ags.user_message("with")
+        handle()
+
+    assert len(by_kind(spans, SpanKind.TURN)) == 2
+
+
+def test_a_turn_naming_a_disabled_conversation_records_nothing(spans):
+    """It used to open an enabled scope of its own and record anyway."""
+
+    @ags.turn(id_from="session")
+    def handle(session):
+        ags.user_message("hi")
+
+    with ags.conversation("c-off", enabled=False):
+        handle("c-off")
+
+    assert spans.get_finished_spans() == ()
+
+
+def test_a_turn_can_still_switch_itself_off_by_naming_the_conversation(spans):
+    @ags.turn(id_from="session", enabled=False)
+    def handle(session):
+        ags.user_message("not recorded")
+
+    with ags.conversation("c-on"):
+        handle("c-on")
+        with ags.turn():
+            ags.user_message("recorded")
+
+    (turn,) = by_kind(spans, SpanKind.TURN)
+    assert messages(turn) == [("end_user", "recorded")]
+
+
+# -- which data entity a conversation ends up with ----------------------------
+
+
+def _kept_warnings(caplog):
+    return [r for r in caplog.records if "keeps the first data entity" in r.getMessage()]
+
+
+def test_a_different_key_on_a_turn_is_kept_out_and_reported_once(spans, caplog):
+    """The backend keeps the first key a conversation receives. Saying so here
+    is the only place the developer would see it."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-first", data_entity="hotel-paris"):
+            with ags.turn(data_entity="hotel-rome"):
+                ags.user_message("one")
+            with ags.turn(data_entity="hotel-oslo"):
+                ags.user_message("two")
+
+    for span in spans.get_finished_spans():
+        assert span.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+    assert len(_kept_warnings(caplog)) == 1
+
+
+def test_the_same_key_in_another_casing_is_not_a_conflict(spans, caplog):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-case", data_entity="Hotel-Paris"):
+            with ags.turn(data_entity="hotel-paris"):
+                ags.user_message("hi")
+
+    assert _block(spans, "c-case")["data_entity"] == "Hotel-Paris"
+    assert _kept_warnings(caplog) == []
+
+
+def test_a_key_named_on_the_first_turn_beats_the_deployment_default(spans, monkeypatch):
+    """A per-conversation key wins over the default, and before the first span
+    nothing has reached the backend to contradict it."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with ags.conversation("c-default"):
+        with ags.turn(data_entity="hotel-paris"):
+            ags.user_message("hi")
+        with ags.turn():
+            ags.user_message("again")
+
+    for span in spans.get_finished_spans():
+        assert span.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+
+def test_once_something_is_recorded_under_the_default_it_stays(spans, monkeypatch, caplog):
+    """By then the backend has the default, and it keeps the first key. Spans
+    that switched would disagree with the row for the rest of the conversation."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-late"):
+            with ags.turn():
+                ags.user_message("first")
+            with ags.turn(data_entity="hotel-paris"):
+                ags.user_message("second")
+
+    for span in spans.get_finished_spans():
+        assert span.attributes[ConversationAttributes.DATA_ENTITY] == "the-default"
+    (warning,) = _kept_warnings(caplog)
+    assert "deployment default" in warning.getMessage()
+
+
+def test_a_key_set_by_a_turn_is_then_the_conversations_own(spans, monkeypatch, caplog):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-own") as scope:
+            scope.fill({"data_entity": "hotel-paris"})  # nothing recorded yet
+            scope.fill({"data_entity": "hotel-rome"})  # the first one stays
+
+    assert scope.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+    assert len(_kept_warnings(caplog)) == 1
+
+
+def test_what_still_records_the_default_is_a_scope_opened_without_the_key(spans, monkeypatch):
+    """Why the docs say to choose a default or per-conversation keys. The visit
+    phase has no turn to name the key on, so it records the default, and the
+    backend keeps the first key it receives."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    ags.open_conversation("c-visit")
+
+    assert _block(spans, "c-visit")["data_entity"] == "the-default"
+
+
+def test_the_first_data_entity_in_a_batch_wins(spans):
+    """The backend keeps the first key a conversation receives, so the block
+    must carry that one, or the outcome would turn on where a batch boundary
+    fell. Every other field is last-wins and has to stay that way."""
+    with ags.conversation("c-twice", data_entity="hotel-paris", device="mobile"):
+        with ags.turn():
+            ags.user_message("first")
+    with ags.conversation("c-twice", data_entity="hotel-rome", device="desktop"):
+        with ags.turn():
+            ags.user_message("second")
+
+    (block,) = build_payload(spans.get_finished_spans())["conversations"]
+    assert block["data_entity"] == "hotel-paris"
+    assert block["device"] == "desktop"
 
 
 def test_export_failure_warnings_are_rate_limited():

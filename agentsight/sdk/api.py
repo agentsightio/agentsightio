@@ -132,9 +132,17 @@ def conversation(conversation_id: Optional[str] = None, **kwargs: Any) -> Conver
     worse than a synthetic id.
 
     Fields: ``customer_id``, ``customer_ip_address``, ``device``, ``source``,
-    ``language``, ``name``, ``environment``, ``metadata``. All optional, all
-    carried on every span in the conversation so a row stays correct even
-    though no single span owns it.
+    ``language``, ``name``, ``environment``, ``data_entity``, ``metadata``. All
+    optional, all carried on every span in the conversation so a row stays
+    correct even though no single span owns it.
+
+    ``data_entity`` says which of the agent's tenants this conversation belongs
+    to — one hotel-booking agent, many hotels. A customer-chosen key
+    (``"hotel-paris"``), created on first sight, and set once: the first key
+    that reaches a conversation is the one it keeps. Without one the
+    conversation has no entity and nothing is created. ``init(data_entity=...)``
+    or ``AGENTSIGHT_DATA_ENTITY`` sets a default for a deployment that serves
+    one tenant.
 
     One caveat on ``source``, confirmed against a live backend rather than
     assumed: it is the only one of these with no column behind it. It is
