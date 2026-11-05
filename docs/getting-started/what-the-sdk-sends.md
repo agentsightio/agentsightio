@@ -58,6 +58,7 @@ Spans, grouped by conversation:
       "conversation_id": "demo-plain",
       "customer_id": "user-12345",
       "source": "web",
+      "data_entity": "hotel-paris",
       "spans": [ /* whole spans, oldest first */ ]
     }
   ]
@@ -169,6 +170,7 @@ single span that owns it.
 | `agentsight.conversation.name` | only if you pass it | `"Order questions"` |
 | `agentsight.conversation.source` | only if you pass it | `"web"` |
 | `agentsight.conversation.environment` | from the scope, `init()` or `AGENTSIGHT_ENVIRONMENT` | `"production"` |
+| `agentsight.conversation.data_entity` | from the scope, `init()` or `AGENTSIGHT_DATA_ENTITY` | `"hotel-paris"` |
 | `agentsight.conversation.metadata` | only if you pass it | `{"topic": "delivery"}` as JSON |
 
 Each of these is present only because your code supplied it. An integration that
@@ -285,7 +287,7 @@ Four requests do not carry spans, listed for completeness:
 |---|---|---|
 | Key verification | once at `init()`, on a background thread | your API key only, no conversation data |
 | Span batches | every 5 seconds by default | the payload above, gzipped above 8 KB where the server supports it |
-| Conversation upsert | before an `upload_attachments()` batch | the conversation id and environment, so the files have a conversation to land on |
+| Conversation upsert | before an `upload_attachments()` batch | the conversation id and environment, plus the data entity when the call runs inside that conversation's own scope, so the files have a conversation to land on |
 | Attachment upload | only on `upload_attachments()` | **the file contents**, base64-encoded, with their filenames and MIME types |
 
 `record_attachments()` records that files were shared without sending them.
@@ -300,6 +302,7 @@ explicit.
 | Conversation string fields | 255 characters | clamped |
 | Metadata JSON | 16 KB budget | oversized entries dropped largest-first; the payload always stays valid JSON |
 | `customer_ip` | must parse as an IP | otherwise dropped entirely |
+| `data_entity` | 255 characters, trimmed | blank counts as absent; longer is clamped; a NUL or unpaired surrogate drops the key |
 
 ## Where it goes, and how long it is kept
 

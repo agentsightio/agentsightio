@@ -71,6 +71,8 @@ more rows than you asked for.
 | `customer_id`, `customer_id__icontains` | who the conversation was with |
 | `customer_ip_address` | the recorded IP, exactly |
 | `environment` (or `env`) | `production` or `development` (`prod`/`dev` accepted) |
+| `data_entity` | one [data entity](./data-entities.md#filtering-by-entity) by key, any casing |
+| `data_entity_unassigned` | `True` for conversations with no entity, `False` for those with any |
 | `device`, `language`, `name` | what was recorded about the conversation |
 | `is_marked` | flagged conversations |
 | `include_deleted` | include the soft-deleted ones |
@@ -237,7 +239,8 @@ ags.conversations.update(                                  # write role
 ```
 
 `update()` accepts `name`, `is_marked`, `customer_id`, `device`, `language` and
-`metadata`. The identity fields are immutable server-side — a conversation's id,
+`metadata`. A conversation's `data_entity` is set once, by the first key that
+reaches it, and is refused here. The identity fields are immutable server-side — a conversation's id,
 its start time and the agent it belongs to are what make it that conversation.
 
 `metadata` here **replaces the whole document**, because that is all the

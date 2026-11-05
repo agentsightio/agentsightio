@@ -81,10 +81,13 @@ ags.tickets.get(57)                # one ticket, thread included
 ```
 
 Filters: `status` (a list ORs), `priority`, `conversation` (pk),
-`conversation_id` (business string), `has_conversation`, `has_feedback`,
+`conversation_id` (business string), `data_entity`, `data_entity_unassigned`,
+`has_conversation`, `has_feedback`,
 `tags` (comma-separated, matches any), `created_at_after/_before`,
 `updated_at_after/_before`, `search` (title), `ordering`. There is no
-`environment` filter — the route does not select on it.
+`environment` filter — the route does not select on it. The
+[data entity](./data-entities.md#filtering-by-entity) pair follows the ticket's
+conversation, so a ticket without one appears under neither.
 
 Every ticket payload embeds its full `comments` thread and the nested
 `conversation`/`feedback` summaries; there is no summary depth on this

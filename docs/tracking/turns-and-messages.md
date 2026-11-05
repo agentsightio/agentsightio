@@ -103,7 +103,9 @@ latency — is captured without being mentioned.
 
 The decorator form collapses the same shape: it opens the conversation around
 the exchange, resolving the id through `id_from`, and any conversation field
-you pass it goes onto that conversation:
+you pass it goes onto that conversation. Inside a conversation that is already
+open, a turn in either form adds its fields to that one: they fill in what the
+conversation has not been given and never replace a value it has.
 
 ```python
 @agentsight.turn(id_from="conversation_id", source="web", language="en")

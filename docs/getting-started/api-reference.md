@@ -110,7 +110,13 @@ curl "https://api.agentsight.io/api/me/" \
       "updated_at": "2026-08-01T11:13:21.607096Z"
     }
   ],
-  "capabilities": ["gzip-ingest"]
+  "capabilities": ["gzip-ingest", "data-entities"],
+  "data_entities": {
+    "limit": 500,
+    "active_count": 3,
+    "overflow_count": 0,
+    "overflow_at": null
+  }
 }
 ```
 
@@ -121,6 +127,12 @@ there is no other endpoint that reports a key's own permissions. The `slug`
 values are what an `environment=` filter or an environment-scoped write wants;
 note that two of the filters below accept only a fixed vocabulary rather than
 any slug, and each says so where it appears.
+
+`capabilities` names optional behaviours of this backend. `data-entities` means it
+supports [data entities](#data-entities); `data_entities` then holds the agent's
+standing against its cap: the limit, how many active entities sit under it, and how
+many times an unknown key arrived at the cap and its conversation went Unassigned,
+with when that last happened.
 
 The payload is returned as it arrives, so a newer release may add keys this page
 does not list. Ignore what you do not recognise.
@@ -319,6 +331,7 @@ curl "https://api.agentsight.io/api/conversations/?full=false&page_size=2" \
       "language": null,
       "environment": "production",
       "environment_id": 39,
+      "data_entity": null,
       "metadata": null,
       "started_at": "2026-08-17T13:32:32.985597Z",
       "ended_at": "2026-08-17T13:32:32.985700Z",
@@ -341,6 +354,7 @@ curl "https://api.agentsight.io/api/conversations/?full=false&page_size=2" \
       "language": "en",
       "environment": "development",
       "environment_id": 40,
+      "data_entity": "hotel-paris",
       "metadata": {
         "build": "c9c304e",
         "region": "eu-central",
@@ -390,6 +404,8 @@ you and offers `list_full()` as the named opt-in.
 | `name` | part of the display name, case-insensitive |
 | `device`, `language` | what was recorded about the conversation |
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
+| `data_entity` | one [data entity](#filtering-by-entity) by key, any casing |
+| `data_entity_unassigned` | `true` for rows with no entity, `false` for rows with any |
 | `is_marked` | flagged conversations |
 | `include_deleted` | include soft-deleted rows — see [Deleting](#deleting-is-soft) |
 | `include_tickets` | **narrows to conversations with at least one ticket, and puts each row's tickets on the payload in full** — see the warning below |
@@ -524,6 +540,7 @@ curl "https://api.agentsight.io/api/conversations/732/" \
   "language": "hr",
   "environment": "production",
   "environment_id": 39,
+  "data_entity": null,
   "metadata": {
     "plan": "pro",
     "channel": "chat-widget",
@@ -821,7 +838,7 @@ whitespace, and not allowed to be empty.
 
 All optional; send only what you are changing. Everything else is immutable —
 the business `conversation_id`, its start time and the agent it belongs to are
-what make it that conversation.
+what make it that conversation, and its `data_entity` is set once.
 
 ```bash
 curl -X PATCH "https://api.agentsight.io/api/conversations/738/update/" \
@@ -1106,6 +1123,7 @@ other buckets.
 | `agent`, `user` | who it is about, and who left it |
 | `category` | the server-side category, where one is set |
 | `environment` (or `env`) | `production`, `development`, `prod` or `dev` |
+| `data_entity`, `data_entity_unassigned` | through its conversation — see [Filtering by entity](#filtering-by-entity) |
 | `has_comment` | rows with free text, or rows without |
 | `comment_contains` | text inside the comment |
 | `created_at_after`, `created_at_before` | when it was left |
@@ -1423,6 +1441,7 @@ context summaries, `null` when the ticket is not anchored.
 | `conversation` | the anchored conversation, by numeric id |
 | `conversation_id` | the anchored conversation, by business id |
 | `has_conversation`, `has_feedback` | anchored rows, or unanchored ones |
+| `data_entity`, `data_entity_unassigned` | through its conversation — see [Filtering by entity](#filtering-by-entity) |
 | `tags` | comma-separated; matches tickets carrying **any** of the named tags |
 | `created_at_after`, `created_at_before` | when it was filed |
 | `updated_at_after`, `updated_at_before` | when it last moved |
@@ -1659,6 +1678,108 @@ are matched against, so renaming it means the next span carrying the old name
 creates a second action beside this one. Change the display name instead; that
 is what it is for.
 
+## Data entities
+
+A data entity is one of the clients an agent serves: one hotel-booking agent, many
+hotels. The tracking SDK creates one the first time a key arrives on a conversation,
+so nothing here is needed to start. You can also declare one here ahead of its
+traffic. [The guide](/getting-started/data-entities) covers how keys behave.
+
+The agent is in the path. Read your own id from [`GET /api/me/`](#who-this-key-is); a
+key whose agent differs from the path gets `404`.
+
+| Verb | Path | Role | Does |
+|---|---|---|---|
+| <span class="api-method get">GET</span> | `/api/agents/{agent_id}/data-entities/` | read | list, paginated; deleted rows only with `?include_deleted=true` |
+| <span class="api-method get">GET</span> | `/api/agents/{agent_id}/data-entities/{id}/` | read | one row, deleted or not |
+| <span class="api-method post">POST</span> | `/api/agents/{agent_id}/data-entities/` | write | create `{key, name?, description?, metadata?}` |
+| <span class="api-method patch">PATCH</span> | `/api/agents/{agent_id}/data-entities/{id}/` | write | change `name`, `description`, `metadata` |
+| <span class="api-method delete">DELETE</span> | `/api/agents/{agent_id}/data-entities/{id}/` | write | soft delete, `204`, safe to repeat |
+| <span class="api-method post">POST</span> | `/api/agents/{agent_id}/data-entities/{id}/restore/` | write | undo the delete, returns the row |
+
+```bash
+curl -X POST "https://api.agentsight.io/api/agents/20/data-entities/" \
+  -H "Authorization: Api-Key ags_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "hotel-paris",
+    "name": "Hotel Paris",
+    "description": "City-centre flagship.",
+    "metadata": {"rooms": 220}
+  }'
+```
+
+<details>
+<summary><code>201 Created</code></summary>
+
+```json
+{
+  "id": 12,
+  "key": "hotel-paris",
+  "name": "Hotel Paris",
+  "description": "City-centre flagship.",
+  "metadata": { "rooms": 220 },
+  "origin": "api",
+  "first_seen_at": "2026-11-02T09:14:07.112233Z",
+  "last_seen_at": null,
+  "is_deleted": false,
+  "deleted_at": null,
+  "conversation_count": 0,
+  "receiving_traffic": false,
+  "embed_token_count": 0
+}
+```
+
+</details>
+
+- **`key`** is trimmed, 1–255 characters, matched case-insensitively, and permanent.
+  It is what tracking sends as `data_entity` and what the filters take. On `PATCH`, a
+  `key` in the body is a `400` whatever its value.
+- **`name`** defaults to the key. An empty `name` on `PATCH` goes back to the key.
+- **`metadata`** is replaced whole, and `null` clears it.
+- **`origin`** is how the row began: `sdk`, `dashboard`, `api` or `import`.
+- **`receiving_traffic`** is `true` on a deleted row that conversations are still
+  landing on.
+- **`embed_token_count`** is how many active embed tokens are pinned to the row. They
+  stop working while it is deleted.
+
+`POST` answers `400` when the key already exists in any casing, including on a
+deleted row, or when the agent already has 500 active entities. `restore` answers
+`400` at the cap too, because a restored row takes its slot back.
+
+### Filtering by entity
+
+Conversations, feedback, tickets and token usage take the same two parameters:
+
+| Filter | Selects on |
+|---|---|
+| `data_entity` | one key, any casing |
+| `data_entity_unassigned` | `true` for rows with no entity, `false` for rows with any |
+
+With neither, every row comes back. **A blank `data_entity` also reads as no filter**,
+so do not build the parameter from a value that can be empty. **A backend without
+the `data-entities` capability ignores both parameters** and returns every row, so
+read `capabilities` from [`GET /api/me/`](#who-this-key-is) before relying on them. **A backend without
+the `data-entities` capability ignores both parameters** and returns every row, so
+read `capabilities` from [`GET /api/me/`](#who-this-key-is) before relying on them. Feedback and tickets
+follow their conversation, so agent-level feedback and tickets without a conversation
+appear under neither.
+
+Conversation and usage rows carry their key as `data_entity`, or `null` for
+Unassigned. A conversation's entity is set once and cannot be changed: `data_entity`
+is not an updatable field.
+
+### On the wire, and on embed tokens
+
+The tracking SDK sends the key as `data_entity` on each conversation block in a batch.
+An over-255-character key is a `400` for the batch, so the SDK clamps it first. An
+older backend drops the field without failing.
+
+Embed tokens are managed in the dashboard, not with an API key. A token can be pinned
+to one entity when it is created; its `data_entity` field then reads
+`{"id", "key", "name"}`, and `null` on an unscoped token. The server applies that scope
+to everything the embed reads.
+
 ## Usage
 
 What your models cost. Read-only — rows are written from the token counts each
@@ -1690,6 +1811,7 @@ curl "https://api.agentsight.io/api/token-usage/?conversation_id=demo-dev-metada
       "conversation": 736,
       "conversation_id": "demo-dev-metadata-956f",
       "environment": "development",
+      "data_entity": null,
       "turn_id": "bd5920c169e03fd9",
       "model": "gpt-4o-mini",
       "prompt_tokens": 142,
@@ -1729,6 +1851,7 @@ into the row.
 | `conversation_id` | one conversation, by business id |
 | `turn_id` | one exchange |
 | `environment` | **any slug the agent has** — and it is spelled `environment`, never `env` |
+| `data_entity`, `data_entity_unassigned` | see [Filtering by entity](#filtering-by-entity) |
 | `cost_source` | `backend`, `unpriced` or `reported` |
 | `incomplete` | turns that did not finish |
 | `started_at_after`, `started_at_before` | when the spend happened |

@@ -90,4 +90,11 @@ environment rather than being dropped, and the SDK warns once naming the value i
 could not place. A typo costs you the environment tag; it never costs you the
 data.
 
+## Environments and data entities
+
+An environment separates test traffic from real traffic. A
+[data entity](./data-entities.md) separates one client from another when one agent
+serves several. The two are independent, a conversation carries one of each, and
+filters compose.
+
 For more configuration options, see the [Configuration](./configuration.md) page.

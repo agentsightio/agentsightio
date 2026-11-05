@@ -119,7 +119,8 @@ ags.me()
     { "id": 39, "slug": "production", "name": "Production", "is_production": true },
     { "id": 40, "slug": "development", "name": "Development", "is_production": false }
   ],
-  "capabilities": ["…"]
+  "capabilities": ["…"],
+  "data_entities": { "limit": 500, "active_count": 3, "overflow_count": 0, "overflow_at": null }
 }
 ```
 
@@ -131,6 +132,10 @@ permissions. A `read` key raises `PermissionDeniedError` on every method marked
 The payload is returned exactly as it arrives, so a newer backend may add keys
 this page does not list. It is fetched once and cached for the life of the
 client — pass `refresh=True` to fetch it again.
+
+`data_entities` is the agent's standing against its
+[cap on data entities](./data-entities.md#the-cap). Those counters move, so they
+are as old as the last fetch.
 
 `environments()` is the flat slug list, which is the form every `environment=`
 filter wants:
@@ -187,11 +192,13 @@ conversation, a message, an action log, a button click or an attachment** —
 those belong to the tracking SDK, and two ways to write the same row would mean
 two sets of semantics for how that row reaches the dashboards.
 
-The three things it does create are not records of a run. Feedback, for a
+The four things it does create are not records of a run. Feedback, for a
 reason [its own page](./feedbacks.md) explains. An action **definition** — note
 that this is the definition, not the action *log*: `actions.create()` declares
 that a capability exists, and the tracking SDK adopts that declaration the first
-time the capability actually runs; see [Actions](./actions.md). And
+time the capability actually runs; see [Actions](./actions.md). A
+[data entity](./data-entities.md), which declares a client ahead of its traffic
+and which tracking adopts by key. And
 [tickets](./tickets.md) — workflow items a team, or the agent itself, decides
 to file, which no span could ever observe either.
 
@@ -214,6 +221,7 @@ ags.spans.list(kind="button")
 | [`feedbacks`](./feedbacks.md) | the feedback surface, and the one place this records |
 | [`tickets`](./tickets.md) | the agent's workflow items — full CRUD, filed as the machine |
 | [`actions`](./actions.md) | action definitions, their logs, their labels |
+| [`data_entities`](./data-entities.md) | the clients one agent serves — names, deletes, restores |
 | [`usage`](./usage.md) | tokens spent and what they cost |
 | [`spans`](./spans.md) | the raw archive everything else is projected from |
 

@@ -69,6 +69,10 @@ These need context that only your application has, so they are passed on the con
 | **Source**           | Which channel started the conversation (web, WhatsApp, Viber, etc.). Recorded today; not yet surfaced in the dashboard. | `source`  may be passed on the conversation.   |
 | **Language**         | Measures the language used in the conversation.                             | `language`  must be passed on the conversation. |
 
+`data_entity` powers no metric of its own. It narrows all of them: when one agent
+serves several clients, the analytics report can be filtered to one. See
+[Data entities](./data-entities.md).
+
 ## Specialized Metrics
 
 These metrics are based on behavioral patterns or explicit user feedback rather than static conversation fields.

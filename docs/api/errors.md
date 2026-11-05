@@ -103,9 +103,11 @@ no longer have to discover the role that way: `ags.me()["role"]` reports it.
 
 :::info `ValidationError` is raised locally too
 An unknown filter name, a sentiment that is not one of the three, a `group_by`
-the summary does not offer — all of these raise before anything is sent. The
-message names the values that would have worked. You can tell the two apart:
-a locally-raised one has `status_code` of `None` and an empty `errors`.
+the summary does not offer — all of these raise before anything is sent. So does
+a [data entity filter](./data-entities.md#filtering-by-entity) on a backend that
+would ignore it. The message names the values that would have worked. You can
+tell the two apart: a locally-raised one has `status_code` of `None` and an
+empty `errors`.
 
 ```python
 ags.conversations.list(started_after="2026-01-01")

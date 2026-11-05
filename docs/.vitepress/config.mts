@@ -78,6 +78,7 @@ export default defineConfig({
           { text: 'What gets traced & why', link: '/getting-started/what-gets-traced' },
           { text: 'What the SDK sends', link: '/getting-started/what-the-sdk-sends' },
           { text: 'Environments', link: '/getting-started/environments' },
+          { text: 'Data entities', link: '/getting-started/data-entities' },
           { text: 'Deployment & limitations', link: '/getting-started/deployment' },
           { text: 'REST API reference', link: '/getting-started/api-reference' }
         ]
@@ -130,6 +131,7 @@ export default defineConfig({
           { text: 'Feedbacks', link: '/api/feedbacks' },
           { text: 'Tickets', link: '/api/tickets' },
           { text: 'Actions', link: '/api/actions' },
+          { text: 'Data entities', link: '/api/data-entities' },
           { text: 'Usage', link: '/api/usage' },
           { text: 'Spans', link: '/api/spans' },
           { text: 'Pagination', link: '/api/pagination' },

@@ -63,14 +63,29 @@ agentsight.init(environment="production")
 See [Environments](./environments.md); an unrecognised value is reported at
 startup rather than discovered later.
 
+## The data entity
+
+When a deployment serves one client of an agent that serves several, it can name
+that client once — pass `data_entity=` to `init()`, or set
+`AGENTSIGHT_DATA_ENTITY`:
+
+```python
+agentsight.init(data_entity="hotel-paris")
+```
+
+A conversation that names its own key wins over the default. If your conversations
+carry their own keys, leave this unset. See
+[Data entities](./data-entities.md).
+
 ## Environment variables
 
-Four, all optional:
+Five, all optional:
 
 | Variable | Effect |
 |---|---|
 | `AGENTSIGHT_API_KEY` | the key `init()` uses when none is passed |
 | `AGENTSIGHT_ENVIRONMENT` | selects the environment for the whole deployment |
+| `AGENTSIGHT_DATA_ENTITY` | the default data entity for the whole deployment |
 | `AGENTSIGHT_FILE_EXPORTER` | writes spans to a directory instead of sending them |
 | `AGENTSIGHT_APP_URL` | cosmetic — the dashboard address quoted in "find your API key at …" error messages |
 
