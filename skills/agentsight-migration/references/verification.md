@@ -135,5 +135,11 @@ is gitignored, so nobody commits a transcript or deletes one as stray. Then:
   clock check was the only opportunity to catch it being wrong.
 - What is not migrated, repeated: no tool calls, tokens, cost, actions,
   feedback, attachments or geolocation, permanently.
+- When a data entity column was mapped: the validator's key list, and that
+  the dashboard shows the same keys on the Review step before anything is
+  written — with which are new — and reports, when the import is done, how
+  many entities it created and how many conversations landed Unassigned past
+  the cap or on a deleted entity. An undo does not remove the entities a run
+  created; they are deleted on the Data entities page.
 - That undo exists, is run-scoped, and frees the ids again — which is what
   makes uploading the first part a low-risk thing to do.

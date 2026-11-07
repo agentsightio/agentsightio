@@ -30,7 +30,7 @@ BASE = "2016-06-01T10:00:00Z"
 # stops matching the shipped snapshot, the contract moved: re-run
 # regenerate_corpus.py from an ags_backend checkout and paste the digest it
 # prints here, in the same commit as the refreshed snapshot and corpus.
-CORPUS_CONTRACT_SHA256 = "701b2baa28afca351de36a6b8a17ed8d3b0caa27dd9ddf3bdab9a75d55f49755"
+CORPUS_CONTRACT_SHA256 = "7ee08d7759235edd118ce28e65e36729339c7014f388f82b4eb01c059a1c7744"
 
 
 def _load(name, path):
@@ -284,6 +284,8 @@ class TestFalseRejections:
     def test_boundary_lengths_are_legal(self, ctx):
         assert codes([conversation("x" * 255)], ctx) == []
         assert codes([conversation("x" * 256)], ctx) == ["too_long"]
+        assert codes([conversation(data_entity="k" * 255)], ctx) == []
+        assert codes([conversation(data_entity="k" * 256)], ctx) == ["too_long"]
         assert codes([conversation(messages=[message(content="c" * 100_000)])], ctx) == []
         assert codes([conversation(messages=[message(content="c" * 100_001)])], ctx) == [
             "too_long"
@@ -301,9 +303,16 @@ class TestFalseRejections:
 
     def test_optional_fields_may_be_null_or_absent(self, ctx):
         record = conversation(name=None, customer_id=None, language=None, device=None,
-                              metadata=None)
+                              data_entity=None, metadata=None)
         assert codes([record], ctx) == []
         assert codes([conversation()], ctx) == []
+
+    @pytest.mark.parametrize("key", ["", "   ", "\t", "  hotel-paris  ", "Hotel-Paris"])
+    def test_a_blank_or_padded_data_entity_is_not_a_finding(self, key, ctx):
+        """The server trims the key and reads a blank as "no entity" (design
+        decision 8), exactly as the SDK does. A validator that rejected a blank
+        column would be stricter than the server — the one thing it may not be."""
+        assert codes([conversation(data_entity=key)], ctx) == []
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +322,7 @@ class TestFalseRejections:
 
 class TestValueRules:
     @pytest.mark.parametrize(
-        "field", ["conversation_id", "name", "customer_id", "language", "device"]
+        "field", ["conversation_id", "name", "customer_id", "language", "device", "data_entity"]
     )
     def test_nul_in_every_conversation_text_field(self, field, ctx):
         assert check([conversation(**{field: "a\x00b"})], ctx)[0][1:] == ("nul_byte", field)
@@ -380,6 +389,9 @@ class TestSchemaRules:
 
     def test_metadata_as_a_list_is_a_wrong_type_not_a_schema_violation(self, ctx):
         assert codes([conversation(metadata=[])], ctx) == ["wrong_type"]
+
+    def test_a_non_string_data_entity_is_a_wrong_type(self, ctx):
+        assert check([conversation(data_entity=42)], ctx) == [(0, "wrong_type", "data_entity")]
 
     def test_a_non_object_conversation(self, ctx):
         assert check(["nope"], ctx) == [(0, "not_an_object", None)]
@@ -553,7 +565,44 @@ class TestCli:
     def test_the_report_always_names_what_it_cannot_check(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
         run_cli([path])
-        assert "conversation_already_exists" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "conversation_already_exists" in out
+        assert "data entity keys" in out
+
+    def test_the_report_lists_the_data_entity_keys_the_file_names(self, tmp_path, capsys):
+        """The keys are what the user must confirm before uploading: an unknown
+        key becomes an entity, and a conversation's entity is permanent. Counted
+        the way the server matches them — trimmed, case-insensitively, first
+        spelling kept — across every part file."""
+        first = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="Hotel-Paris"),
+            conversation("b", data_entity="  hotel-paris "),
+            conversation("c", data_entity="hotel-madrid"),
+            conversation("d", data_entity=""),
+            conversation("e"),
+        ]}, name="part-01.json")
+        second = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("f", data_entity="HOTEL-PARIS"),
+        ]}, name="part-02.json")
+        assert run_cli([first, second]) == 0
+        out = capsys.readouterr().out
+        assert "DATA ENTITIES -- 2 distinct key(s) on 4 conversation(s); 2 without a key" in out
+        assert "  Hotel-Paris  (3)" in out
+        assert "  hotel-madrid  (1)" in out
+        assert "cannot be changed afterwards" in out
+
+    def test_a_file_without_data_entities_has_no_entity_section(self, tmp_path, capsys):
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+        run_cli([path])
+        assert "DATA ENTITIES" not in capsys.readouterr().out
+
+    def test_the_data_entity_list_is_capped_like_the_findings(self, tmp_path, capsys):
+        records = [conversation(f"c{i}", data_entity=f"hotel-{i}") for i in range(12)]
+        path = write(tmp_path, {"schema_version": 1, "conversations": records})
+        run_cli([path, "--max-examples", "3"])
+        out = capsys.readouterr().out
+        assert "12 distinct key(s)" in out
+        assert "9 more not shown" in out
 
     def test_the_banner_names_the_snapshot_commit_and_version(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})

@@ -175,6 +175,21 @@ def build_corpus():
     )
     case("earliest_timestamp", [_conversation("early", started_at="2000-01-01T00:00:00Z",
                                               messages=[_message(timestamp="2000-01-01T00:00:00Z")])])
+    # The data entity key is validated like the other optional text fields and
+    # NORMALISED unlike them: trimmed, and blank means no key (decision 8). The
+    # server stages "  hotel-paris  " as "hotel-paris" and all four blanks as
+    # None; none of that is a finding, and a validator that rejected a blank
+    # would be stricter than the server.
+    case("data_entity_key", [_conversation("de-key", data_entity="Hotel-Paris")])
+    case(
+        "data_entity_blank_means_no_key",
+        [
+            _conversation("de-null", data_entity=None),
+            _conversation("de-empty", data_entity=""),
+            _conversation("de-space", data_entity="   "),
+            _conversation("de-padded", data_entity="  hotel-paris  "),
+        ],
+    )
 
     # ---- metadata rules --------------------------------------------------
     case("metadata_objects_11_deep", [_conversation("obj11", metadata=_nest_objects(11))])
@@ -201,7 +216,7 @@ def build_corpus():
         ],
     )
 
-    # ---- NUL, all five sites --------------------------------------------
+    # ---- NUL, all six sites ---------------------------------------------
     case(
         "nul_text_fields",
         [
@@ -211,6 +226,7 @@ def build_corpus():
                 customer_id="cu\x00st",
                 language="e\x00n",
                 device="io\x00s",
+                data_entity="ho\x00tel",
             )
         ],
     )
@@ -317,6 +333,7 @@ def build_corpus():
     )
     case("missing_field", [{"conversation_id": "nomsg", "started_at": BASE}])
     case("metadata_wrong_type", [_conversation("meta-list", metadata=[])])
+    case("data_entity_wrong_type", [_conversation("de-int", data_entity=42)])
     case("empty_content", [_conversation("empty", messages=[_message(content="   ")])])
     case("not_an_object", ["a string, not a conversation"])
 

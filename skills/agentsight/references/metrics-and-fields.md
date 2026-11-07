@@ -147,4 +147,6 @@ with agentsight.conversation(session_id, data_entity=hotel_code):
   data, use a scoped embed token: [embed.md](embed.md).
 - **Coverage.** Analytics report, conversations, feedback, tickets, token usage,
   saved reports. Agent-level feedback and tickets without a conversation appear
-  only under All. Imported history has no entity today.
+  only under All. Imported history carries an entity when its import file names
+  one per conversation (`data_entity`, mapped by the migration skill's
+  interview); imported without one, it is Unassigned.

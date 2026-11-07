@@ -24,6 +24,11 @@ WHAT THIS CANNOT CHECK, ever:
   * ids held by another open import run (server-side staging)
   * run bookkeeping (declared counts, per-agent open-run cap)
   * the exact chunk byte sizes, which the browser's serializer measures
+  * what a `data_entity` key resolves to -- the agent's existing entities, and
+    its cap on active ones. The server matches each key case-insensitively
+    at commit, creates an entity for an unknown key, and past the cap stores
+    the conversation Unassigned and counts it in the run summary. This script
+    reports the distinct keys it saw so the user can confirm them first.
 
 So a clean report means "nothing in these files is wrong on its own". It never
 means the upload will succeed, and it says nothing at all about whether the
@@ -48,7 +53,7 @@ except ImportError:  # pragma: no cover - exercised by hand, not in CI
 
 NUL = "\x00"
 MAX_DETAIL = 160
-TEXT_FIELDS = ("conversation_id", "name", "customer_id", "language", "device")
+TEXT_FIELDS = ("conversation_id", "name", "customer_id", "language", "device", "data_entity")
 FORBIDDEN_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 
 # Mirrors `_SCHEMA_KEYWORD_CODES` (validation.py) and KEYWORD_CODES
@@ -586,6 +591,29 @@ def validate_file(path, data, size, ctx, findings, warnings, seen_ids):
     return len(conversations), messages
 
 
+def collect_data_entities(data, stats):
+    """Count the file's `data_entity` keys into `stats`, the way the server
+    will read them: trimmed, blank meaning no key, matched case-insensitively
+    with the first spelling kept. A summary only -- which keys exist for the
+    agent, and how many slots are free under its cap, is the server's to know.
+    """
+    conversations = data.get("conversations") if isinstance(data, dict) else None
+    if not isinstance(conversations, list):
+        return
+    keys = stats["data_entity_keys"]
+    for conversation in conversations:
+        if not isinstance(conversation, dict):
+            continue
+        raw = conversation.get("data_entity")
+        key = raw.strip() if isinstance(raw, str) else ""
+        if not key:
+            stats["without_data_entity"] += 1
+            continue
+        stats["with_data_entity"] += 1
+        entry = keys.setdefault(key.lower(), [key, 0])
+        entry[1] += 1
+
+
 def read_file(path):
     raw = Path(path).read_bytes()
     # The browser's File.text() strips a BOM and substitutes U+FFFD for invalid
@@ -603,9 +631,38 @@ NOT CHECKED HERE -- the server checks these when the file is uploaded:
   staging collisions             an id held by another open import run
   run bookkeeping                declared counts and the per-agent open-run cap
   exact chunk byte sizes         measured by the browser's serializer, not this one
+  data entity keys               matched to the agent's entities at commit; an unknown
+                                 key creates one, and past the agent's cap on active
+                                 entities the conversation lands Unassigned instead
 A clean report means "nothing in these files is wrong on its own". It never
 means the upload will succeed, and it cannot see a wrong timezone at all.
 """.rstrip()
+
+
+def render_data_entities(stats, max_examples):
+    """The keys the file names, for the user to confirm BEFORE uploading: a
+    conversation's entity is permanent, and an unknown key becomes an entity."""
+    keys = stats["data_entity_keys"]
+    if not keys:
+        return []
+    out = [
+        "",
+        f"DATA ENTITIES -- {len(keys)} distinct key(s) on "
+        f"{stats['with_data_entity']:,} conversation(s); "
+        f"{stats['without_data_entity']:,} without a key (Unassigned)",
+    ]
+    ordered = sorted(keys.values(), key=lambda entry: (-entry[1], entry[0].lower()))
+    for spelling, count in ordered[:max_examples]:
+        out.append(f"  {spelling}  ({count:,})")
+    hidden = len(ordered) - max_examples
+    if hidden > 0:
+        out.append(f"  ... {hidden:,} more not shown (--max-examples)")
+    out.append(
+        "Keys are matched case-insensitively and trimmed; an unknown key creates an "
+        "entity on import, and a conversation's entity cannot be changed afterwards. "
+        "Confirm these are the keys live tracking uses before uploading."
+    )
+    return out
 
 
 def render(findings, warnings, stats, contract, max_examples):
@@ -646,6 +703,8 @@ def render(findings, warnings, stats, contract, max_examples):
         out.append("WARNINGS (these do not affect the exit code)")
         for warning in warnings:
             out.append(f"  {warning}")
+
+    out.extend(render_data_entities(stats, max_examples))
 
     out.append("")
     out.append(CANNOT_CHECK)
@@ -695,7 +754,14 @@ def main(argv=None):
     contract = {"source": describe_contract(manifest, limits)}
 
     findings, warnings, seen_ids = [], [], {}
-    stats = {"files": len(args.files), "conversations": 0, "messages": 0}
+    stats = {
+        "files": len(args.files),
+        "conversations": 0,
+        "messages": 0,
+        "with_data_entity": 0,
+        "without_data_entity": 0,
+        "data_entity_keys": {},
+    }
     for path in args.files:
         try:
             data, size = read_file(path)
@@ -710,6 +776,7 @@ def main(argv=None):
         )
         stats["conversations"] += conversations
         stats["messages"] += messages
+        collect_data_entities(data, stats)
 
     print(render(findings, warnings, stats, contract, args.max_examples))
     return 1 if findings else 0

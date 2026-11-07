@@ -347,6 +347,76 @@
     ]
   },
   {
+    "name": "data_entity_key",
+    "conversations": [
+      {
+        "conversation_id": "de-key",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": "Hotel-Paris"
+      }
+    ]
+  },
+  {
+    "name": "data_entity_blank_means_no_key",
+    "conversations": [
+      {
+        "conversation_id": "de-null",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": null
+      },
+      {
+        "conversation_id": "de-empty",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": ""
+      },
+      {
+        "conversation_id": "de-space",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": "   "
+      },
+      {
+        "conversation_id": "de-padded",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": "  hotel-paris  "
+      }
+    ]
+  },
+  {
     "name": "metadata_objects_11_deep",
     "conversations": [
       {
@@ -573,7 +643,8 @@
         "name": "na\u0000me",
         "customer_id": "cu\u0000st",
         "language": "e\u0000n",
-        "device": "io\u0000s"
+        "device": "io\u0000s",
+        "data_entity": "ho\u0000tel"
       }
     ]
   },
@@ -843,6 +914,23 @@
           }
         ],
         "metadata": []
+      }
+    ]
+  },
+  {
+    "name": "data_entity_wrong_type",
+    "conversations": [
+      {
+        "conversation_id": "de-int",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": 42
       }
     ]
   },

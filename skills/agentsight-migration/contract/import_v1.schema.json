@@ -3,7 +3,7 @@
   "$id": "urn:agentsight:data-imports:import:v1",
   "title": "AgentSight conversation import file (v1)",
   "description": "The format for bulk-importing historical conversations and messages into AgentSight. Only fields that map 1:1 onto a storable column are accepted; unknown keys are an error rather than being ignored, so a typo like 'converstaion_id' fails loudly instead of silently dropping the value.",
-  "$comment": "Three contract rules cannot be expressed in JSON Schema and are enforced only by the backend (data_imports/validation.py): metadata nesting depth (max 10), metadata serialized size (max 16 KB), and each message timestamp being at or after its conversation's started_at. Passing this schema is necessary, never sufficient. Client-side validation against this file is a UX nicety; the backend is the authority.",
+  "$comment": "Three contract rules cannot be expressed in JSON Schema and are enforced only by the backend (data_imports/validation.py): metadata nesting depth (max 10), metadata serialized size (max 16 KB), and each message timestamp being at or after its conversation's started_at. A fourth is resolved at commit, not at validation: data_entity keys are matched against the agent's existing data entities and created when unknown, up to the agent's cap, past which the conversation is stored without an entity. Passing this schema is necessary, never sufficient. Client-side validation against this file is a UX nicety; the backend is the authority.",
 
   "type": "object",
   "additionalProperties": false,
@@ -57,6 +57,11 @@
         "device": {
           "$ref": "#/$defs/optionalText",
           "description": "Free-form device or channel marker, e.g. 'web', 'ios'."
+        },
+        "data_entity": {
+          "$ref": "#/$defs/optionalText",
+          "description": "Which of this agent's data entities the conversation belongs to — one hotel, one tenant, one client — as the key your live tracking passes for it, e.g. 'hotel-paris'. Optional: absent, null or blank means no entity. Trimmed, matched case-insensitively against the agent's existing entities; an unknown key creates one on import, up to the agent's limit of active entities, past which the conversation is stored without an entity and the run summary counts it. Permanent once imported — a conversation's entity cannot be changed afterwards.",
+          "$comment": "Same width and NUL rule as the other optional text fields; the limit is measured before trimming. The cap and the case-insensitive match are checked at commit against the agent's live entity list, which no schema can see — a file with 600 distinct keys passes validation."
         },
         "metadata": {
           "$ref": "#/$defs/metadata",

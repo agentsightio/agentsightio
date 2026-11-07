@@ -21,6 +21,7 @@ replace it, and nothing here is fetched.
 - [Senders](#senders)
 - [Timestamps](#timestamps)
 - [Metadata](#metadata)
+- [Data entities](#data-entities)
 - [What an import does not carry](#what-an-import-does-not-carry)
 - [Dedup, undo, and the environment](#dedup-undo-and-the-environment)
 - [The rules JSON Schema cannot express](#the-rules-json-schema-cannot-express)
@@ -60,10 +61,13 @@ Required: `conversation_id`, `started_at`, `messages`.
 | `customer_id` | optional string or `null` — the end user's id in the source system |
 | `language` | optional string or `null` |
 | `device` | optional string or `null` |
+| `data_entity` | optional string or `null` — the key of the agent's data entity (hotel, tenant, client) this conversation belongs to. See [Data entities](#data-entities) |
 | `metadata` | optional object or `null` |
 
-The four optional text fields share one length cap. `null` and *absent* are
-equivalent; write whichever is natural for your exporter.
+The five optional text fields share one length cap. `null` and *absent* are
+equivalent; write whichever is natural for your exporter. `data_entity` is the
+one field the server normalises: trimmed, and an empty or whitespace-only
+value means *no entity*, the same as `null`.
 
 ## Each message
 
@@ -157,9 +161,43 @@ NUL bytes (`U+0000`) are rejected anywhere in any string — content, ids, text
 fields, metadata keys and values alike. Postgres cannot store them. They turn
 up in exports from systems that stored binary in a text column.
 
+## Data entities
+
+One agent can serve many clients — one booking agent, many hotels — and a
+conversation says which with `data_entity`: the same key the live integration
+passes as `agentsight.conversation(..., data_entity="hotel-paris")`. The
+dashboard and the embedded client dashboard filter by it, and an embed token
+can be pinned to one entity so a client sees only its own history. Without it
+a conversation is **Unassigned**, which is where every import landed before
+this field existed.
+
+The server resolves the key at commit, against the agent's live entity list —
+nothing the validator can see:
+
+- **Trimmed, matched case-insensitively.** `Hotel-Paris` and ` hotel-paris `
+  are one entity; a key that exists links to it in any spelling.
+- **An unknown key creates an entity** the first time it is seen, named after
+  the key as the first conversation in file order spelt it, with origin
+  `import`. There is no separate "declare the entities" step.
+- **An agent holds up to 500 active entities.** A conversation whose unknown
+  key would be one more is stored Unassigned instead, and the run summary
+  counts it ("conversations past the cap"). Known keys keep working at the cap.
+- **A deleted entity's key still links** to the deleted entity, which the
+  entities page then flags and offers to restore; the run summary counts those
+  conversations too.
+- **Permanent.** A conversation's entity cannot be changed afterwards. The
+  recovery from a wrong key is undo and re-import — and undo leaves the
+  entities the run created in place (they may have live traffic by then),
+  for the user to delete on the Data entities page.
+
+So the keys in the file must be the keys live tracking uses, or history and
+live traffic land on two entities. The validator prints the distinct keys it
+finds with their counts; put that list in front of the user before uploading.
+
 ## What an import does not carry
 
-Conversations and their messages. That is all.
+Conversations and their messages — and, per conversation, which data entity
+they belong to. That is all.
 
 **No token usage, no cost, no tool calls, no actions, no feedback, no
 attachments, no IP address and therefore no geolocation.** The dashboard's

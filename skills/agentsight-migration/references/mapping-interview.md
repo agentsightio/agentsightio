@@ -1,7 +1,7 @@
 # The mapping interview
 
 An import is irreversible in one direction only — it can be undone, but a
-wrong answer that nobody notices becomes the user's history. Three of the
+wrong answer that nobody notices becomes the user's history. Four of the
 questions here have no recoverable default, and one of them (the timezone) is
 unverifiable by anything downstream. So the interview is not a formality
 before the real work; it *is* the part of this workflow that decides whether
@@ -35,7 +35,7 @@ senders structured?" is not.
 
 ## Wave 1 — no defaults
 
-Four questions. None has a safe default, and all four are unrecoverable
+Five questions. None has a safe default, and all five are unrecoverable
 without an undo and a re-import.
 
 **1. Which agent, and which environment?** Dedup is scoped per agent, so this
@@ -44,10 +44,6 @@ matters more than it looks: non-production environments are excluded from
 analytics reports by design, so history imported to `development` is present
 in the transcripts and absent from every chart, which reads as a bug. Ask;
 never infer it from the agent's name.
-
-If the source mixes several clients of one agent, say so now: the import format has
-no data entity field today, so imported conversations land Unassigned, and a
-conversation's entity can be set later only by a tracked span that carries a key.
 
 **2. Which field is `conversation_id`, and which prefix goes on it?** Present
 the candidates you found. Then two follow-ups, because the column being
@@ -94,13 +90,44 @@ nothing downstream will reveal it.** The pilot's clock check at step 7 is the
 only opportunity to catch it, and it depends on the user actually recognising
 the times.
 
+**5. Does this one agent serve several clients — and which column names the
+client?** One booking agent, many hotels; one support bot, many tenants. If
+so, that column becomes `data_entity`, the per-conversation key the dashboard
+filters by and an embed token can be pinned to. Lead with the finding: the
+distinct values of the likeliest column and how many conversations carry each.
+If the source is one client's history, the answer is "none" and the field is
+left out — never invent a key.
+
+What the key does, and why there is no default:
+
+- **It must be the key live tracking passes**, if the integration already
+  passes one (`agentsight.conversation(..., data_entity=...)`). Keys are
+  trimmed and matched case-insensitively, first spelling kept, so `Hotel
+  Paris` and `hotel-paris` are *two* entities. If live traffic is not yet
+  keyed, settle the keys here and tell the user the integration must use the
+  same ones. Prefer a stable identifier or slug to a display name.
+- **An unknown key creates an entity on import.** There is no declare step,
+  and a conversation's entity is permanent: a wrong key means undo, fix,
+  re-import, and the entity the wrong key created stays on the Data entities
+  page until the user deletes it.
+- **The agent holds up to 500 active entities.** Count the distinct values
+  against that, allowing for entities the agent already has; a conversation
+  whose new key would be one too many is stored Unassigned, permanently, and
+  the run summary counts it. More clients than that is a scope conversation,
+  not an export detail.
+- **Rows with a blank value land Unassigned.** Say how many, and confirm that
+  is what the user expects rather than a column that needs cleaning first.
+- **Never truncate a key.** A value over the 255-character cap is not a label
+  to shorten — shortening can merge two clients. Map a different, shorter
+  stable column instead.
+
 ## Wave 2 — the lossy report
 
 Every category here is a row or a conversation that **cannot go into the file
 as it stands**. The user decides what happens to each; you decide nothing
 silently.
 
-Lead with the count. One table, all thirteen categories, zero-count rows
+Lead with the count. One table, all fourteen categories, zero-count rows
 included so the user can see what was checked and found clean:
 
 ```
@@ -119,6 +146,7 @@ Metadata nested too deep                           0
 Metadata key count / length / reserved names       0
 NaN or Infinity in numeric fields                  6
 Duplicate ids / text fields over the cap          31
+Data entity key blank or over the cap             19
 ```
 
 Then one decision per **non-zero** row. Do not walk the user through nine
@@ -154,6 +182,11 @@ The usual shapes of the answer, per category:
 - **Duplicate ids** — suffix them, or keep the first. Suffixing splits one
   thread in two on the dashboard; keeping the first loses the other.
 - **Text fields over the cap** — truncate. They are labels, not content.
+  Except `data_entity`: never truncate a key, see Wave 1 question 5.
+- **Data entity key blank or over the cap** — a blank key lands the
+  conversation Unassigned, which is often right and must be said; an
+  over-long key needs a different column. Only present when question 5
+  mapped a column.
 
 **One standing note to state once, at the top of this wave:** dropped messages
 move the metrics. Conversation duration is first-to-last message, and
@@ -172,8 +205,9 @@ geolocation. Token, cost and map charts stay empty for this history
 **permanently**. Get an explicit acknowledgement; do not proceed on silence.
 
 **Field mapping, plus a named metadata allow-list.** Which source column
-becomes `name`, `customer_id`, `language`, `device` — and then, specifically:
-which fields go into `metadata`, **by name**. *Default: the fields you can
+becomes `name`, `customer_id`, `language`, `device` (`data_entity` was settled
+in Wave 1) — and then, specifically: which fields go into `metadata`, **by
+name**. *Default: the fields you can
 justify one by one, and nothing else.* Never "the rest of the row" — that is
 exactly what makes the size cap fire, and it fires on your widest
 conversations, halfway through a large upload.
@@ -220,6 +254,11 @@ answer changes; a later run treats it as binding.
 - conversation_id: <source field>  prefix: <legacy- | the user's own — never none>
 - Stable across restarts: <yes/no>   Contains PII: <yes/no>
 - Collides with live tracking: <yes/no — and how that was settled>
+
+## Data entity
+- One client or several: <one — field left out | several>
+- data_entity: <source column>   distinct keys: <n>   blank rows: <n>
+- Same keys as live tracking: <yes | live tracking not keyed yet — told the user>
 
 ## Timestamps
 - Source storage: <column type, naive or aware>

@@ -74,8 +74,10 @@ The other side of this is that **a wrong key cannot be corrected**. Moving a
 conversation to another entity is not supported, and `conversations.update()`
 refuses the field.
 
-Conversations recorded before you started passing a key stay Unassigned, and so do
-conversations brought in by a history import today.
+Conversations recorded before you started passing a key stay Unassigned. A
+history import can name an entity per conversation — the import file's optional
+`data_entity` field, which [importing history](./importing-history.md) covers — and
+conversations imported without one are Unassigned too.
 
 ## Where to pass it
 
