@@ -693,3 +693,16 @@ def test_an_argument_beats_the_variable_and_a_blank_one_does_not(monkeypatch):
         assert core.default_data_entity() == "from-the-variable"
     finally:
         ags.shutdown()
+
+
+@pytest.mark.parametrize("refused", ["hotel\x00paris", "hotel-\ud800"], ids=["nul", "surrogate"])
+def test_a_refused_argument_does_not_let_the_variable_in(monkeypatch, refused):
+    """Blank means "not given"; refused means given and unusable. The argument
+    named a tenant, and the variable may name another one, which every
+    conversation without its own key would then be filed under for good."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=refused, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()

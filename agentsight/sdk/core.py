@@ -22,7 +22,7 @@ from agentsight.sdk import watchdog
 from agentsight.sdk.exporter import SDK_NAME, SDK_VERSION, AgentSightSpanExporter
 from agentsight.sdk.file_exporter import FileSpanExporter
 from agentsight.sdk.processors import TurnBufferingProcessor
-from agentsight.sdk.serialization import data_entity_key, warn_once
+from agentsight.sdk.serialization import data_entity_key, parse_data_entity, warn_once
 
 logger = logging.getLogger("agentsight")
 
@@ -284,10 +284,14 @@ def init(
                 environment or os.getenv("AGENTSIGHT_ENVIRONMENT")
             )
             # Each cleaned on its own, so a blank argument counts as absent and
-            # the variable still applies.
-            _state.data_entity = data_entity_key(data_entity) or data_entity_key(
-                os.getenv(_settings.ENV_DATA_ENTITY)
-            )
+            # the variable still applies. A refused one (NUL, a lone surrogate)
+            # does not let the variable in: the argument named a tenant, and
+            # the variable may name another, which every conversation without
+            # its own key would then be filed under for good.
+            default_entity, refused = parse_data_entity(data_entity)
+            if default_entity is None and not refused:
+                default_entity = data_entity_key(os.getenv(_settings.ENV_DATA_ENTITY))
+            _state.data_entity = default_entity
             if _state.data_entity:
                 _settings.note_data_entity_configured()
             _state.turn_timeout_ms = turn_timeout_ms

@@ -261,6 +261,23 @@ def test_an_upload_refused_after_the_row_exists_still_counts(sdk, requests_mock,
     assert scope.attributes["agentsight.conversation.data_entity"] == "the-default"
 
 
+def test_an_upload_refused_for_credentials_does_not_count(sdk, requests_mock, monkeypatch):
+    """Nothing left the process, so nothing reached the backend with the
+    default: a turn naming its own key must still be able to replace it."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    core._state.api_key = None
+
+    with ags.conversation("conv-9") as scope:
+        with pytest.raises(UploadError, match="init"):
+            ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})
+        assert scope._recorded is False
+        with ags.turn(data_entity="hotel-paris"):
+            ags.user_message("hi")
+
+    assert requests_mock.request_history == []
+    assert scope.attributes["agentsight.conversation.data_entity"] == "hotel-paris"
+
+
 def test_no_conversation_anywhere_is_a_caller_error(sdk, requests_mock):
     with pytest.raises(ValueError, match="conversation"):
         ags.upload_attachments({"filename": "f.png", "data": PNG_BYTES})

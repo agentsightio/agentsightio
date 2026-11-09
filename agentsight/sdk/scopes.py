@@ -33,6 +33,7 @@ from agentsight.sdk.serialization import (
     clamp_field,
     data_entity_key,
     first_string_argument,
+    parse_data_entity,
     to_json,
     to_text,
     valid_ip,
@@ -142,6 +143,7 @@ class ConversationScope:
         attributes: Dict[str, Any] = {
             ConversationAttributes.ID: self.conversation_id,
         }
+        entity, entity_refused = parse_data_entity(data_entity)
         # Clamped, not passed through: ingest validates the whole payload at
         # once, so a single over-length field rejects every conversation in
         # the batch it travelled with.
@@ -153,7 +155,7 @@ class ConversationScope:
             "language": clamp_field("language", language),
             "name": clamp_field("name", name),
             "environment": _resolve_environment(environment),
-            "data_entity": data_entity_key(data_entity),
+            "data_entity": entity,
         }
         for kwarg, value in supplied.items():
             if value is not None:
@@ -172,14 +174,19 @@ class ConversationScope:
             fallback = default_environment()
             if fallback:
                 attributes[ConversationAttributes.BY_KWARG["environment"]] = fallback
-        if supplied["data_entity"] is None:
+        if supplied["data_entity"] is not None:
+            note_data_entity_configured()
+        elif not entity_refused:
             # The same rule for init(data_entity=...) / AGENTSIGHT_DATA_ENTITY.
             # init() has already noted a default as configured.
+            #
+            # Not for a key that was given and refused: the caller named a
+            # tenant, and the default is a different one. The conversation is
+            # recorded without a key, as the warning says, rather than filed for
+            # good under someone else's.
             default_entity = default_data_entity()
             if default_entity:
                 attributes[ConversationAttributes.DATA_ENTITY] = default_entity
-        else:
-            note_data_entity_configured()
         #: Whether the key above came only from the deployment default, and
         #: whether anything has carried this scope's attributes yet. Together
         #: they decide if a turn may still name the conversation's own key —
@@ -197,8 +204,16 @@ class ConversationScope:
         #: request through the same decorated handler.
         self.metadata: Dict[str, Any] = dict(metadata) if metadata else {}
         #: A scope is reachable from more than one thread: a streaming turn
-        #: re-attaches its conversation from the consumer's context.
-        self._metadata_lock = threading.Lock()
+        #: re-attaches its conversation from the consumer's context. Guards the
+        #: attributes, the metadata and the "recorded" latch together, because
+        #: whether fill() may still swap the data entity depends on all three:
+        #: the check, the swap and the latch have to be one step, or a span
+        #: taken in between carries one key and every later span another.
+        #:
+        #: Re-entrant: fill() holds it across set_fields() and set_metadata(),
+        #: which take it too, and a logging handler that opens a span while a
+        #: warning is emitted under it must not deadlock its own thread.
+        self._lock = threading.RLock()
 
         if metadata:
             attributes[ConversationAttributes.METADATA] = to_json(metadata)
@@ -219,7 +234,7 @@ class ConversationScope:
         truncation: a document trimmed once would be trimmed again on the next
         update, and the keys it shed the first time could never come back.
         """
-        with self._metadata_lock:
+        with self._lock:
             self.metadata = dict(document)
             if self.metadata:
                 self.attributes[ConversationAttributes.METADATA] = to_json(
@@ -253,7 +268,7 @@ class ConversationScope:
         is not the place to enumerate them a second time.
         """
         applied: Dict[str, Any] = {}
-        with self._metadata_lock:
+        with self._lock:
             for kwarg, value in fields.items():
                 attribute = ConversationAttributes.BY_KWARG.get(kwarg)
                 if attribute is None or value is None:
@@ -281,9 +296,15 @@ class ConversationScope:
         Marks the scope as recorded. From here on a span or a request holds
         these values, so :meth:`fill` no longer swaps the data entity for
         another: the backend keeps the first one it receives.
+
+        The latch and the copy are taken under the scope's lock, the one
+        :meth:`fill` holds while it decides and swaps. Otherwise a span on
+        another thread could copy the default between fill's check and its
+        swap, and the conversation would go out under two keys with no warning.
         """
-        self._recorded = True
-        return dict(self.attributes)
+        with self._lock:
+            self._recorded = True
+            return dict(self.attributes)
 
     def fill(self, fields: Dict[str, Any]) -> None:
         """Add what a turn knows about its conversation, replacing nothing.
@@ -300,38 +321,56 @@ class ConversationScope:
         has been recorded yet: a per-conversation key beats the default, and
         before the first span nothing has reached the backend to contradict
         it. After that the conversation keeps what it has, as the backend
-        will, and a different key is reported once.
+        will, and a different key is reported once. A key the turn names that
+        cannot be sent (NUL, a lone surrogate) takes the default away under the
+        same condition, and the conversation is recorded without a key: the
+        turn asked for a tenant, and the default is not that one.
+
+        The whole decision is taken under the scope's lock, which
+        :meth:`snapshot` takes too, so no span can be copied between the check
+        and the swap.
 
         Never raises: this runs on the way into the caller's own block.
         """
         try:
-            lacking: Dict[str, Any] = {}
-            for kwarg, value in fields.items():
-                attribute = ConversationAttributes.BY_KWARG.get(kwarg)
-                if attribute is None or value is None:
-                    continue
-                if kwarg == "data_entity":
-                    if self._takes_entity(value):
+            with self._lock:
+                lacking: Dict[str, Any] = {}
+                for kwarg, value in fields.items():
+                    attribute = ConversationAttributes.BY_KWARG.get(kwarg)
+                    if attribute is None or value is None:
+                        continue
+                    if kwarg == "data_entity":
+                        if self._takes_entity(value):
+                            lacking[kwarg] = value
+                    elif attribute not in self.attributes:
                         lacking[kwarg] = value
-                elif attribute not in self.attributes:
-                    lacking[kwarg] = value
-            if lacking and "data_entity" in self.set_fields(lacking):
+                applied = self.set_fields(lacking) if lacking else {}
+
+                metadata = fields.get("metadata")
+                if isinstance(metadata, dict):
+                    added = {k: v for k, v in metadata.items() if k not in self.metadata}
+                    if added:
+                        self.set_metadata({**self.metadata, **added})
+            # Outside the lock: it may log, and nothing it reads is the scope's.
+            if "data_entity" in applied:
                 from agentsight.sdk.core import note_data_entity_configured
 
                 note_data_entity_configured()
-
-            metadata = fields.get("metadata")
-            if isinstance(metadata, dict):
-                added = {k: v for k, v in metadata.items() if k not in self.metadata}
-                if added:
-                    self.set_metadata({**self.metadata, **added})
         except Exception as exc:
             _log().debug("could not apply a turn's fields to its conversation: %s", exc)
 
     def _takes_entity(self, value: Any) -> bool:
-        """Whether a data entity named on a turn may become this scope's."""
-        key = data_entity_key(value)
+        """Whether a data entity named on a turn may become this scope's.
+
+        Called by :meth:`fill` with the scope's lock held. Drops the deployment
+        default as a side effect when the turn's key was refused and nothing has
+        been recorded yet.
+        """
+        key, refused = parse_data_entity(value)
         if key is None:
+            if refused and self._entity_is_default and not self._recorded:
+                self.attributes.pop(ConversationAttributes.DATA_ENTITY, None)
+                self._entity_is_default = False
             return False
         current = self.attributes.get(ConversationAttributes.DATA_ENTITY)
         if current is None:

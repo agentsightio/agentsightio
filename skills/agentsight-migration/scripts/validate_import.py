@@ -10,6 +10,14 @@ to agree by being looser, this script is looser. Every rule is a port of one
 that exists in the backend's `validation.py` or the dashboard's
 `lib/imports/*`; a rule with no home there is a bug in this file.
 
+One deliberate exception: a lone surrogate (a "\\ud800" JSON escape) outside
+`data_entity`. The server's validation refuses one only in `data_entity`; in
+the other text fields, in message content and in metadata it is silent, and
+the upload then fails when the server stores the chunk or measures its
+metadata -- a server error for the whole chunk, naming no record. Reporting it
+here as `surrogate_character` is never stricter than the server: no record
+carrying one can be imported.
+
 It makes no network request. The contract it checks against ships with the
 skill in `../contract/`: a snapshot of the server's schema, limits and example
 taken from an ags_backend checkout by tests/skills/regenerate_corpus.py
@@ -35,7 +43,8 @@ means the upload will succeed, and it says nothing at all about whether the
 timestamps are in the timezone you think they are.
 
 Exit codes: 0 clean | 1 findings | 2 usage | 3 no verdict (jsonschema missing,
-or the shipped contract unreadable -- nothing validated).
+or the shipped contract unreadable -- nothing validated) | 4 crashed (a bug in
+this script -- nothing validated).
 """
 
 import argparse
@@ -43,6 +52,7 @@ import json
 import math
 import re
 import sys
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -342,7 +352,9 @@ def check_timestamp(raw, field, emit, latest):
 
 def scan_metadata(metadata, base_path, emit, limits):
     serialized = json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)
-    size = len(serialized.encode("utf-8"))
+    # surrogatepass: a lone surrogate is reported by the walk below, and must
+    # not crash the measure first (the server's own measure does, a 500).
+    size = len(serialized.encode("utf-8", "surrogatepass"))
     max_bytes = limits["max_metadata_bytes"]
     if size > max_bytes:
         emit(
@@ -370,8 +382,7 @@ def scan_metadata(metadata, base_path, emit, limits):
                 if not isinstance(key, str):
                     continue
                 key_path = f"{path}.{key}"
-                if NUL in key:
-                    emit("nul_byte", nul_detail(key), key_path)
+                check_text(key, key_path, emit)
                 if len(key) > max_key_len:
                     emit(
                         "metadata_key_too_long",
@@ -392,8 +403,7 @@ def scan_metadata(metadata, base_path, emit, limits):
             for index, item in enumerate(value):
                 walk(item, f"{path}[{index}]", depth)
         elif isinstance(value, str):
-            if NUL in value:
-                emit("nul_byte", nul_detail(value), path)
+            check_text(value, path, emit)
         elif isinstance(value, float) and not math.isfinite(value):
             emit(
                 "invalid_number",
@@ -412,12 +422,53 @@ def nul_detail(value):
     )
 
 
+def first_surrogate(value):
+    """(position, code point) of the first lone surrogate in value, or None.
+
+    A port of validation.py's `_first_surrogate`. A str holding a real astral
+    character never yields one: only a lone "\\ud800"-style escape does.
+    """
+    for position, char in enumerate(value):
+        if 0xD800 <= ord(char) <= 0xDFFF:
+            return position, ord(char)
+    return None
+
+
+def surrogate_detail(found):
+    """Names the code point and position, never the text, so the detail itself
+    always prints."""
+    position, code_point = found
+    return (
+        f"Contains a lone surrogate character (U+{code_point:X}) at position "
+        f"{position}. It is not valid text; re-export the file as UTF-8."
+    )
+
+
+def check_text(value, field, emit):
+    """NUL first, as the server does; a lone surrogate only when there is none."""
+    if NUL in value:
+        emit("nul_byte", nul_detail(value), field)
+        return
+    found = first_surrogate(value)
+    if found is not None:
+        emit("surrogate_character", surrogate_detail(found), field)
+
+
 def check_values(conversation, emit, latest, limits):
     """Every rule about what a value *is*. Type errors are left to the schema."""
     for field in TEXT_FIELDS:
         value = conversation.get(field)
         if isinstance(value, str) and NUL in value:
             emit("nul_byte", nul_detail(value), field)
+    # After every NUL, as the server orders it. For `data_entity` this is a
+    # port of validation.py's check; for the other fields it is the exception
+    # the module docstring describes.
+    for field in TEXT_FIELDS:
+        value = conversation.get(field)
+        if isinstance(value, str) and NUL not in value:
+            found = first_surrogate(value)
+            if found is not None:
+                emit("surrogate_character", surrogate_detail(found), field)
 
     metadata = conversation.get("metadata")
     if isinstance(metadata, dict):
@@ -451,9 +502,11 @@ def check_values(conversation, emit, latest, limits):
                     f"{prefix}.sender",
                 )
 
+        # The sender gets no surrogate check: the server reports one as
+        # unknown_sender, above, and never stages the record.
         content = message.get("content")
-        if isinstance(content, str) and NUL in content:
-            emit("nul_byte", nul_detail(content), f"{prefix}.content")
+        if isinstance(content, str):
+            check_text(content, f"{prefix}.content", emit)
 
         raw_timestamp = message.get("timestamp")
         if isinstance(raw_timestamp, str):
@@ -711,7 +764,37 @@ def render(findings, warnings, stats, contract, max_examples):
     return "\n".join(out)
 
 
+def write_report(text, stream=None):
+    """Print the report without letting the text in it crash the print.
+
+    The report quotes the file: conversation ids, field paths, metadata keys,
+    data entity keys. A lone surrogate in any of them cannot be encoded, and
+    neither can most of the file on a console that is not UTF-8. Each such
+    character is printed as its escape (`\\ud800`) instead.
+    """
+    stream = sys.stdout if stream is None else stream
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    stream.write(text.encode(encoding, "backslashreplace").decode(encoding) + "\n")
+
+
 def main(argv=None):
+    """Exit 4 when the script itself fails, never 1: a crash is not a finding.
+
+    argparse's own exit (2, usage) is a SystemExit and passes through.
+    """
+    try:
+        return run(argv)
+    except Exception:
+        traceback.print_exc()
+        print(
+            "validate_import.py crashed. This is a bug in the validator, not a verdict "
+            "on your file. Nothing was validated.",
+            file=sys.stderr,
+        )
+        return 4
+
+
+def run(argv=None):
     parser = argparse.ArgumentParser(
         description="Validate AgentSight import part files against the shipped contract snapshot."
     )
@@ -778,7 +861,7 @@ def main(argv=None):
         stats["messages"] += messages
         collect_data_entities(data, stats)
 
-    print(render(findings, warnings, stats, contract, args.max_examples))
+    write_report(render(findings, warnings, stats, contract, args.max_examples))
     return 1 if findings else 0
 
 

@@ -8,6 +8,7 @@ when there is nothing to record.
 
 import asyncio
 import json
+import threading
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -1154,6 +1155,219 @@ def test_the_first_data_entity_in_a_batch_wins(spans):
     (block,) = build_payload(spans.get_finished_spans())["conversations"]
     assert block["data_entity"] == "hotel-paris"
     assert block["device"] == "desktop"
+
+
+# -- a refused key never lets the default in ----------------------------------
+#
+# A key with a NUL or a lone surrogate cannot be sent, and is dropped. "Dropped"
+# has to mean no key: the default is another tenant, and the backend keeps the
+# first key a conversation receives, so falling back to it would file the
+# conversation under someone else's entity for good.
+
+REFUSED_KEYS = pytest.mark.parametrize(
+    "refused", ["hotel\x00paris", "hotel-\ud800"], ids=["nul", "surrogate"]
+)
+
+
+def _unsendable_warnings(caplog):
+    return [r for r in caplog.records if "recorded without a data entity" in r.getMessage()]
+
+
+def _no_key_anywhere(spans, conversation_id):
+    for span in spans.get_finished_spans():
+        assert ConversationAttributes.DATA_ENTITY not in span.attributes
+    assert "data_entity" not in _block(spans, conversation_id)
+
+
+@REFUSED_KEYS
+def test_a_refused_key_on_the_conversation_is_not_replaced_by_the_default(
+    spans, monkeypatch, caplog, refused
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-refused", data_entity=refused):
+            with ags.turn():
+                ags.user_message("hi")
+
+    _no_key_anywhere(spans, "c-refused")
+    assert len(_unsendable_warnings(caplog)) == 1
+
+
+@REFUSED_KEYS
+def test_every_way_of_opening_a_conversation_keeps_the_default_out(
+    spans, monkeypatch, refused
+):
+    """Each is its own path into the scope: the decorator rebuilds it per call,
+    open_conversation() records at once, and a decorated turn opens its own."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    @ags.conversation(data_entity=refused)
+    def decorated():
+        with ags.turn():
+            ags.user_message("hi")
+
+    @ags.turn(id_from="session", data_entity=refused)
+    def turn_opens_it(session):
+        ags.user_message("hi")
+
+    decorated()
+    ags.open_conversation("c-visit", data_entity=refused)
+    turn_opens_it("c-turn")
+
+    blocks = build_payload(spans.get_finished_spans())["conversations"]
+    assert len(blocks) == 3
+    assert all("data_entity" not in block for block in blocks)
+
+
+@REFUSED_KEYS
+def test_a_refused_key_on_the_first_turn_takes_the_default_away(
+    spans, monkeypatch, caplog, refused
+):
+    """The turn named a key, which beats the default before the first span. That
+    it cannot be sent does not hand the conversation back to the default."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-fill"):
+            with ags.turn(data_entity=refused):
+                ags.user_message("hi")
+            with ags.turn():
+                ags.user_message("again")
+
+    _no_key_anywhere(spans, "c-fill")
+    assert len(_unsendable_warnings(caplog)) == 1
+
+
+@REFUSED_KEYS
+def test_a_decorated_turn_with_a_refused_key_takes_the_default_away_too(
+    spans, monkeypatch, refused
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    @ags.turn(data_entity=refused)
+    def handle():
+        ags.user_message("hi")
+
+    with ags.conversation("c-nested"):
+        handle()
+
+    _no_key_anywhere(spans, "c-nested")
+
+
+@REFUSED_KEYS
+def test_after_a_refused_key_a_good_one_still_applies(spans, monkeypatch, refused):
+    """The conversation is left with no key, and a later key fills it, as one
+    would for any conversation without a key."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with ags.conversation("c-later") as scope:
+        scope.fill({"data_entity": refused})
+        scope.fill({"data_entity": "hotel-paris"})
+
+    assert scope.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+
+@REFUSED_KEYS
+def test_a_refused_key_after_the_default_was_recorded_changes_nothing(
+    spans, monkeypatch, refused
+):
+    """The backend already has the default by then. Dropping it from later spans
+    would only make the spans disagree with the row."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with ags.conversation("c-recorded"):
+        with ags.turn():
+            ags.user_message("first")
+        with ags.turn(data_entity=refused):
+            ags.user_message("second")
+
+    for span in spans.get_finished_spans():
+        assert span.attributes[ConversationAttributes.DATA_ENTITY] == "the-default"
+
+
+@REFUSED_KEYS
+def test_a_refused_key_on_a_turn_never_takes_the_conversations_own(spans, refused):
+    with ags.conversation("c-own", data_entity="hotel-paris"):
+        with ags.turn(data_entity=refused):
+            ags.user_message("hi")
+
+    assert _block(spans, "c-own")["data_entity"] == "hotel-paris"
+
+
+# -- the latch and the swap are one step under the scope's lock ----------------
+#
+# fill() decides whether a turn's key may replace the default, and snapshot()
+# is what stops it. Run on two threads without one lock, a span could copy the
+# default between fill's check and its swap, and the conversation would go out
+# under two keys with no warning. Each test holds the lock from the main thread
+# and shows the other thread waiting on it.
+
+
+def test_fill_decides_under_the_scopes_lock(monkeypatch):
+    """The race itself, made deterministic: a span latches the scope while a
+    turn's fill() waits on another thread. Deciding under the lock, fill sees
+    the latch and keeps the default the span carried. Deciding before taking
+    it, fill would swap the key after that span had already gone out."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    scope = ags.conversation("c-lock")
+
+    worker = threading.Thread(target=lambda: scope.fill({"data_entity": "hotel-paris"}))
+    with scope._lock:
+        worker.start()
+        worker.join(timeout=0.2)
+        assert worker.is_alive()  # waiting on the lock
+        carried = scope.snapshot()  # a span on this thread, before fill decides
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+    assert carried[ConversationAttributes.DATA_ENTITY] == "the-default"
+    assert scope.attributes[ConversationAttributes.DATA_ENTITY] == "the-default"
+
+
+def test_without_a_span_in_between_the_waiting_fill_still_applies(monkeypatch):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    scope = ags.conversation("c-lock")
+
+    worker = threading.Thread(target=lambda: scope.fill({"data_entity": "hotel-paris"}))
+    with scope._lock:
+        worker.start()
+        worker.join(timeout=0.2)
+        assert worker.is_alive()
+        assert scope.attributes[ConversationAttributes.DATA_ENTITY] == "the-default"
+    worker.join(timeout=5)
+
+    assert scope.attributes[ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+
+
+def test_snapshot_waits_for_the_scopes_lock(monkeypatch):
+    """And it sees what was decided under the lock: here, the swap the main
+    thread made while the snapshot waited."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+    scope = ags.conversation("c-lock")
+
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("value", scope.snapshot()))
+    with scope._lock:
+        worker.start()
+        worker.join(timeout=0.2)
+        assert worker.is_alive()
+        assert scope._recorded is False
+        scope.fill({"data_entity": "hotel-paris"})  # re-entrant: same thread
+    worker.join(timeout=5)
+
+    assert result["value"][ConversationAttributes.DATA_ENTITY] == "hotel-paris"
+    assert scope._recorded is True
+
+
+def test_the_lock_is_reentrant_for_a_span_opened_while_it_is_held(spans, monkeypatch):
+    """fill() warns under the lock. A logging handler that records a span on
+    the same thread takes the same lock through snapshot(), and must not hang."""
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with ags.conversation("c-reentrant") as scope:
+        with scope._lock:
+            assert scope.snapshot()[ConversationAttributes.DATA_ENTITY] == "the-default"
 
 
 def test_export_failure_warnings_are_rate_limited():

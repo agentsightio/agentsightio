@@ -105,25 +105,46 @@ def clamp_field(name: str, value: Optional[str]) -> Optional[str]:
 def data_entity_key(value: Any) -> Optional[str]:
     """A data entity key as ingest will take it, or ``None`` for no key.
 
+    ``None`` covers both "no key" and "a key that cannot be sent". A caller that
+    falls back to a default when there is no key must tell those apart, and
+    uses :func:`parse_data_entity` instead.
+    """
+    return parse_data_entity(value)[0]
+
+
+def parse_data_entity(value: Any) -> Tuple[Optional[str], bool]:
+    """``(key, refused)``: the key as ingest will take it, and whether one was
+    given that cannot be sent.
+
     Trimmed, because the key is matched after trimming and a stray space must
     not read as a different tenant. Empty means absent: passing the argument is
     the opt-in, and a blank value has opted into nothing. Clamped for the same
-    reason as every other conversation field.
+    reason as every other conversation field, and trimmed again after the
+    clamp: the cut can land just after a space, which ingest would trim, and the
+    SDK's own same-key comparison would then see two keys where the backend
+    sees one.
 
     NUL and surrogate characters drop the key instead of being stripped. Ingest
     refuses them, so one would cost the whole batch; and removing the character
     could quietly merge the key into a different tenant's, which is worse than
     the conversation going unassigned.
+
+    A dropped key is reported as ``(None, True)``, never as plain ``None``. A
+    default must not stand in for it: the caller asked for a specific tenant,
+    and filing the conversation under the default one instead would be
+    permanent, because the backend keeps the first key a conversation receives.
     """
     if value is None:
-        return None
+        return None, False
     text = value if isinstance(value, str) else to_text(value)
     text = text.strip()
     if not text:
-        return None
+        return None, False
     key = clamp_field("data_entity", text)
     if key is None:  # pragma: no cover - clamp_field only returns None for None
-        return None
+        return None, False
+    # Never empty: the text was trimmed, so its first character is not a space.
+    key = key.rstrip()
     if any(char == "\x00" or "\ud800" <= char <= "\udfff" for char in key):
         warn_once(
             "data_entity:unsendable",
@@ -132,8 +153,8 @@ def data_entity_key(value: Any) -> Optional[str]:
             "conversation is recorded without a data entity.",
             key,
         )
-        return None
-    return key
+        return None, True
+    return key, False
 
 
 def valid_ip(value: Optional[str]) -> Optional[str]:

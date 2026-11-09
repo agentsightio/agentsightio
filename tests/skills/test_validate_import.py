@@ -12,6 +12,7 @@ shipped `contract/` directory and never touches the network.
 """
 
 import importlib.util
+import io
 import json
 import shutil
 from datetime import datetime, timezone
@@ -345,6 +346,66 @@ class TestValueRules:
         record = conversation(messages=[message(sender="us\x00er")])
         assert codes([record], ctx) == ["nul_byte"]
 
+    def test_a_lone_surrogate_in_the_data_entity_key(self, ctx):
+        """A port of the server's own rule: it looks the key up before storing
+        anything, so a "\\ud800" escape there is a record error. A finding, and
+        the record is not handed to the schema."""
+        assert check([conversation(data_entity="hotel-\ud800")], ctx) == [
+            (0, "surrogate_character", "data_entity")
+        ]
+
+    @pytest.mark.parametrize(
+        "field", ["conversation_id", "name", "customer_id", "language", "device", "data_entity"]
+    )
+    @pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"], ids=["high", "low"])
+    def test_a_lone_surrogate_in_every_conversation_text_field(self, field, surrogate, ctx):
+        found = check([conversation(**{field: f"a{surrogate}b"})], ctx)
+        assert found[0][1:] == ("surrogate_character", field)
+
+    def test_a_lone_surrogate_in_message_content_and_metadata(self, ctx):
+        """The server's validation is silent on these, and the chunk then fails
+        as a whole when it is stored. No record carrying one can be imported."""
+        record = conversation(
+            metadata={"ke\ud800y": "ok", "v": "ba\udc00d", "list": ["ba\ud800d"]},
+            messages=[message(content="he\udfffllo")],
+        )
+        found = check([record], ctx)
+        assert [c for _, c, _ in found] == ["surrogate_character"] * 4
+        assert [f for _, _, f in found] == [
+            "metadata.ke\ud800y",
+            "metadata.v",
+            "metadata.list[0]",
+            "messages[0].content",
+        ]
+
+    def test_a_real_astral_character_is_not_a_surrogate(self, ctx):
+        """Python holds one as a single code point; only a lone escape is a
+        surrogate."""
+        record = conversation(
+            name="smile \U0001F600",
+            data_entity="hotel-\U0001F3E8",
+            metadata={"e": "\U0001F600"},
+            messages=[message(content="\U0001F600")],
+        )
+        assert codes([record], ctx) == []
+
+    def test_a_nul_is_reported_instead_of_a_surrogate_in_the_same_value(self, ctx):
+        """The server's order: NUL first, and one finding per value."""
+        record = conversation(
+            data_entity="a\x00\ud800",
+            metadata={"v": "a\x00\ud800"},
+            messages=[message(content="a\x00\ud800")],
+        )
+        assert codes([record], ctx) == ["nul_byte"] * 3
+
+    def test_a_surrogate_sender_is_an_unknown_sender(self, ctx):
+        """What the server says about it, and it never stores the record."""
+        found = check([conversation(messages=[message(sender="us\ud800er")])], ctx)
+        assert found == [(0, "unknown_sender", "messages[0].sender")]
+
+    def test_a_surrogate_in_metadata_does_not_crash_the_size_measure(self, ctx):
+        assert codes([conversation(metadata={"a": "x\udc00"})], ctx) == ["surrogate_character"]
+
     @pytest.mark.parametrize("sender", ["system", "tool", "function", "user2"])
     def test_unimportable_senders(self, sender, ctx):
         found = check([conversation(messages=[message(sender=sender)])], ctx)
@@ -603,6 +664,60 @@ class TestCli:
         out = capsys.readouterr().out
         assert "12 distinct key(s)" in out
         assert "9 more not shown" in out
+
+    def test_a_lone_surrogate_key_is_a_finding_not_a_traceback(self, tmp_path, capsys):
+        """It used to crash the print: the traceback replaced the whole report
+        and exited 1, which reads as "findings". Written the way a real export
+        carries one, as a JSON escape."""
+        body = (
+            '{"schema_version": 1, "conversations": [{"conversation_id": "legacy-1", '
+            '"started_at": "2016-06-01T10:00:00Z", "data_entity": "hotel-\\ud800", '
+            '"messages": [{"sender": "user", "content": "hi", '
+            '"timestamp": "2016-06-01T10:00:00Z"}]}]}'
+        )
+        path = write(tmp_path, body.encode("ascii"))
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "surrogate_character" in out
+        assert "  hotel-\\ud800  (1)" in out  # printed as its escape
+        assert "NOT CHECKED HERE" in out
+
+    def test_the_report_prints_on_a_console_that_is_not_utf8(self, tmp_path, monkeypatch):
+        """Every character the console cannot show is printed as its escape:
+        a lone surrogate anywhere in the report, and ordinary non-ASCII text."""
+        record = conversation("legacy-\ud83d", data_entity="hôtel-日本",
+                              messages=[message(content="hi \udc00")])
+        payload = {"schema_version": 1, "conversations": [record], "extra\udfff": 1}
+        path = write(tmp_path, json.dumps(payload).encode("ascii"))
+        buffer = io.BytesIO()
+        console = io.TextIOWrapper(buffer, encoding="ascii", errors="strict")
+        monkeypatch.setattr(vi.sys, "stdout", console)
+
+        assert run_cli([path]) == 1
+        console.flush()
+        out = buffer.getvalue().decode("ascii")
+        assert "legacy-\\ud83d" in out
+        assert "extra\\udfff" in out
+        assert "h\\xf4tel-\\u65e5\\u672c" in out
+
+    def test_a_crash_exits_4_and_says_nothing_was_validated(self, tmp_path, monkeypatch, capsys):
+        """Never 1: a crash is not a finding, and an agent reading the code must
+        not hand over a file because of one."""
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(vi, "render", broken)
+        assert run_cli([path]) == 4
+        err = capsys.readouterr().err
+        assert "RuntimeError: boom" in err
+        assert "bug in the validator" in err and "Nothing was validated" in err
+
+    def test_a_usage_error_is_still_2_not_a_crash(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            vi.main(["--max-examples", "many", "f.json"])
+        assert excinfo.value.code == 2
 
     def test_the_banner_names_the_snapshot_commit_and_version(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})

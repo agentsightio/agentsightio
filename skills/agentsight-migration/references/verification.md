@@ -44,10 +44,15 @@ findings per code.
 | 1 | Findings — the file has contract violations, or is not valid JSON |
 | 2 | Usage: bad arguments, or a file that cannot be read |
 | 3 | **No verdict.** `jsonschema` is missing, or the shipped `contract/` directory could not be read — a broken install. **Nothing was validated** |
+| 4 | **The validator crashed.** A bug in the script, not a verdict on the file. **Nothing was validated** |
 
 Exit 3 is not a pass and not a failure. Treat it as a blocked step: install
 `jsonschema`, or reinstall the skill so `contract/` is complete, and run
 again. Never report progress on the strength of a 3.
+
+Exit 4 is not a pass either, and running it again will crash the same way. Do
+not hand the file over. Stop, tell the user the validator failed, and paste
+what it printed to stderr: the traceback names the input it could not handle.
 
 ## Reading the report
 
@@ -73,6 +78,11 @@ recognising on sight:
   was, including which part file, so an overlapping export window is obvious.
 - `invalid_number` — `NaN` or `Infinity` reached the file. The exporter is
   missing `allow_nan=False`.
+- `surrogate_character` — a lone surrogate, usually a `\ud800`-style escape
+  left by text that was decoded or escaped wrongly upstream. The server cannot
+  store one anywhere in a record. Fix the export's decoding rather than
+  stripping the character, and re-export as UTF-8. The report prints such
+  characters as escapes, so it never crashes on them.
 
 **Warnings do not affect the exit code** and are not failures: unknown
 top-level keys, and any single conversation too large for the dashboard to pack

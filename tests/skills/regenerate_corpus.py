@@ -190,6 +190,14 @@ def build_corpus():
             _conversation("de-padded", data_entity="  hotel-paris  "),
         ],
     )
+    # A lone surrogate in the key (a "\ud800" escape in the file) is a record
+    # error, `surrogate_character`: the server looks the key up before it
+    # stores anything. Its validation is silent on one in the other fields, so
+    # those are no corpus case -- see validate_import.py's module docstring.
+    case(
+        "data_entity_lone_surrogate",
+        [_conversation("de-surrogate", data_entity="hotel-\ud800")],
+    )
 
     # ---- metadata rules --------------------------------------------------
     case("metadata_objects_11_deep", [_conversation("obj11", metadata=_nest_objects(11))])
@@ -418,12 +426,23 @@ def _write_contract_snapshot():
     return manifest
 
 
+def _write_fixture(path, document):
+    """Pretty, with non-ASCII text kept readable, and a lone surrogate written
+    as its JSON escape.
+
+    UTF-8 cannot encode a lone surrogate, so without the error handler the
+    surrogate case could not be written at all. `backslashreplace` turns one
+    into the six characters `\\ud800`, which inside a JSON string is exactly
+    the escape the case means; `json.loads` reads it back as the surrogate.
+    """
+    text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    path.write_bytes(text.encode("utf-8", "backslashreplace"))
+
+
 def main():
     corpus = build_corpus()
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    (FIXTURES / "validator_corpus.json").write_text(
-        json.dumps(corpus, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _write_fixture(FIXTURES / "validator_corpus.json", corpus)
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "AgentSight.settings")
     try:
@@ -453,9 +472,7 @@ def main():
             [error["conversation_index"], str(error["code"]), error["field"]] for error in errors
         ]
 
-    (FIXTURES / "validator_expected.json").write_text(
-        json.dumps(expected, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _write_fixture(FIXTURES / "validator_expected.json", expected)
     print(f"wrote {len(corpus)} cases to {FIXTURES}")
     print(f"wrote the contract snapshot to {CONTRACT_DIR} (ags_backend@{manifest['commit'][:12]})")
     print(f"contract_sha256 = {manifest['contract_sha256']}")

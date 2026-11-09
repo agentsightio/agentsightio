@@ -249,6 +249,21 @@ def test_an_unsendable_data_entity_key_warns_only_once(spans, caplog):
     assert len([r for r in caplog.records if "data_entity" in r.getMessage()]) == 1
 
 
+def test_a_key_clamped_just_after_a_space_is_trimmed_again(spans, caplog):
+    """The backend trims what it is sent, so the clamp's trailing space would
+    make the SDK's key and the stored key two spellings, and the SDK's own
+    same-key comparison would then report the stored one as a different key."""
+    long_key = "x" * 254 + " " + "y"  # 256 characters; the 255th is a space
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-key", data_entity=long_key):
+            with ags.turn(data_entity="x" * 254):
+                ags.user_message("hi")
+
+    assert blocks(spans)["c-key"]["data_entity"] == "x" * 254
+    assert not [r for r in caplog.records if "keeps the first" in r.getMessage()]
+
+
 def test_a_non_string_data_entity_key_travels_as_text(spans):
     _record(data_entity=42)
 

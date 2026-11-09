@@ -112,7 +112,7 @@ def upload_attachments(
 
     resolved_id = conversation_id
     environment = None
-    data_entity = None
+    owner = None
     scope = ags_context.current_conversation()
     if scope is not None:
         if resolved_id is None:
@@ -125,9 +125,7 @@ def upload_attachments(
         # wrong entity would stay, on the wrong tenant, for good. Omitting it
         # loses nothing: a write without a key leaves the entity open.
         if scope.conversation_id == resolved_id:
-            # snapshot(), not a bare read: this request carries the key to the
-            # backend, so the scope must stop treating it as replaceable.
-            data_entity = scope.snapshot().get(ConversationAttributes.DATA_ENTITY)
+            owner = scope
     if environment is None:
         environment = default_environment()
     if not resolved_id:
@@ -144,6 +142,16 @@ def upload_attachments(
             "span exporter carries spans only — attachment bytes always go "
             "over HTTP.)"
         )
+
+    # Read only now, with the request about to go out. snapshot(), not a bare
+    # read: this request carries the key to the backend, so the scope must stop
+    # treating it as replaceable. A call refused above sent nothing, and must
+    # not stop a turn's key from replacing the deployment default.
+    data_entity = (
+        owner.snapshot().get(ConversationAttributes.DATA_ENTITY)
+        if owner is not None
+        else None
+    )
 
     # The shared transport: one pooled session, one auth header, one URL
     # joiner. Its raising taxonomy is not used here — this call owes its
