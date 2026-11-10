@@ -233,14 +233,17 @@ ags.me(refresh=True)["data_entities"]               # limit, active_count, overf
 
 **Filters**, on `conversations`, `feedbacks`, `tickets` and `usage`:
 `data_entity="hotel-paris"` (any casing), `data_entity_unassigned=True` (no
-entity), `data_entity_unassigned=False` (any entity). Conversation and usage rows
-carry `data_entity`, the key or `None`. A blank `data_entity` is refused locally,
-because the server reads it as no filter; `None` means not filtered. Spans do not
-take the pair.
+entity), `data_entity_unassigned=False` (any entity). Conversation, usage and
+feedback rows carry `data_entity`, the key or `None`, and so does a ticket's
+nested `conversation`. A blank `data_entity` is refused locally, because the
+server reads it as no filter; `None` means not filtered. Spans do not take the
+pair.
 
 On a backend without the `data-entities` capability the client raises
-`ValidationError` when the list is read, before requesting anything: that backend
-would ignore the filter and return every row. Do not catch it and retry unfiltered.
+`ValidationError` when the list is read, and never requests the list: that backend
+would ignore the filter and return every row. Each refusal costs one `GET /api/me/`
+(a cached "no" is read again before it is trusted). Do not catch it and retry
+unfiltered.
 
 **Never treat a filter as a tenant boundary.** A key sees its whole agent. Scoped
 embed tokens are the enforced boundary: [embed.md](embed.md).

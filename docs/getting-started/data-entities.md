@@ -187,9 +187,9 @@ and a filter on an entity narrows that same report.
 - **Settings → Data entities**, to name, edit, delete and restore them.
 - **An entity switcher** beside the environment switcher, with "All entities" and
   "Unassigned". All includes the Unassigned rows.
-- **Filters and badges** on the analytics report, conversations, feedback, tickets
-  and token usage. Saved reports are stamped with the entity they were made for,
-  and older reports appear under All.
+- **Filters and badges** on the analytics report (including its cost card and token
+  chart), conversations, feedback and tickets. Saved reports are stamped with the
+  entity they were made for, and older reports appear under All.
 
 Feedback about the agent as a whole and tickets without a conversation belong to no
 entity, so they appear only under All. Development Mode's check of which metrics are
@@ -198,9 +198,11 @@ is not available.
 
 ## Reading it back
 
-Every conversation and usage row carries its key in `data_entity`, or `null`. The
-same two filters work on conversations, feedback, tickets and usage, in the
-[API client](/api/data-entities) and over [REST](./api-reference.md#data-entities):
+Every conversation, usage and feedback row carries its key in `data_entity`, and so
+does a ticket's nested `conversation`. It is `null` for Unassigned and for a row with
+no conversation. The same two filters work on conversations, feedback, tickets and
+usage, in the [API client](/api/data-entities) and over
+[REST](./api-reference.md#data-entities):
 
 ```python
 from agentsight.api import AgentSight
@@ -241,6 +243,12 @@ asks for. One token per hotel gives each hotel its own dashboard.
 
 A token's scope cannot be changed afterwards. To change it, revoke the token and
 create another.
+
+An embed is not the only way. To give a client's own staff a login instead, invite
+them under **Settings → Team** as Viewers restricted to their entity. A **domain
+rule** on the same page does it for everyone who signs in through your agent's
+subdomain with a verified address at the client's email domain. The server enforces
+a Viewer's restriction the way it enforces a token's scope.
 
 ## Checking it
 

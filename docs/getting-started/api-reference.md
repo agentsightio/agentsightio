@@ -1086,6 +1086,7 @@ curl "https://api.agentsight.io/api/feedbacks/?sentiment=negative" \
       "agent": 20,
       "conversation": 733,
       "conversation_id": "demo-rag-search-956f",
+      "data_entity": "hotel-paris",
       "message": null,
       "user": null,
       "environment": "production",
@@ -1190,6 +1191,7 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": 738,
   "conversation_id": "demo-delete-1786992718",
+  "data_entity": null,
   "message": null,
   "user": null,
   "environment": "development",
@@ -1246,6 +1248,7 @@ curl -X POST "https://api.agentsight.io/api/feedbacks/" \
   "agent": 20,
   "conversation": null,
   "conversation_id": null,
+  "data_entity": null,
   "message": null,
   "user": null,
   "environment": "production",
@@ -1402,7 +1405,8 @@ curl "https://api.agentsight.io/api/tickets/?status=open&status=in_progress" \
         "conversation_id": "demo-rag-search-956f",
         "name": "Refund",
         "environment": "production",
-        "environment_id": 39
+        "environment_id": 39,
+        "data_entity": "hotel-paris"
       },
       "feedback": {
         "id": 3,
@@ -1476,9 +1480,11 @@ curl -X POST "https://api.agentsight.io/api/tickets/" \
 changed later. `conversation_id` here is the **numeric** conversation id
 (the business-string spelling belongs to the list filter); `feedback_id`
 records the feedback that prompted the ticket — product feedback is
-rejected, and a ticket created from conversation feedback inherits that
-feedback's conversation unless you anchor one explicitly. Both links must
-belong to your agent; a foreign id is a `400`.
+rejected. Given alone, feedback on a conversation lends the ticket that
+conversation. Given with `conversation_id`, it must be feedback on that same
+conversation, or the create is a `400` on `feedback_id`; so agent feedback
+cannot go on a ticket that names a conversation. Both links must belong to
+your agent; a foreign id is a `400`.
 
 The ticket is authored as the key's name and the team is notified.
 
@@ -1726,7 +1732,10 @@ curl -X POST "https://api.agentsight.io/api/agents/20/data-entities/" \
   "deleted_at": null,
   "conversation_count": 0,
   "receiving_traffic": false,
-  "embed_token_count": 0
+  "embed_token_count": 0,
+  "member_count": 0,
+  "rule_count": 0,
+  "invitation_count": 0
 }
 ```
 
@@ -1742,6 +1751,9 @@ curl -X POST "https://api.agentsight.io/api/agents/20/data-entities/" \
   landing on.
 - **`embed_token_count`** is how many active embed tokens are pinned to the row. They
   stop working while it is deleted.
+- **`member_count`, `rule_count` and `invitation_count`** are dashboard access: how
+  many team members, email-domain rules and pending invitations are restricted to
+  the row.
 
 `POST` answers `400` when the key already exists in any casing, including on a
 deleted row, or when the agent already has 500 active entities. `restore` answers
@@ -1759,14 +1771,13 @@ Conversations, feedback, tickets and token usage take the same two parameters:
 With neither, every row comes back. **A blank `data_entity` also reads as no filter**,
 so do not build the parameter from a value that can be empty. **A backend without
 the `data-entities` capability ignores both parameters** and returns every row, so
-read `capabilities` from [`GET /api/me/`](#who-this-key-is) before relying on them. **A backend without
-the `data-entities` capability ignores both parameters** and returns every row, so
-read `capabilities` from [`GET /api/me/`](#who-this-key-is) before relying on them. Feedback and tickets
-follow their conversation, so agent-level feedback and tickets without a conversation
-appear under neither.
+read `capabilities` from [`GET /api/me/`](#who-this-key-is) before relying on them.
+Feedback and tickets follow their conversation, so agent-level feedback and tickets
+without a conversation appear under neither.
 
-Conversation and usage rows carry their key as `data_entity`, or `null` for
-Unassigned. A conversation's entity is set once and cannot be changed: `data_entity`
+Conversation, usage and feedback rows carry their key as `data_entity`, and so does a
+ticket's nested `conversation`. It is `null` for Unassigned and for a row with no
+conversation. A conversation's entity is set once and cannot be changed: `data_entity`
 is not an updatable field.
 
 ### On the wire, and on embed tokens

@@ -65,9 +65,13 @@ class DataEntities(Resource):
     """``ags.data_entities`` — the tenants this agent serves.
 
     Tracking creates a data entity on first sight of its key, so nothing here
-    is needed to start: ``agentsight.conversation("c-1", data_entity="hotel-paris")``
-    is enough. This namespace is for what comes after, or before: giving one a
-    readable name, declaring one ahead of its traffic, soft-deleting one.
+    is needed to start. Opening the conversation with its key is enough::
+
+        with agentsight.conversation("c-1", data_entity="hotel-paris"):
+            ...
+
+    This namespace is for what comes after, or before: giving one a readable
+    name, declaring one ahead of its traffic, soft-deleting one.
 
     Conversations are not moved here. A conversation's entity is set once, by
     the first key that reaches it, and re-assigning one is not supported.
@@ -83,9 +87,12 @@ class DataEntities(Resource):
         Soft-deleted rows are left out unless ``include_deleted=True``. Each
         row carries ``id``, ``key``, ``name``, ``description``, ``metadata``,
         ``origin``, ``first_seen_at``, ``last_seen_at``, ``is_deleted``,
-        ``deleted_at``, ``conversation_count``, ``receiving_traffic`` and
-        ``embed_token_count``. ``receiving_traffic`` is true on a deleted row
-        that conversations are still landing on.
+        ``deleted_at``, ``conversation_count``, ``receiving_traffic``,
+        ``embed_token_count``, ``member_count``, ``rule_count`` and
+        ``invitation_count``. ``receiving_traffic`` is true on a deleted row
+        that conversations are still landing on. The last three are dashboard
+        access: team members, email-domain rules and pending invitations
+        restricted to the entity.
 
         Lazy, like every list on this client: nothing is fetched until you
         iterate. An agent holds at most 500 active entities, so walking this is

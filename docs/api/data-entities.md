@@ -14,7 +14,8 @@ You do not need this namespace to start. Tracking creates an entity the first ti
 it sees a key:
 
 ```python
-agentsight.conversation("wa-3859", data_entity="hotel-paris")
+with agentsight.conversation("wa-3859", data_entity="hotel-paris"):
+    ...
 ```
 
 This namespace is for giving one a readable name, declaring one ahead of its
@@ -70,6 +71,7 @@ most 500 active entities, so walking it is cheap.
 | `conversation_count` | conversations under it |
 | `receiving_traffic` | `true` on a deleted row that conversations are still landing on |
 | `embed_token_count` | active embed tokens pinned to it, which stop working if it is deleted |
+| `member_count`, `rule_count`, `invitation_count` | dashboard access: team members, email-domain rules and pending invitations restricted to it |
 
 ## Reading one
 
@@ -159,15 +161,15 @@ client's rows. `None` means not filtered, as it does for every filter on this cl
 Feedback and tickets follow their conversation, so agent-level feedback and tickets
 without a conversation appear under neither filter.
 
-On a backend that does not support data entities, either filter raises
-`ValidationError` as soon as the list is read, and nothing is requested. That
-backend would ignore the filter and return every row. The check costs one cached
-`me()` call.
+Conversation, usage and feedback rows carry the key as `data_entity`, and so does a
+ticket's nested `conversation`. It is `None` for Unassigned and for a row with no
+conversation.
 
 On a backend that does not support data entities, either filter raises
-`ValidationError` as soon as the list is read, and nothing is requested. That
-backend would ignore the filter and return every row. The check costs one cached
-`me()` call.
+`ValidationError` as soon as the list is read, and the list itself is never
+requested: that backend would ignore the filter and return every row. Each refusal
+costs one `GET /api/me/`. A cached "no" is read again before it is trusted, so a
+client that outlives a backend upgrade starts filtering.
 
 :::danger A filter is not a tenant boundary
 An API key sees its whole agent, so a filter only narrows what your own code
