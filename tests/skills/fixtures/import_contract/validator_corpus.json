@@ -417,6 +417,23 @@
     ]
   },
   {
+    "name": "data_entity_lone_surrogate",
+    "conversations": [
+      {
+        "conversation_id": "de-surrogate",
+        "started_at": "2016-06-01T10:00:00Z",
+        "messages": [
+          {
+            "sender": "user",
+            "content": "hello",
+            "timestamp": "2016-06-01T10:00:00Z"
+          }
+        ],
+        "data_entity": "hotel-\ud800"
+      }
+    ]
+  },
+  {
     "name": "metadata_objects_11_deep",
     "conversations": [
       {

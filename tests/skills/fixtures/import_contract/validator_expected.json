@@ -13,6 +13,13 @@
   "earliest_timestamp": [],
   "data_entity_key": [],
   "data_entity_blank_means_no_key": [],
+  "data_entity_lone_surrogate": [
+    [
+      0,
+      "surrogate_character",
+      "data_entity"
+    ]
+  ],
   "metadata_objects_11_deep": [
     [
       0,

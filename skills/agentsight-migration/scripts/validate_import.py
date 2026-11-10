@@ -20,7 +20,7 @@ carrying one can be imported.
 
 It makes no network request. The contract it checks against ships with the
 skill in `../contract/`: a snapshot of the server's schema, limits and example
-taken from an ags_backend checkout by tests/skills/regenerate_corpus.py
+taken from a backend checkout by tests/skills/regenerate_corpus.py
 (MANIFEST.json names the commit). The server re-validates on upload, so a
 contract newer than the snapshot shows up there as a named rejection -- never
 as a wrong file here. This script cannot create an import run and cannot
@@ -144,7 +144,7 @@ class Finding:
 
 
 # The contract ships with the skill: a snapshot of the server's schema, limits
-# and example, taken from an ags_backend checkout by
+# and example, taken from a backend checkout by
 # tests/skills/regenerate_corpus.py. MANIFEST.json names the backend commit.
 CONTRACT_DIR = Path(__file__).resolve().parent.parent / "contract"
 SCHEMA_FILE = "import_v1.schema.json"
@@ -212,7 +212,7 @@ def describe_contract(manifest, limits):
     exported = str(manifest.get("exported_at") or "")[:10]
     if commit and exported:
         return (
-            f"shipped snapshot -- ags_backend@{commit} exported {exported}, "
+            f"shipped snapshot -- backend@{commit} exported {exported}, "
             f"schema_version {version}"
         )
     return f"unversioned snapshot, schema_version {version}"

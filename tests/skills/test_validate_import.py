@@ -29,7 +29,7 @@ BASE = "2016-06-01T10:00:00Z"
 
 # The contract digest the golden corpus was last regenerated against. When it
 # stops matching the shipped snapshot, the contract moved: re-run
-# regenerate_corpus.py from an ags_backend checkout and paste the digest it
+# regenerate_corpus.py from a backend checkout and paste the digest it
 # prints here, in the same commit as the refreshed snapshot and corpus.
 CORPUS_CONTRACT_SHA256 = "7ee08d7759235edd118ce28e65e36729339c7014f388f82b4eb01c059a1c7744"
 
@@ -150,6 +150,7 @@ class TestAgreement:
             "timestamp_out_of_range",
             "before_started_at",
             "duplicate_conversation_id",
+            "surrogate_character",
         ):
             assert code in seen, f"{code} has no corpus case"
 
@@ -797,11 +798,11 @@ class TestSnapshot:
 
     def test_the_manifest_names_its_origin(self):
         assert set(MANIFEST) >= {"source", "commit", "exported_at", "contract_sha256"}
-        assert MANIFEST["source"] == "ags_backend"
+        assert MANIFEST["source"] == "backend"
 
     def test_the_snapshot_digest_matches_the_corpus_pin(self):
-        """If this fails, the contract moved: re-run regenerate_corpus.py from an
-        ags_backend checkout and update CORPUS_CONTRACT_SHA256."""
+        """If this fails, the contract moved: re-run regenerate_corpus.py from a
+        backend checkout and update CORPUS_CONTRACT_SHA256."""
         digest = rc.contract_digest(
             (CONTRACT_DIR / "import_v1.schema.json").read_bytes(),
             (CONTRACT_DIR / "example_import.json").read_bytes(),
@@ -809,6 +810,6 @@ class TestSnapshot:
         )
         assert digest == MANIFEST["contract_sha256"], "MANIFEST.json does not describe these files"
         assert digest == CORPUS_CONTRACT_SHA256, (
-            "the snapshot moved: re-run tests/skills/regenerate_corpus.py from an "
-            "ags_backend checkout and update CORPUS_CONTRACT_SHA256"
+            "the snapshot moved: re-run tests/skills/regenerate_corpus.py from a "
+            "backend checkout and update CORPUS_CONTRACT_SHA256"
         )

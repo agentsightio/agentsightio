@@ -2,7 +2,7 @@
 """Refresh the shipped contract snapshot and the golden agreement corpus.
 
 Two checked-in artifacts derive from the backend and go stale the moment its
-import contract moves. This script rewrites both from one `ags_backend`
+import contract moves. This script rewrites both from one backend
 checkout, so they can only ever move together.
 
     skills/agentsight-migration/contract/          what the SERVER publishes
@@ -29,10 +29,10 @@ checked-in artifacts asserted against the code that produced them.
 `test_validate_import.py::TestAgreement` replays the corpus and asserts the
 same (index, code, field) triples; `TestSnapshot` pins the snapshot's digest.
 
-HOW TO RUN IT -- from an `ags_backend` checkout, with its virtualenv active:
+HOW TO RUN IT -- from a backend checkout, with its virtualenv active:
 
     DJANGO_SETTINGS_MODULE=AgentSight.settings \
-    PYTHONPATH=/path/to/ags_backend \
+    PYTHONPATH=/path/to/backend \
     python3 /path/to/agentsight/tests/skills/regenerate_corpus.py
 
 It prints the new contract digest; paste it into CORPUS_CONTRACT_SHA256 in
@@ -408,7 +408,7 @@ def _write_contract_snapshot():
     backend_dir = Path(data_imports.__file__).resolve().parent.parent
 
     manifest = {
-        "source": "ags_backend",
+        "source": "backend",
         "commit": _backend_commit(backend_dir),
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "contract_sha256": contract_digest(schema_bytes, example_bytes, limits),
@@ -454,7 +454,7 @@ def main():
     except Exception as exc:
         print(
             f"corpus written; expected NOT regenerated ({exc}).\n"
-            f"Run this from an ags_backend checkout -- see the module docstring.",
+            f"Run this from a backend checkout -- see the module docstring.",
             file=sys.stderr,
         )
         return 1
@@ -474,7 +474,7 @@ def main():
 
     _write_fixture(FIXTURES / "validator_expected.json", expected)
     print(f"wrote {len(corpus)} cases to {FIXTURES}")
-    print(f"wrote the contract snapshot to {CONTRACT_DIR} (ags_backend@{manifest['commit'][:12]})")
+    print(f"wrote the contract snapshot to {CONTRACT_DIR} (backend@{manifest['commit'][:12]})")
     print(f"contract_sha256 = {manifest['contract_sha256']}")
     print("  -> set CORPUS_CONTRACT_SHA256 in tests/skills/test_validate_import.py to this value")
     return 0
