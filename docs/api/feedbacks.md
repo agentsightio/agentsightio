@@ -150,7 +150,7 @@ Do not add it "just to see tickets" on a listing you expect to stay complete;
 the page's `count` is the promoted count. Without it, payloads carry no
 `ticket` key, `counts` collapses to `{"all": N}`, and `has_ticket` /
 `ticket_status` answer 400 — same contract as
-[conversations](./conversations.md#tickets-include_tickets-narrows-as-it-includes).
+[conversations](./conversations.md#tickets-include-tickets-narrows-as-it-includes).
 :::
 
 `get()` needs no parameter: one feedback by id carries its `ticket`

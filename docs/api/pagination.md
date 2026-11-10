@@ -88,7 +88,7 @@ ags.feedbacks.page(include_tickets=True).extra
 
 Plain, `counts` holds `all` and nothing else — kept because the response
 carries it, not because it says anything `count` does not. Behind
-[`include_tickets=True`](./feedbacks.md#tickets-include_tickets-narrows-as-it-includes)
+[`include_tickets=True`](./feedbacks.md#tickets-include-tickets-narrows-as-it-includes)
 the ticket aggregates arrive alongside: `tickets`, `open_tickets`, and one
 tally per ticket status. The tallies ignore any `ticket_status` filter on
 purpose, so selecting a status does not zero the other buckets.
