@@ -64,9 +64,12 @@ problem was observed, and `update()` refuses it locally.
 
 `conversation` takes the business `conversation_id` string or the integer pk
 — strings cost one resolving request the first time, then the client's id
-cache answers. A ticket created from conversation feedback inherits that
-feedback's conversation unless you anchor one explicitly; product feedback
-is rejected.
+cache answers. `feedback_id` records the feedback that prompted the ticket,
+and product feedback is rejected. Given alone, feedback on a conversation
+lends the ticket that conversation. Given with `conversation`, it must be
+feedback on that same conversation, or the server answers `400`, raised as
+`ValidationError`; so agent feedback cannot go on a ticket that names a
+conversation.
 
 `delete()` exists, but takes the discussion thread with it — prefer
 `update(id, status="closed")` for anything a human might still want to read.

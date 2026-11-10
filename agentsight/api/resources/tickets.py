@@ -100,9 +100,12 @@ class Tickets(Resource):
         and takes either the business ``conversation_id`` string or the
         integer pk (strings cost one resolving request the first time; on
         the wire this route wants the pk). ``feedback_id`` records the
-        feedback that prompted the ticket; product feedback is rejected, and
-        a ticket created from conversation feedback inherits that feedback's
-        conversation unless you anchor it explicitly.
+        feedback that prompted the ticket; product feedback is rejected.
+        Given alone, feedback on a conversation lends the ticket that
+        conversation. Given with ``conversation``, it must be feedback on
+        that same conversation, or the server answers 400, raised as
+        :class:`~agentsight.exceptions.ValidationError`; so agent feedback
+        cannot go on a ticket that names a conversation.
 
         ``status`` defaults to ``open``, ``environment`` (a slug —
         ``ags.environments()`` lists them) to the agent's production
