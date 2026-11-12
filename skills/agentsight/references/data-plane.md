@@ -238,7 +238,10 @@ entity), `data_entity_unassigned=False` (any entity). Conversation, usage and
 feedback rows carry `data_entity`, the key or `None`, and so does a ticket's
 nested `conversation`. A blank `data_entity` is refused locally, because the
 server reads it as no filter, and so is one containing a NUL or an unpaired
-surrogate, because no key can hold one; `None` means not filtered. Spans do not
+surrogate, because no key can hold one. The filter takes one key as a string: a
+list, tuple, set, bytes or number is refused locally too (an empty list would
+send no filter), so read several entities with one call per key. `None` means
+not filtered. Spans do not
 take the pair. Keys match case-insensitively by the server's own case rules, so
 for non-ASCII keys Python's `lower()` can keep apart two keys the server treats
 as one.

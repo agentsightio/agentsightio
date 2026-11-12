@@ -3,7 +3,7 @@
   "$id": "urn:agentsight:data-imports:import:v1",
   "title": "AgentSight conversation import file (v1)",
   "description": "The format for bulk-importing historical conversations and messages into AgentSight. Only fields that map 1:1 onto a storable column are accepted; unknown keys are an error rather than being ignored, so a typo like 'converstaion_id' fails loudly instead of silently dropping the value.",
-  "$comment": "Three contract rules cannot be expressed in JSON Schema and are enforced only by the backend (data_imports/validation.py): metadata nesting depth (max 10), metadata serialized size (max 16 KB), and each message timestamp being at or after its conversation's started_at. A fourth is resolved at commit, not at validation: data_entity keys are matched against the agent's existing data entities and created when unknown, up to the agent's cap, past which the conversation is stored without an entity. Passing this schema is necessary, never sufficient. Client-side validation against this file is a UX nicety; the backend is the authority.",
+  "$comment": "Three contract rules cannot be expressed in JSON Schema and are enforced only by the server: metadata nesting depth (max 10), metadata serialized size (max 16 KB), and each message timestamp being at or after its conversation's started_at. A fourth is resolved at commit, not at validation: data_entity keys are matched against the agent's existing data entities and created when unknown, up to the agent's cap, past which the conversation is stored without an entity. Passing this schema is necessary, never sufficient. Client-side validation against this file is a UX nicety; the backend is the authority.",
 
   "type": "object",
   "additionalProperties": false,
@@ -36,7 +36,7 @@
           "maxLength": 255,
           "pattern": "^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$",
           "description": "Your system's identifier for the conversation. Unique within the file, and the key AgentSight deduplicates on — re-uploading a file whose ids already exist is rejected, never silently merged.",
-          "$comment": "The pattern requires at least one non-whitespace character and forbids NUL anywhere. Postgres rejects NUL in TEXT and JSONB, so an unchecked NUL would pass validation and then blow up mid-commit as an opaque 500."
+          "$comment": "The pattern requires at least one non-whitespace character and forbids NUL anywhere. The server cannot store NUL in text or JSON, so an unchecked NUL would pass validation and then fail the import partway through."
         },
         "started_at": {
           "$ref": "#/$defs/timestamp",
@@ -122,7 +122,7 @@
       "type": "string",
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{1,2}-\\d{1,2}[T ]\\d{1,2}:\\d{1,2}(?::\\d{1,2}(?:\\.\\d{1,6})?)?\\s*(?:Z|[+-]\\d{2}:?\\d{2}|[+-]\\d{2})$",
-      "$comment": "The trailing group is mandatory: that is what enforces 'explicit offset or Z'. The pattern, not 'format', does the work — JSON Schema validators skip format assertions by default, and 'date-time' would accept a naive timestamp anyway. Shaped to match what django.utils.dateparse.parse_datetime accepts, so this schema never rejects a value the backend would take. The backend additionally rejects timestamps before 2000-01-01 or more than 5 minutes in the future."
+      "$comment": "The trailing group is mandatory: that is what enforces 'explicit offset or Z'. The pattern, not 'format', does the work — JSON Schema validators skip format assertions by default, and 'date-time' would accept a naive timestamp anyway. Shaped to match what the server's timestamp parser accepts, so this schema never rejects a value the backend would take. The backend additionally rejects timestamps before 2000-01-01 or more than 5 minutes in the future."
     },
 
     "optionalText": {
@@ -148,7 +148,7 @@
         "not": { "enum": ["__proto__", "constructor", "prototype"] }
       },
       "additionalProperties": { "$ref": "#/$defs/metadataValue" },
-      "$comment": "Recursive, so the key-count and key-name rules apply at every level rather than only the top one. The forbidden key names are a prototype-pollution guard: harmless in Postgres, dangerous the moment stored JSON is spread into an object by a JS consumer, and the dashboard renders metadata. Nesting depth (max 10) and serialized size (max 16 KB) are NOT checked here — JSON Schema cannot express either."
+      "$comment": "Recursive, so the key-count and key-name rules apply at every level rather than only the top one. The forbidden key names are a prototype-pollution guard: harmless where it is stored, dangerous the moment stored JSON is spread into an object by a JS consumer, and the dashboard renders metadata. Nesting depth (max 10) and serialized size (max 16 KB) are NOT checked here — JSON Schema cannot express either."
     },
 
     "metadataValue": {

@@ -104,10 +104,13 @@ no longer have to discover the role that way: `ags.me()["role"]` reports it.
 :::info `ValidationError` is raised locally too
 An unknown filter name, a sentiment that is not one of the three, a `group_by`
 the summary does not offer — all of these raise before anything is sent, and the
-message names the values that would have worked. So does a string that cannot be
-sent: a data entity key containing a NUL or an unpaired surrogate, in a filter or
-in `data_entities.create()`, and an unpaired surrogate in any value that goes
-into the URL, such as a `search` text or a conversation id.
+message names the values that would have worked. So does a
+[data entity filter](./data-entities.md#filtering-by-entity) that is not one key
+as a string, such as a list. So does a string that cannot be sent: a data entity
+key containing a NUL or an unpaired surrogate, in a filter or in
+`data_entities.create()`, and an unpaired surrogate in a query value or a path
+value, such as a `search` text or a conversation id. These are checked before
+the capability read described below, so not even that request goes out.
 
 A [data entity filter](./data-entities.md#filtering-by-entity) on a backend that
 would ignore it is raised locally too, as soon as the list is read. The list is

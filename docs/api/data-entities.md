@@ -169,8 +169,11 @@ ags.usage.summary(data_entity="hotel-paris")           # what one client cost
 A blank `data_entity` raises `ValidationError` instead of being sent, because the
 server reads a blank key as no filter, and an empty variable would return every
 client's rows. A `data_entity` containing a NUL or an unpaired surrogate is refused
-the same way, because no key can hold one. `None` means not filtered, as it does
-for every filter on this client.
+the same way, because no key can hold one. The filter takes one key as a string: a
+list, tuple, set, bytes or number raises `ValidationError` too, with nothing sent,
+because an empty list would send no filter and return every client's rows. To read
+several entities, make one call per key. `None` means not filtered, as it does for
+every filter on this client.
 
 Feedback and tickets follow their conversation, so agent-level feedback and tickets
 without a conversation appear under neither filter.

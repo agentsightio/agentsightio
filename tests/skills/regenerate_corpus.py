@@ -8,7 +8,7 @@ checkout, so they can only ever move together.
     skills/agentsight-migration/contract/          what the SERVER publishes
         import_v1.schema.json                      copied byte-for-byte
         example_import.json                        copied byte-for-byte
-        limits.json                                limits_payload() -- no file in the backend
+        limits.json                                built per request there, not a file
         MANIFEST.json                              backend commit, export time, digest
 
     fixtures/import_contract/validator_corpus.json     the hostile inputs
@@ -18,13 +18,12 @@ The snapshot is the only contract `validate_import.py` reads -- the migration
 skill makes no network request -- so a stale copy is a file the validator
 accepts and the server rejects, or the reverse. The corpus guards the
 validator's hand-written half: it is a third implementation of rules that
-already exist twice (the backend's `data_imports/validation.py`, the
-dashboard's `lib/imports/pre-validate.ts`), and nothing at runtime reads two
-of them, so the only symptom of drift is a file this script accepts and the
-server rejects -- or, far worse, one it rejects and the server would have
-taken, which costs the user real rows.
+already exist twice (the server's own check and the dashboard's pre-check),
+and nothing at runtime reads two of them, so the only symptom of drift is a
+file this script accepts and the server rejects -- or, far worse, one it
+rejects and the server would have taken, which costs the user real rows.
 
-This is the guard, in the shape of `data_imports/tests/test_contract_drift.py`:
+This is the guard, in the same shape as the server's own contract-drift test:
 checked-in artifacts asserted against the code that produced them.
 `test_validate_import.py::TestAgreement` replays the corpus and asserts the
 same (index, code, field) triples; `TestSnapshot` pins the snapshot's digest.
@@ -38,8 +37,8 @@ HOW TO RUN IT -- from a backend checkout, with its virtualenv active:
 It prints the new contract digest; paste it into CORPUS_CONTRACT_SHA256 in
 test_validate_import.py and commit everything in one change.
 
-**No database is touched.** `validate_chunk`'s only queries are the two `IN`
-lookups in `_duplicate_errors`, and both model managers are stubbed out below,
+**No database is touched.** The server's chunk check makes only two queries,
+the `IN` lookups of its duplicate check, and both are stubbed out below,
 so the in-chunk duplicate logic still runs while the server-only halves
 (`conversation_already_exists`, cross-chunk staging) return empty -- which is
 exactly the subset a standalone validator can reproduce.
@@ -52,7 +51,7 @@ the repo. They are covered as ordinary unit tests instead. What is here is the
 hand-written half -- the rules JSON Schema cannot express -- which is where
 divergence is actually possible.
 
-Also not here: anything time-dependent. `validate_chunk` computes its future
+Also not here: anything time-dependent. The server's check computes its future
 ceiling as `now() + 5min`, so every timestamp below sits in 2016.
 """
 
@@ -349,7 +348,7 @@ def build_corpus():
 
 
 def _stub_managers():
-    """Neutralise the two ORM lookups in `_duplicate_errors`. No DB, no writes."""
+    """Neutralise the two lookups of the server's duplicate check. No DB, no writes."""
 
     class _Empty:
         def filter(self, *args, **kwargs):
@@ -395,8 +394,8 @@ def _write_contract_snapshot():
     """Copy the three contract documents out of the configured backend.
 
     The schema and the example are files there and are copied byte-for-byte.
-    The limits document is not: the server builds it per request from the
-    constants in `data_imports/limits.py`, so it is called here and dumped.
+    The limits document is not: the server builds it per request from its
+    own constants, so it is called here and dumped.
     """
     import data_imports
     from data_imports.schema.loader import EXAMPLE_PATH, SCHEMA_PATH

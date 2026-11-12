@@ -158,7 +158,7 @@ unless you pass `allow_nan=False`, and the server rejects them as
 not `NaN`.
 
 NUL bytes (`U+0000`) are rejected anywhere in any string — content, ids, text
-fields, metadata keys and values alike. Postgres cannot store them. They turn
+fields, metadata keys and values alike. The server cannot store them. They turn
 up in exports from systems that stored binary in a text column.
 
 ## Data entities

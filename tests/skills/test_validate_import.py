@@ -31,7 +31,7 @@ BASE = "2016-06-01T10:00:00Z"
 # stops matching the shipped snapshot, the contract moved: re-run
 # regenerate_corpus.py from a backend checkout and paste the digest it
 # prints here, in the same commit as the refreshed snapshot and corpus.
-CORPUS_CONTRACT_SHA256 = "7ee08d7759235edd118ce28e65e36729339c7014f388f82b4eb01c059a1c7744"
+CORPUS_CONTRACT_SHA256 = "11b28c8bb47d41fd263ca72b313270fa029499a5772367abc07eb97612daa0ab"
 
 
 def _load(name, path):

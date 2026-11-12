@@ -173,7 +173,7 @@ The usual shapes of the answer, per category:
 - **Timestamps outside the plausibility window** — nearly always epoch
   arithmetic or a two-digit year. Investigate before deciding; a "drop" here
   usually discards data that a fixed parse would have kept.
-- **NUL bytes** — strip them. There is no other option; Postgres cannot store
+- **NUL bytes** — strip them. There is no other option; the server cannot store
   them.
 - **Metadata over the size cap / too deep / bad keys** — this is what the
   Wave 3 allow-list is for. Narrow the fields rather than truncating values.

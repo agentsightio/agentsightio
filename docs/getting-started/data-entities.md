@@ -55,7 +55,8 @@ drops the key and logs a warning, once for each of these cases:
 | Where the key was | What the warning means |
 |---|---|
 | On a conversation | The conversation is recorded without an entity. The [default](#a-default-for-the-whole-deployment) is not used in its place. |
-| On a turn of a conversation that already has an entity | Ignored. The conversation keeps the entity it had. |
+| On a turn of a conversation that has no key yet, or only the default with nothing recorded | The conversation is recorded without an entity. The default it had is dropped, not kept in its place. |
+| On a turn of a conversation that has its own key, or whose default has already been recorded | Ignored. The conversation keeps the entity it had. |
 | In `init(data_entity=…)` | The deployment has no default, and `AGENTSIGHT_DATA_ENTITY` is not read in its place. |
 | In `AGENTSIGHT_DATA_ENTITY` | Ignored. The deployment has no default. |
 

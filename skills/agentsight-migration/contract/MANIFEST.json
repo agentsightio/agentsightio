@@ -1,6 +1,6 @@
 {
   "source": "backend",
-  "commit": "6e64f2161e12f474d7700a872f3d5fb711cb2c59",
-  "exported_at": "2026-11-10T09:36:43+00:00",
-  "contract_sha256": "7ee08d7759235edd118ce28e65e36729339c7014f388f82b4eb01c059a1c7744"
+  "commit": "b47d34c04c093e1886ad313c5ffe437749d8fc58",
+  "exported_at": "2026-11-12T14:14:43+00:00",
+  "contract_sha256": "11b28c8bb47d41fd263ca72b313270fa029499a5772367abc07eb97612daa0ab"
 }

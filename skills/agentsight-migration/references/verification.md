@@ -56,13 +56,14 @@ what it printed to stderr: the traceback names the input it could not handle.
 
 ## Reading the report
 
-Findings are grouped by the server's own error code, most frequent first, with
-the exact total and up to ten examples each. Every example names the file, the
+Findings are grouped by error code, most frequent first, with the exact total
+and up to ten examples each. Every code but one is the server's own; the
+exception, `nesting_too_deep`, is the validator's (below). Every example names the file, the
 conversation index, its `conversation_id`, and the field path
 (`messages[4].timestamp`) so it can be found in the file directly.
 
-The codes are the same ones the dashboard's error glossary explains, so a code
-here is a code the user would have seen after uploading. The ones worth
+The server's codes are the same ones the dashboard's error glossary explains,
+so such a code is one the user would have seen after uploading. The ones worth
 recognising on sight:
 
 - `unknown_sender` — a sender outside the eight aliases. Almost always
@@ -83,6 +84,13 @@ recognising on sight:
   store one anywhere in a record. Fix the export's decoding rather than
   stripping the character, and re-export as UTF-8. The report prints such
   characters as escapes, so it never crashes on them.
+- `nesting_too_deep` — the validator's own code, not the server's, so the
+  glossary does not list it. Arrays or objects nested too deeply to check here:
+  the record may not be importable, and when the nesting is too deep to parse at
+  all, nothing in the file was checked. Where the limit falls depends on the
+  Python running the script, so the finding claims no more than that. Flatten
+  the deeply nested values in the export and run again; it counts as a finding
+  (exit 1).
 
 **Warnings do not affect the exit code** and are not failures: unknown
 top-level keys, and any single conversation too large for the dashboard to pack

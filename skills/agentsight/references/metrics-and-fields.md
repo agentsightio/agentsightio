@@ -137,8 +137,13 @@ with agentsight.conversation(session_id, data_entity=hotel_code):
   the conversation, or on a turn before anything is recorded, beats the default.
   Anything recorded first goes out under the default and the first key sticks:
   `open_conversation(cid)` without the key is the usual case. A key containing a
-  NUL or an unpaired surrogate is dropped with a warning; in `init()` that leaves
-  no default at all, and `AGENTSIGHT_DATA_ENTITY` is not read in its place.
+  NUL or an unpaired surrogate is dropped with a warning, logged once for each
+  of four cases. On a conversation, or on a turn before anything is recorded,
+  the conversation is recorded Unassigned and the default is not used in its
+  place. On a turn of a conversation that already has its own key, or whose
+  default has been recorded, it keeps that key. In `init()` it leaves no default
+  at all, and `AGENTSIGHT_DATA_ENTITY` is not read in its place; in that
+  variable itself, it is ignored and there is no default.
 - **Uploads.** `upload_attachments()` sends the key only inside the conversation's
   own scope. Elsewhere it sends none, and the next span supplies it.
 - **Independent of environments.** One entity list per agent, across environments,
