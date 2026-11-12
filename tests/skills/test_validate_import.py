@@ -606,6 +606,16 @@ class TestEnvelope:
         assert "#1  after  [messages[0].sender]" in out
         assert "unknown_sender" in out
 
+    def test_the_nesting_message_claims_only_what_this_script_knows(self):
+        """Where the recursion limit falls depends on the local Python (150
+        nested arrays pass on one version and not on another), and the server's
+        on its own runtime. So the record "may not be importable", never
+        "cannot be imported"."""
+        for detail in (vi.nesting_detail(151), vi.NESTING_FILE_DETAIL):
+            assert "may not be importable" in detail
+            assert "cannot be imported" not in detail
+            assert "server" not in detail
+
     def test_a_record_too_deep_to_check_is_one_finding(self, ctx):
         value = "x"
         for _ in range(500):
@@ -766,8 +776,34 @@ class TestCli:
         assert run_cli([path]) == 1
         out = capsys.readouterr().out
         assert "surrogate_character" in out
-        assert "  hotel-\\ud800  (1)" in out  # printed as its escape
+        # Refused on import, so it is no entity: counted apart, never listed.
+        assert "DATA ENTITIES -- 0 distinct key(s) on 0 conversation(s)" in out
+        assert "1 more conversation(s) name a key the server refuses" in out
+        assert "hotel-\\ud800" not in out
         assert "NOT CHECKED HERE" in out
+
+    def test_refused_keys_are_left_out_of_the_data_entity_summary(self, tmp_path, capsys):
+        """A NUL or lone-surrogate key never becomes an entity, so it is not a
+        distinct key to confirm, and a NUL must never reach the console raw."""
+        body = (
+            '{"schema_version": 1, "conversations": ['
+            + json.dumps(conversation("a", data_entity="hotel-paris")) + ", "
+            + json.dumps(conversation("b", data_entity="hotel\x00paris")) + ", "
+            + '{"conversation_id": "c", "started_at": "2016-06-01T10:00:00Z", '
+            '"data_entity": "hotel-\\udc00", "messages": [{"sender": "user", '
+            '"content": "hi", "timestamp": "2016-06-01T10:00:00Z"}]}'
+            + "]}"
+        )
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "DATA ENTITIES -- 1 distinct key(s) on 1 conversation(s)" in out
+        assert "  hotel-paris  (1)" in out
+        assert "2 more conversation(s) name a key the server refuses" in out
+        assert "\x00" not in out
+        assert "nul_byte" in out
+        assert "surrogate_character" in out
 
     def test_the_report_prints_on_a_console_that_is_not_utf8(self, tmp_path, monkeypatch):
         """Every character the console cannot show is printed as its escape:

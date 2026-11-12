@@ -241,6 +241,19 @@ def test_an_unsendable_data_entity_key_is_dropped_not_sent(spans, caplog, unsend
     assert any("data_entity" in r.getMessage() for r in caplog.records)
 
 
+def test_a_refused_character_past_the_clamp_still_drops_the_key(spans, caplog):
+    """Checked before the clamp. Clamping first cut the NUL away and sent the
+    first 255 characters as if they had been the key, where the API client
+    refuses the same string."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        _record(data_entity="k" * 255 + "\x00tail")
+
+    assert "data_entity" not in blocks(spans)["c-key"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("character the API refuses" in m for m in messages)
+    assert not any("clamped" in m for m in messages)
+
+
 def test_an_unsendable_data_entity_key_warns_only_once(spans, caplog):
     with caplog.at_level("WARNING", logger="agentsight"):
         _record(data_entity="a\x00")

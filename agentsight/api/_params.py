@@ -243,18 +243,28 @@ def build(
             f"Supported: {', '.join(sorted(allowed))}"
         )
 
-    # The backend reads a blank key as no filter at all, so an empty variable
-    # would answer with every tenant's rows.
     entity = filters.get("data_entity")
-    if isinstance(entity, str) and not entity.strip():
-        raise ValidationError(
-            "data_entity must not be blank: it would match every data entity. "
-            "Pass a key, or data_entity_unassigned=True for the rows with none."
-        )
-    # The backend refuses these in a key, and a lone surrogate cannot be put
-    # into a URL at all. Refused here, so the answer is the same for both and
-    # nothing is sent.
-    if isinstance(entity, str):
+    if entity is not None:
+        # One key, as text. Anything else would slip past the two checks
+        # below: an empty list sends no filter at all, and a list holding a
+        # blank sends one the backend reads as none, so either would answer
+        # with every tenant's rows.
+        if not isinstance(entity, str):
+            raise ValidationError(
+                "data_entity takes one key as a string, got "
+                f"{type(entity).__name__}. To read several data entities, "
+                "make one call per key."
+            )
+        # The backend reads a blank key as no filter at all, so an empty
+        # variable would answer with every tenant's rows.
+        if not entity.strip():
+            raise ValidationError(
+                "data_entity must not be blank: it would match every data entity. "
+                "Pass a key, or data_entity_unassigned=True for the rows with none."
+            )
+        # The backend refuses these in a key, and a lone surrogate cannot be
+        # put into a URL at all. Refused here, so the answer is the same for
+        # both and nothing is sent.
         refused = refused_character(entity)
         if refused:
             raise ValidationError(

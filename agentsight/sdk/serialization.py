@@ -170,7 +170,8 @@ def parse_data_entity(
     NUL and surrogate characters drop the key instead of being stripped. Ingest
     refuses them, so one would cost the whole batch; and removing the character
     could quietly merge the key into a different tenant's, which is worse than
-    the conversation going unassigned.
+    the conversation going unassigned. They are looked for in the whole value,
+    before the clamp, so one past the cut still drops the key.
 
     A dropped key is reported as ``(None, True)``, never as plain ``None``. A
     default must not stand in for it: the caller asked for a specific tenant,
@@ -187,16 +188,19 @@ def parse_data_entity(
     text = text.strip()
     if not text:
         return None, False
+    # Checked on the whole value, before the clamp: a refused character past
+    # the cut would otherwise be cut away, and the key sent as if it had been
+    # a good one. The warning shows the start of the value, which is enough to
+    # find it and keeps a very long one out of the log.
+    if refused_character(text):
+        warn_key, message = _REFUSALS[refusal]
+        warn_once(warn_key, message, text[:MAX_FIELD_LENGTH])
+        return None, True
     key = clamp_field("data_entity", text)
     if key is None:  # pragma: no cover - clamp_field only returns None for None
         return None, False
     # Never empty: the text was trimmed, so its first character is not a space.
-    key = key.rstrip()
-    if refused_character(key):
-        warn_key, message = _REFUSALS[refusal]
-        warn_once(warn_key, message, key)
-        return None, True
-    return key, False
+    return key.rstrip(), False
 
 
 def valid_ip(value: Optional[str]) -> Optional[str]:

@@ -32,8 +32,8 @@ def _encodes(text: str) -> bool:
     return True
 
 
-def _unencodable(path: str, kwargs: Dict[str, Any]) -> str:
-    """Which part of a request could not be encoded, for the error message.
+def _unencodable(path: str, kwargs: Dict[str, Any]) -> Optional[str]:
+    """Which part of a request cannot be encoded, named for the error message.
 
     Only the query string and the path can fail this way. A JSON body is
     serialised with ASCII escapes, so a lone surrogate there travels as
@@ -47,7 +47,23 @@ def _unencodable(path: str, kwargs: Dict[str, Any]) -> str:
                 return str(name)
     if not _encodes(path):
         return "the request path"
-    return "a value in the request"
+    return None
+
+
+def _refuse_unencodable(path: str, kwargs: Dict[str, Any]) -> None:
+    """Raise for a URL-bound string holding an unpaired surrogate.
+
+    Such a string is not valid text. In a query value the HTTP library fails
+    on it from deep inside, with an error this package does not own; in a path
+    it is sent in a form no id can match. Checked before anything else a call
+    does, so the error can say that nothing was sent and be right.
+    """
+    name = _unencodable(path, kwargs)
+    if name is not None:
+        raise ValidationError(
+            f"{name} contains an unpaired surrogate character, which is not "
+            "valid text and cannot be sent. Nothing was sent."
+        )
 
 
 class AgentSight:
@@ -149,18 +165,17 @@ class AgentSight:
     # -- requests ----------------------------------------------------------
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
+        _refuse_unencodable(path, kwargs)
         try:
             return self._transport.request(method, path, **kwargs)
         except UnicodeEncodeError as exc:
-            # A string with an unpaired surrogate cannot be encoded into a
-            # query string or a URL, and the failure surfaces from deep inside
-            # the HTTP library as an error this package does not own. Nothing
-            # was sent. Raised as what it is: a value the caller passed that
-            # the API cannot be asked about.
+            # What the check above cannot see: a value that is not a string
+            # but whose text holds an unpaired surrogate. This request did not
+            # go out. An earlier one of the same call may have, so the message
+            # does not say otherwise.
             raise ValidationError(
-                f"{_unencodable(path, kwargs)} contains an unpaired surrogate "
-                "character, which is not valid text and cannot be sent. "
-                "Nothing was sent."
+                "a value in the request contains an unpaired surrogate "
+                "character, which is not valid text and cannot be sent."
             ) from exc
 
     # -- identity ----------------------------------------------------------

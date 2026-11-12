@@ -10,7 +10,8 @@ looser, this script is looser. Every rule is a port of one that exists in the
 server's own check or the dashboard's pre-check; a rule with no home there is a
 bug in this file.
 
-Two deliberate exceptions, both for records the server cannot import at all:
+Two deliberate exceptions, for records the server cannot import or this
+script cannot check:
 
   * A lone surrogate (a "\\ud800" JSON escape) outside `data_entity`. The
     server's check names one only in `data_entity`; anywhere else the server
@@ -18,9 +19,11 @@ Two deliberate exceptions, both for records the server cannot import at all:
     `surrogate_character`.
   * Arrays (or objects) nested so deeply that checking them exhausts Python's
     recursion limit. Arrays do not count toward the metadata depth limit, so
-    no rule names them, but the server's own check gives up on such a record
-    too, and the upload of its chunk fails. Reported here as
-    `nesting_too_deep`, a code of this script's own, rather than as a crash.
+    no rule names them. Where that limit falls depends on the Python running
+    this script, and the server's own limit on the runtime it runs on, so the
+    finding claims only what is known here: the record could not be checked
+    and may not be importable. Reported as `nesting_too_deep`, a code of this
+    script's own, rather than as a crash.
 
 It makes no network request. The contract it checks against ships with the
 skill in `../contract/`: a snapshot of the server's schema, limits and example
@@ -564,14 +567,14 @@ def deepest_field(conversation):
 
 def nesting_detail(depth):
     return (
-        f"Arrays or objects nested {depth} levels deep: too deep for this script or "
-        f"the server to check, so it cannot be imported. Flatten the value."
+        f"Arrays or objects nested {depth} levels deep: too deeply nested to check "
+        f"here, so the record may not be importable. Flatten the value."
     )
 
 
 NESTING_FILE_DETAIL = (
-    "Arrays or objects nested too deeply to parse: neither this script nor the "
-    "server can read this file. Flatten the deeply nested values."
+    "Arrays or objects nested too deeply to parse here, so nothing in this file "
+    "was checked and it may not be importable. Flatten the deeply nested values."
 )
 
 
@@ -674,10 +677,12 @@ def validate_file(path, data, size, ctx, findings, warnings, seen_ids):
             if not record and ctx["validator"] is not None:
                 check_schema(conversation, ctx["validator"], emit)
         except RecursionError:
-            # Both passes recurse, and so does the server's check, which gives
-            # up on the same records. Whatever the value pass found before
-            # giving up stands: each of its findings is true on its own, and
-            # the schema pass only runs on a record that had none.
+            # Both passes recurse, so a deep enough record cannot be checked
+            # here. Where that happens depends on this Python, and the server's
+            # own limit on its runtime, so the finding says "may". Whatever the
+            # value pass found before giving up stands: each of its findings is
+            # true on its own, and the schema pass only runs on a record that
+            # had none.
             field, depth = deepest_field(conversation)
             emit("nesting_too_deep", nesting_detail(depth), field)
 
@@ -718,6 +723,10 @@ def collect_data_entities(data, stats):
     which no port can reproduce: for ASCII keys the two agree, and beyond ASCII
     the server may merge keys listed here as two. The report says so whenever a
     key is not ASCII.
+
+    A key holding a NUL or a lone surrogate is refused on import and never
+    becomes an entity, so it is counted apart and never printed: the findings
+    already name each record that carries one.
     """
     conversations = data.get("conversations") if isinstance(data, dict) else None
     if not isinstance(conversations, list):
@@ -730,6 +739,9 @@ def collect_data_entities(data, stats):
         key = raw.strip() if isinstance(raw, str) else ""
         if not key:
             stats["without_data_entity"] += 1
+            continue
+        if NUL in key or first_surrogate(key) is not None:
+            stats["refused_data_entity"] += 1
             continue
         stats["with_data_entity"] += 1
         if not key.isascii():
@@ -767,7 +779,8 @@ def render_data_entities(stats, max_examples):
     """The keys the file names, for the user to confirm BEFORE uploading: a
     conversation's entity is permanent, and an unknown key becomes an entity."""
     keys = stats["data_entity_keys"]
-    if not keys:
+    refused = stats.get("refused_data_entity", 0)
+    if not keys and not refused:
         return []
     out = [
         "",
@@ -781,6 +794,11 @@ def render_data_entities(stats, max_examples):
     hidden = len(ordered) - max_examples
     if hidden > 0:
         out.append(f"  ... {hidden:,} more not shown (--max-examples)")
+    if refused:
+        out.append(
+            f"{refused:,} more conversation(s) name a key the server refuses (a NUL or "
+            f"a lone surrogate); they are not counted or listed here. See the findings."
+        )
     out.append(
         "Keys are matched case-insensitively and trimmed; an unknown key creates an "
         "entity on import, and a conversation's entity cannot be changed afterwards. "
@@ -920,6 +938,7 @@ def run(argv=None):
         "messages": 0,
         "with_data_entity": 0,
         "without_data_entity": 0,
+        "refused_data_entity": 0,
         "data_entity_keys": {},
     }
     for path in args.files:
@@ -933,7 +952,8 @@ def run(argv=None):
             continue
         except RecursionError:
             # Valid JSON, so not invalid_json: the fix is the nesting, not the
-            # syntax. The server's own parser gives up at the same depth.
+            # syntax. How deep the server's parser reads is its runtime's to
+            # say, so the finding claims only that nothing could be checked.
             findings.append(
                 Finding("file", "nesting_too_deep", path, None, None, None, NESTING_FILE_DETAIL)
             )

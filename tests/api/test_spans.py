@@ -162,6 +162,16 @@ def test_trace_needs_a_trace_id(ags, bad):
         ags.spans.trace(bad)
 
 
+def test_a_trace_id_that_cannot_be_sent_is_refused(ags, requests_mock):
+    """An unpaired surrogate in a path used to go out percent-encoded, as an id
+    nothing could match. Refused like the same value in a query string."""
+    with pytest.raises(ValidationError, match="the request path") as raised:
+        ags.spans.trace("t\ud800")
+
+    assert "Nothing was sent" in str(raised.value)
+    assert requests_mock.request_history == []
+
+
 # -- write surface ----------------------------------------------------------
 
 

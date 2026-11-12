@@ -541,17 +541,20 @@ def test_the_client_cannot_create_conversations(ags):
 
 # -- a string that cannot be sent -------------------------------------------
 #
-# An unpaired surrogate cannot be encoded into a URL or a JSON body, and the
-# HTTP library used to let that out as a bare UnicodeEncodeError, which is not
-# an AgentSightError. Whatever the argument, the client raises ValidationError
-# naming it, and nothing leaves the process.
+# An unpaired surrogate cannot be encoded into a URL, and the HTTP library used
+# to let that out as a bare UnicodeEncodeError, which is not an
+# AgentSightError. Whatever URL-bound argument holds one, the client raises
+# ValidationError naming it, and nothing leaves the process. A JSON body is
+# different by design: it carries the surrogate as an ASCII escape, and the
+# server judges it.
 
 
 def _refused(raised, name):
     error = raised.value
     assert isinstance(error, AgentSightError)
     assert not isinstance(error, UnicodeEncodeError)
-    assert isinstance(error.__cause__, UnicodeEncodeError)
+    # Found before the HTTP library is handed the value, not caught after.
+    assert error.__cause__ is None
     assert error.status_code is None
     assert error.errors == {}
     assert name in str(error)

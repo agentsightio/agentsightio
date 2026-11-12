@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from agentsight.api._client import _refuse_unencodable
+
 if TYPE_CHECKING:  # pragma: no cover
     from agentsight.api._client import AgentSight
 
@@ -18,6 +20,9 @@ class Resource:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         params = kwargs.get("params")
         if params and any(name in params for name in _ENTITY_FILTERS):
+            # A value that cannot be sent is refused first: the question below
+            # is itself a request, and that refusal says nothing was sent.
+            _refuse_unencodable(path, kwargs)
             # A backend that predates data entities ignores these and answers
             # with every row, so it is asked before the request is sent. Here,
             # because every list, page, count and rollup ends in this method,

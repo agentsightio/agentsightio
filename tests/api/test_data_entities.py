@@ -404,6 +404,56 @@ def test_the_usage_rollup_refuses_it_too(ags, requests_mock, refused):
     assert requests_mock.request_history == []
 
 
+NOT_ONE_KEY = pytest.mark.parametrize(
+    "value",
+    [[], [" "], ["hotel-paris"], ("a\x00b",), b"a\x00b", {"hotel-paris"}, 42],
+    ids=["empty-list", "blank-in-list", "list-of-one", "tuple", "bytes", "set", "int"],
+)
+
+
+@pytest.mark.parametrize("url, namespace, method", ROUTES)
+@NOT_ONE_KEY
+def test_a_key_filter_that_is_not_one_string_is_refused(
+    ags, requests_mock, url, namespace, method, value
+):
+    """An empty list used to send no filter at all, and a list holding a blank
+    one the backend reads as none: either way every tenant's rows. The filter
+    takes one key, as text, and anything else is refused with nothing sent."""
+    requests_mock.get(url, json=envelope([]))
+
+    with pytest.raises(ValidationError, match="takes one key as a string") as raised:
+        list(getattr(namespace(ags), method)(data_entity=value))
+
+    assert raised.value.status_code is None
+    assert requests_mock.request_history == []
+
+
+@NOT_ONE_KEY
+def test_the_usage_rollup_refuses_a_key_filter_that_is_not_one_string(
+    ags, requests_mock, value
+):
+    with pytest.raises(ValidationError, match="takes one key as a string"):
+        ags.usage.summary(data_entity=value)
+
+    assert requests_mock.request_history == []
+
+
+@pytest.mark.parametrize("url, namespace, method", ROUTES)
+def test_a_value_that_cannot_be_sent_is_refused_before_the_capability_check(
+    ags, requests_mock, url, namespace, method
+):
+    """The capability check is a request of its own. A value that can never be
+    sent is refused before it, so "Nothing was sent" is true."""
+    requests_mock.get(url, json=envelope([]))
+
+    with pytest.raises(ValidationError, match="Nothing was sent"):
+        list(getattr(namespace(ags), method)(
+            data_entity="hotel", conversation_id="c-\ud800"
+        ))
+
+    assert requests_mock.request_history == []
+
+
 @REFUSED_KEYS
 def test_create_refuses_it_with_nothing_sent(ags, requests_mock, refused):
     with pytest.raises(ValidationError, match="key must not contain") as raised:

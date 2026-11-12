@@ -2,7 +2,7 @@
 
 Both planes need the same answer. The tracking SDK drops such a key before it
 can cost a whole batch, and the API client refuses it before anything is sent.
-Neither package imports the other, so the rule lives at the top level next to
+Neither package imports the other at import time, so the rule lives at the top level next to
 ``_settings`` and ``_metadata``, and there is one definition of it.
 """
 
