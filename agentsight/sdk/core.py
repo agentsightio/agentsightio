@@ -288,9 +288,11 @@ def init(
             # does not let the variable in: the argument named a tenant, and
             # the variable may name another, which every conversation without
             # its own key would then be filed under for good.
-            default_entity, refused = parse_data_entity(data_entity)
+            default_entity, refused = parse_data_entity(data_entity, refusal="init")
             if default_entity is None and not refused:
-                default_entity = data_entity_key(os.getenv(_settings.ENV_DATA_ENTITY))
+                default_entity = data_entity_key(
+                    os.getenv(_settings.ENV_DATA_ENTITY), refusal="environment"
+                )
             _state.data_entity = default_entity
             if _state.data_entity:
                 _settings.note_data_entity_configured()

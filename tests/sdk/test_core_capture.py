@@ -1170,7 +1170,11 @@ REFUSED_KEYS = pytest.mark.parametrize(
 
 
 def _unsendable_warnings(caplog):
-    return [r for r in caplog.records if "recorded without a data entity" in r.getMessage()]
+    return [r for r in caplog.records if "left without a data entity" in r.getMessage()]
+
+
+def _ignored_warnings(caplog):
+    return [r for r in caplog.records if "has been ignored" in r.getMessage()]
 
 
 def _no_key_anywhere(spans, conversation_id):
@@ -1293,6 +1297,82 @@ def test_a_refused_key_on_a_turn_never_takes_the_conversations_own(spans, refuse
             ags.user_message("hi")
 
     assert _block(spans, "c-own")["data_entity"] == "hotel-paris"
+
+
+# -- what the warning for a refused key says ------------------------------------
+#
+# The same refusal has two outcomes, and the warning says which: a conversation
+# left without a key (none yet, or a default nothing has carried), or one that
+# keeps the key it already has. Each has its own warn-once key, so neither
+# silences the other.
+
+
+@REFUSED_KEYS
+def test_a_refused_key_on_a_turn_says_the_conversation_keeps_its_own(
+    spans, caplog, refused
+):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-own", data_entity="hotel-paris"):
+            with ags.turn(data_entity=refused):
+                ags.user_message("hi")
+
+    assert _unsendable_warnings(caplog) == []
+    (warning,) = _ignored_warnings(caplog)
+    assert "left as it was" in warning.getMessage()
+
+
+@REFUSED_KEYS
+def test_a_refused_key_after_the_default_was_recorded_says_it_is_kept(
+    spans, monkeypatch, caplog, refused
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-recorded"):
+            with ags.turn():
+                ags.user_message("first")
+            with ags.turn(data_entity=refused):
+                ags.user_message("second")
+
+    assert _unsendable_warnings(caplog) == []
+    assert len(_ignored_warnings(caplog)) == 1
+
+
+def test_each_refusal_warns_once_and_neither_silences_the_other(spans, caplog):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        for n in range(2):
+            with ags.conversation(f"c-dropped-{n}", data_entity="a\x00b"):
+                with ags.turn():
+                    ags.user_message("hi")
+        for n in range(2):
+            with ags.conversation(f"c-kept-{n}", data_entity="hotel-paris"):
+                with ags.turn(data_entity="c\x00d"):
+                    ags.user_message("hi")
+
+    assert len(_unsendable_warnings(caplog)) == 1
+    assert len(_ignored_warnings(caplog)) == 1
+
+
+def test_a_non_ascii_pair_is_reported_as_possibly_the_same_entity(spans, caplog):
+    """Python folds case its own way, and the server folds with its database's
+    rules. Beyond ASCII the two can disagree, so the warning says "may"."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-tr", data_entity="İstanbul"):
+            with ags.turn(data_entity="istanbul"):
+                ags.user_message("hi")
+
+    (warning,) = _kept_warnings(caplog)
+    assert "may name the same data entity" in warning.getMessage()
+
+
+def test_an_ascii_pair_is_reported_as_two_entities(spans, caplog):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-ascii", data_entity="hotel-paris"):
+            with ags.turn(data_entity="hotel-rome"):
+                ags.user_message("hi")
+
+    (warning,) = _kept_warnings(caplog)
+    assert "may" not in warning.getMessage()
 
 
 # -- the latch and the swap are one step under the scope's lock ----------------

@@ -3,20 +3,24 @@
 
     python3 validate_import.py part-01.json part-02.json ...
 
-This is a PRE-FLIGHT, not a gate. The server (`data_imports/validation.py`) is
-the authority and re-validates everything. Nothing here may report a finding
-for a record the pipeline would have accepted: where the two can only be made
-to agree by being looser, this script is looser. Every rule is a port of one
-that exists in the backend's `validation.py` or the dashboard's
-`lib/imports/*`; a rule with no home there is a bug in this file.
+This is a PRE-FLIGHT, not a gate. The server is the authority and
+re-validates everything. Nothing here may report a finding for a record the
+pipeline would have accepted: where the two can only be made to agree by being
+looser, this script is looser. Every rule is a port of one that exists in the
+server's own check or the dashboard's pre-check; a rule with no home there is a
+bug in this file.
 
-One deliberate exception: a lone surrogate (a "\\ud800" JSON escape) outside
-`data_entity`. The server's validation refuses one only in `data_entity`; in
-the other text fields, in message content and in metadata it is silent, and
-the upload then fails when the server stores the chunk or measures its
-metadata -- a server error for the whole chunk, naming no record. Reporting it
-here as `surrogate_character` is never stricter than the server: no record
-carrying one can be imported.
+Two deliberate exceptions, both for records the server cannot import at all:
+
+  * A lone surrogate (a "\\ud800" JSON escape) outside `data_entity`. The
+    server's check names one only in `data_entity`; anywhere else the server
+    rejects the whole chunk without naming the record. Reported here as
+    `surrogate_character`.
+  * Arrays (or objects) nested so deeply that checking them exhausts Python's
+    recursion limit. Arrays do not count toward the metadata depth limit, so
+    no rule names them, but the server's own check gives up on such a record
+    too, and the upload of its chunk fails. Reported here as
+    `nesting_too_deep`, a code of this script's own, rather than as a crash.
 
 It makes no network request. The contract it checks against ships with the
 skill in `../contract/`: a snapshot of the server's schema, limits and example
@@ -66,8 +70,8 @@ MAX_DETAIL = 160
 TEXT_FIELDS = ("conversation_id", "name", "customer_id", "language", "device", "data_entity")
 FORBIDDEN_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 
-# Mirrors `_SCHEMA_KEYWORD_CODES` (validation.py) and KEYWORD_CODES
-# (pre-validate.ts). `anyOf -> wrong_type` because `#/$defs/metadata` is an
+# Mirrors the server's and the dashboard's mapping from a schema keyword to an
+# error code. `anyOf -> wrong_type` because `#/$defs/metadata` is an
 # anyOf, so `"metadata": []` would otherwise report as an unexplained violation.
 KEYWORD_CODES = {
     "additionalProperties": "unknown_field",
@@ -95,7 +99,7 @@ SENDER_ALIASES = {
 }
 
 # Matches an ISO 8601 timestamp carrying an explicit offset or `Z`. Ported from
-# HAS_OFFSET in pre-validate.ts; used unanchored, as JS `.test()` is.
+# the dashboard's pre-check; used unanchored, as JS `.test()` is.
 HAS_OFFSET = re.compile(r"(?:Z|[+-]\d{2}:?\d{2}|[+-]\d{2})\s*$")
 
 # A verbatim port of django.utils.dateparse.datetime_re, which is what the
@@ -182,10 +186,9 @@ def load_contract(contract_dir):
     if missing:
         raise RuntimeError(f"{LIMITS_FILE} lacks {', '.join(missing)}")
 
-    # Two caps the server enforces in Python but publishes only through the
-    # schema (data_imports/tests/test_contract_drift.py::test_metadata_key_rules
-    # pins them to limits.py). Read them off the schema rather than restating
-    # them here.
+    # Two caps the server enforces in code but publishes only through the
+    # schema, which it keeps in step with them. Read them off the schema rather
+    # than restating them here.
     try:
         metadata_object = schema["$defs"]["metadataObject"]
         limits = dict(limits)
@@ -219,7 +222,7 @@ def describe_contract(manifest, limits):
 
 
 def build_validator(schema):
-    """Mirrors schema/loader.py::conversation_validator().
+    """Mirrors how the server compiles its per-record validator.
 
     Compiles `#/$defs/conversation`, not the file root -- that is the subschema
     the upload path applies per record. NO format_checker: `format: date-time`
@@ -233,7 +236,7 @@ def build_validator(schema):
 
 
 # --------------------------------------------------------------------------
-# Schema-error helpers (ports of validation.py:214-268 and pre-validate.ts:202)
+# Schema-error helpers (ports of the server's and the dashboard's)
 # --------------------------------------------------------------------------
 
 
@@ -346,14 +349,14 @@ def check_timestamp(raw, field, emit, latest):
 
 
 # --------------------------------------------------------------------------
-# The value pass (mirrors _scan_metadata / _check_values)
+# The value pass (mirrors the server's metadata and value checks)
 # --------------------------------------------------------------------------
 
 
 def scan_metadata(metadata, base_path, emit, limits):
     serialized = json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)
     # surrogatepass: a lone surrogate is reported by the walk below, and must
-    # not crash the measure first (the server's own measure does, a 500).
+    # not crash the measure first.
     size = len(serialized.encode("utf-8", "surrogatepass"))
     max_bytes = limits["max_metadata_bytes"]
     if size > max_bytes:
@@ -418,14 +421,14 @@ def scan_metadata(metadata, base_path, emit, limits):
 def nul_detail(value):
     return (
         f"Contains a NUL character (U+0000) at position {value.index(NUL)}. "
-        f"Postgres cannot store NUL in text or JSON; strip it from the export."
+        f"The server cannot store NUL in text or JSON; strip it from the export."
     )
 
 
 def first_surrogate(value):
     """(position, code point) of the first lone surrogate in value, or None.
 
-    A port of validation.py's `_first_surrogate`. A str holding a real astral
+    A port of the server's own check. A str holding a real astral
     character never yields one: only a lone "\\ud800"-style escape does.
     """
     for position, char in enumerate(value):
@@ -461,8 +464,8 @@ def check_values(conversation, emit, latest, limits):
         if isinstance(value, str) and NUL in value:
             emit("nul_byte", nul_detail(value), field)
     # After every NUL, as the server orders it. For `data_entity` this is a
-    # port of validation.py's check; for the other fields it is the exception
-    # the module docstring describes.
+    # port of the server's check; for the other fields it is the exception the
+    # module docstring describes.
     for field in TEXT_FIELDS:
         value = conversation.get(field)
         if isinstance(value, str) and NUL not in value:
@@ -523,6 +526,55 @@ def check_values(conversation, emit, latest, limits):
             scan_metadata(message_metadata, f"{prefix}.metadata", emit, limits)
 
 
+def nesting_depth(value):
+    """Levels of arrays and objects in value, counted without recursing: this
+    runs on exactly the values that recursion could not get through."""
+    deepest, stack = 0, [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, (dict, list)):
+            depth += 1
+            deepest = max(deepest, depth)
+            children = node.values() if isinstance(node, dict) else node
+            stack.extend((child, depth) for child in children)
+    return deepest
+
+
+def deepest_field(conversation):
+    """(field, depth) of the most deeply nested value in a conversation,
+    looking one level into each message, so the finding says where to look."""
+    candidates = []
+    for key, value in conversation.items():
+        if key == "messages" and isinstance(value, list):
+            for index, message in enumerate(value):
+                if isinstance(message, dict):
+                    for name, item in message.items():
+                        candidates.append((f"messages[{index}].{name}", item))
+                else:
+                    candidates.append((f"messages[{index}]", message))
+        else:
+            candidates.append((str(key), value))
+    best_field, best_depth = None, 0
+    for field, value in candidates:
+        depth = nesting_depth(value)
+        if depth > best_depth:
+            best_field, best_depth = field, depth
+    return best_field, best_depth
+
+
+def nesting_detail(depth):
+    return (
+        f"Arrays or objects nested {depth} levels deep: too deep for this script or "
+        f"the server to check, so it cannot be imported. Flatten the value."
+    )
+
+
+NESTING_FILE_DETAIL = (
+    "Arrays or objects nested too deeply to parse: neither this script nor the "
+    "server can read this file. Flatten the deeply nested values."
+)
+
+
 def check_schema(conversation, validator, emit):
     for error in sorted(validator.iter_errors(conversation), key=str):
         field = error_field(error)
@@ -552,7 +604,7 @@ def check_envelope(data, size, limits, findings, path):
         return None
 
     # Strict, and strict about the type: `"1"` is a rejection, and so is `True`,
-    # which would otherwise pass `== 1`. Mirrors checkSchemaVersion().
+    # which would otherwise pass `== 1`. Mirrors the dashboard's version check.
     expected = limits.get("schema_version", 1)
     found = data.get("schema_version")
     if isinstance(found, bool) or not isinstance(found, int) or found != expected:
@@ -614,12 +666,20 @@ def validate_file(path, data, size, ctx, findings, warnings, seen_ids):
         if isinstance(conversation.get("messages"), list):
             messages += len(conversation["messages"])
 
-        check_values(conversation, emit, ctx["latest"], ctx["limits"])
-        # Mirrors validation.py:783-786: a record that failed the value pass is
-        # never handed to the schema. Running both would report codes for a
-        # record the server describes differently.
-        if not record and ctx["validator"] is not None:
-            check_schema(conversation, ctx["validator"], emit)
+        try:
+            check_values(conversation, emit, ctx["latest"], ctx["limits"])
+            # As the server does it: a record that failed the value pass is
+            # never handed to the schema. Running both would report codes for
+            # a record the server describes differently.
+            if not record and ctx["validator"] is not None:
+                check_schema(conversation, ctx["validator"], emit)
+        except RecursionError:
+            # Both passes recurse, and so does the server's check, which gives
+            # up on the same records. Whatever the value pass found before
+            # giving up stands: each of its findings is true on its own, and
+            # the schema pass only runs on a record that had none.
+            field, depth = deepest_field(conversation)
+            emit("nesting_too_deep", nesting_detail(depth), field)
 
         if cid and NUL not in cid:
             if cid in seen_ids:
@@ -633,7 +693,10 @@ def validate_file(path, data, size, ctx, findings, warnings, seen_ids):
                 seen_ids[cid] = f"{path}#{index}"
 
         if chunk_cap:
-            body = len(json.dumps(conversation, separators=(",", ":")).encode("utf-8"))
+            try:
+                body = len(json.dumps(conversation, separators=(",", ":")).encode("utf-8"))
+            except RecursionError:  # reported above as nesting_too_deep
+                body = 0
             if body > chunk_cap:
                 warnings.append(
                     f"{path} #{index} serialises to {body} bytes, past the "
@@ -645,10 +708,16 @@ def validate_file(path, data, size, ctx, findings, warnings, seen_ids):
 
 
 def collect_data_entities(data, stats):
-    """Count the file's `data_entity` keys into `stats`, the way the server
-    will read them: trimmed, blank meaning no key, matched case-insensitively
-    with the first spelling kept. A summary only -- which keys exist for the
-    agent, and how many slots are free under its cap, is the server's to know.
+    """Count the file's `data_entity` keys into `stats`, close to the way the
+    server will read them: trimmed, blank meaning no key, matched
+    case-insensitively with the first spelling kept. A summary only -- which
+    keys exist for the agent, and how many slots are free under its cap, is the
+    server's to know.
+
+    The case folding is Python's. The server folds with its database's rules,
+    which no port can reproduce: for ASCII keys the two agree, and beyond ASCII
+    the server may merge keys listed here as two. The report says so whenever a
+    key is not ASCII.
     """
     conversations = data.get("conversations") if isinstance(data, dict) else None
     if not isinstance(conversations, list):
@@ -663,6 +732,8 @@ def collect_data_entities(data, stats):
             stats["without_data_entity"] += 1
             continue
         stats["with_data_entity"] += 1
+        if not key.isascii():
+            stats["data_entity_non_ascii"] = True
         entry = keys.setdefault(key.lower(), [key, 0])
         entry[1] += 1
 
@@ -715,6 +786,12 @@ def render_data_entities(stats, max_examples):
         "entity on import, and a conversation's entity cannot be changed afterwards. "
         "Confirm these are the keys live tracking uses before uploading."
     )
+    if stats.get("data_entity_non_ascii"):
+        out.append(
+            "Some keys are not ASCII. The server matches non-ASCII letters by its own "
+            "case rules, so it may merge keys listed separately here, or keep apart "
+            "spellings counted here as one."
+        )
     return out
 
 
@@ -853,6 +930,13 @@ def run(argv=None):
             return 2
         except json.JSONDecodeError as exc:
             findings.append(Finding("file", "invalid_json", path, None, None, None, str(exc)))
+            continue
+        except RecursionError:
+            # Valid JSON, so not invalid_json: the fix is the nesting, not the
+            # syntax. The server's own parser gives up at the same depth.
+            findings.append(
+                Finding("file", "nesting_too_deep", path, None, None, None, NESTING_FILE_DETAIL)
+            )
             continue
         conversations, messages = validate_file(
             path, data, size, ctx, findings, warnings, seen_ids

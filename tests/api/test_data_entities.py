@@ -161,7 +161,10 @@ def test_create_sends_every_field(ags, me, requests_mock):
     }
 
 
-@pytest.mark.parametrize("key", ["", "   ", None, 42, "x" * 256])
+@pytest.mark.parametrize(
+    "key",
+    ["", "   ", None, 42, "x" * 256, "hotel\x00paris", "hotel-\ud800", "\udfff"],
+)
 def test_a_bad_key_is_refused_rather_than_changed(ags, requests_mock, key):
     """A key is permanent, and this is the moment someone chooses it, so it is
     not clamped here the way tracking clamps one on the wire."""
@@ -367,6 +370,46 @@ def test_a_blank_key_filter_is_refused(ags, requests_mock, url, namespace, metho
     with pytest.raises(ValidationError, match="must not be blank"):
         list(getattr(namespace(ags), method)(data_entity=blank))
 
+    assert requests_mock.request_history == []
+
+
+REFUSED_KEYS = pytest.mark.parametrize(
+    "refused", ["hotel\x00paris", "hotel-\ud800", "\udc00"], ids=["nul", "high", "low"]
+)
+
+
+@pytest.mark.parametrize("url, namespace, method", ROUTES)
+@REFUSED_KEYS
+def test_a_key_filter_no_key_can_hold_is_refused(
+    ags, requests_mock, url, namespace, method, refused
+):
+    """The backend refuses a NUL with a 400, and a lone surrogate cannot even be
+    put into the URL. Refused here, the same way for both, with nothing sent:
+    not the filtered read, and not the capability check before it."""
+    requests_mock.get(url, json=envelope([]))
+
+    with pytest.raises(ValidationError, match="data_entity must not contain") as raised:
+        list(getattr(namespace(ags), method)(data_entity=refused))
+
+    assert raised.value.status_code is None
+    assert raised.value.errors == {}
+    assert requests_mock.request_history == []
+
+
+@REFUSED_KEYS
+def test_the_usage_rollup_refuses_it_too(ags, requests_mock, refused):
+    with pytest.raises(ValidationError, match="data_entity must not contain"):
+        ags.usage.summary(data_entity=refused)
+
+    assert requests_mock.request_history == []
+
+
+@REFUSED_KEYS
+def test_create_refuses_it_with_nothing_sent(ags, requests_mock, refused):
+    with pytest.raises(ValidationError, match="key must not contain") as raised:
+        ags.data_entities.create(refused)
+
+    assert raised.value.status_code is None
     assert requests_mock.request_history == []
 
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agentsight.exceptions import PermissionDeniedError, ValidationError
+from agentsight.exceptions import AgentSightError, PermissionDeniedError, ValidationError
 from tests.api.conftest import BASE, CONVERSATIONS, conversation, envelope
 
 DETAIL = f"{BASE}/api/conversations/42/"
@@ -537,3 +537,55 @@ def test_the_client_cannot_create_conversations(ags):
     # Conversation creation belongs to the tracking SDK; two write paths for
     # one row would mean two sets of projection semantics.
     assert not hasattr(ags.conversations, "create")
+
+
+# -- a string that cannot be sent -------------------------------------------
+#
+# An unpaired surrogate cannot be encoded into a URL or a JSON body, and the
+# HTTP library used to let that out as a bare UnicodeEncodeError, which is not
+# an AgentSightError. Whatever the argument, the client raises ValidationError
+# naming it, and nothing leaves the process.
+
+
+def _refused(raised, name):
+    error = raised.value
+    assert isinstance(error, AgentSightError)
+    assert not isinstance(error, UnicodeEncodeError)
+    assert isinstance(error.__cause__, UnicodeEncodeError)
+    assert error.status_code is None
+    assert error.errors == {}
+    assert name in str(error)
+    assert "Nothing was sent" in str(error)
+
+
+@pytest.mark.parametrize("surrogate", ["a\ud800b", "\udfff"], ids=["high", "low"])
+def test_a_search_term_that_cannot_be_sent_is_a_validation_error(
+    ags, requests_mock, surrogate
+):
+    requests_mock.get(CONVERSATIONS, json=envelope([]))
+
+    with pytest.raises(ValidationError) as raised:
+        list(ags.conversations.list(search=surrogate))
+
+    _refused(raised, "search")
+    assert requests_mock.request_history == []
+
+
+def test_a_conversation_id_that_cannot_be_sent_is_a_validation_error(ags, requests_mock):
+    requests_mock.get(CONVERSATIONS, json=envelope([]))
+
+    with pytest.raises(ValidationError) as raised:
+        ags.conversations.get("c-\ud800")
+
+    _refused(raised, "conversation_id")
+    assert requests_mock.request_history == []
+
+
+def test_every_value_of_a_repeated_filter_is_checked(ags, requests_mock):
+    requests_mock.get(CONVERSATIONS, json=envelope([]))
+
+    with pytest.raises(ValidationError) as raised:
+        list(ags.conversations.list(language=["en", "f\ud800r"]))
+
+    _refused(raised, "language")
+    assert requests_mock.request_history == []

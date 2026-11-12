@@ -24,6 +24,32 @@ _MAX_CACHED_IDS = 1024
 ConversationRef = Union[int, str]
 
 
+def _encodes(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _unencodable(path: str, kwargs: Dict[str, Any]) -> str:
+    """Which part of a request could not be encoded, for the error message.
+
+    Only the query string and the path can fail this way. A JSON body is
+    serialised with ASCII escapes, so a lone surrogate there travels as
+    ``\\udXXX`` and is the server's to judge.
+    """
+    params = kwargs.get("params") or {}
+    if isinstance(params, dict):
+        for name, value in params.items():
+            values = value if isinstance(value, (list, tuple, set)) else [value]
+            if any(isinstance(item, str) and not _encodes(item) for item in values):
+                return str(name)
+    if not _encodes(path):
+        return "the request path"
+    return "a value in the request"
+
+
 class AgentSight:
     """Read and manage what the tracking SDK recorded.
 
@@ -123,7 +149,19 @@ class AgentSight:
     # -- requests ----------------------------------------------------------
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
-        return self._transport.request(method, path, **kwargs)
+        try:
+            return self._transport.request(method, path, **kwargs)
+        except UnicodeEncodeError as exc:
+            # A string with an unpaired surrogate cannot be encoded into a
+            # query string or a URL, and the failure surfaces from deep inside
+            # the HTTP library as an error this package does not own. Nothing
+            # was sent. Raised as what it is: a value the caller passed that
+            # the API cannot be asked about.
+            raise ValidationError(
+                f"{_unencodable(path, kwargs)} contains an unpaired surrogate "
+                "character, which is not valid text and cannot be sent. "
+                "Nothing was sent."
+            ) from exc
 
     # -- identity ----------------------------------------------------------
 

@@ -5,7 +5,7 @@ rejects a file the server would have accepted**. A validator stricter than the
 server makes the user drop real rows, which is worse than having no validator
 at all. So the interesting half of this suite is `TestFalseRejections`, and the
 authority for everything is `TestAgreement`, which replays a corpus generated
-by the backend's own `validate_chunk` (see `regenerate_corpus.py`).
+by the server's own check (see `regenerate_corpus.py`).
 
 Everything runs offline, as the validator itself does: it reads the skill's
 shipped `contract/` directory and never touches the network.
@@ -107,7 +107,7 @@ def sized_metadata(target):
 # ---------------------------------------------------------------------------
 
 # The one place the validator deliberately reports a different NAME for the
-# same rejection. `refinePattern` (pre-validate.ts:235-239) turns an
+# same rejection. The dashboard's pre-check turns an
 # all-whitespace value into `too_short` / "This value is empty."; the server
 # reports the raw `pattern` failure as `invalid_format`. Both reject the
 # record, the dashboard already shows the refined code for exactly this input,
@@ -118,7 +118,7 @@ EQUIVALENT_CODES = {("too_short", "invalid_format")}
 
 
 class TestAgreement:
-    """The same hostile fixture through this script and through validate_chunk."""
+    """The same hostile fixture through this script and through the server's check."""
 
     corpus = json.loads((FIXTURES / "validator_corpus.json").read_text(encoding="utf-8"))
     expected = json.loads((FIXTURES / "validator_expected.json").read_text(encoding="utf-8"))
@@ -364,8 +364,8 @@ class TestValueRules:
         assert found[0][1:] == ("surrogate_character", field)
 
     def test_a_lone_surrogate_in_message_content_and_metadata(self, ctx):
-        """The server's validation is silent on these, and the chunk then fails
-        as a whole when it is stored. No record carrying one can be imported."""
+        """The server's check does not name these, and the server then rejects
+        the chunk as a whole. No record carrying one can be imported."""
         record = conversation(
             metadata={"ke\ud800y": "ok", "v": "ba\udc00d", "list": ["ba\ud800d"]},
             messages=[message(content="he\udfffllo")],
@@ -459,7 +459,7 @@ class TestSchemaRules:
         assert check(["nope"], ctx) == [(0, "not_an_object", None)]
 
     def test_the_value_pass_short_circuits_the_schema_pass(self, ctx):
-        """Mirrors validation.py:783-786 — one record, one pass."""
+        """As the server does it — one record, one pass."""
         record = conversation(messages=[message(sender="system")])
         record["converstaion_id"] = "typo"
         assert codes([record], ctx) == ["unknown_sender"]
@@ -560,6 +560,71 @@ class TestEnvelope:
         assert run_cli([path]) == 1
         assert "invalid_json" in capsys.readouterr().out
 
+    @staticmethod
+    def deep_record(cid, depth):
+        """A conversation whose metadata holds `depth` nested arrays, as raw JSON
+        text: building it as Python objects would need the recursion it tests."""
+        return (
+            '{"conversation_id": "%s", "started_at": "%s", "metadata": {"a": %s1%s}, '
+            '"messages": [{"sender": "user", "content": "hi", "timestamp": "%s"}]}'
+            % (cid, BASE, "[" * depth, "]" * depth, BASE)
+        )
+
+    def test_a_deeply_nested_array_is_a_finding_not_a_crash(self, tmp_path, capsys):
+        """Legal by the depth rule, which counts objects only, but too deep for
+        this script or the server to check. It used to exit 4, "a bug in the
+        validator"."""
+        body = '{"schema_version": 1, "conversations": [%s]}' % self.deep_record("deep", 1000)
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        captured = capsys.readouterr()
+        assert "nesting_too_deep" in captured.out
+        assert "bug in the validator" not in captured.err
+
+    @pytest.mark.parametrize("depth", [200, 500, 950, 5000])
+    def test_no_depth_of_nesting_exits_4(self, depth, tmp_path, capsys):
+        body = '{"schema_version": 1, "conversations": [%s]}' % self.deep_record("deep", depth)
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        assert "nesting_too_deep" in capsys.readouterr().out
+
+    def test_the_finding_names_the_record_and_the_rest_are_still_checked(
+        self, tmp_path, capsys
+    ):
+        records = ", ".join([
+            self.deep_record("deep", 500),
+            json.dumps(conversation("after", messages=[message(sender="system")])),
+        ])
+        path = write(tmp_path, ('{"schema_version": 1, "conversations": [%s]}' % records).encode())
+
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "#0  deep  [metadata]" in out
+        assert "501 levels deep" in out
+        assert "#1  after  [messages[0].sender]" in out
+        assert "unknown_sender" in out
+
+    def test_a_record_too_deep_to_check_is_one_finding(self, ctx):
+        value = "x"
+        for _ in range(500):
+            value = [value]
+        found = check([conversation("deep", metadata={"a": value}), conversation("ok")], ctx)
+        assert found == [(0, "nesting_too_deep", "metadata")]
+
+    def test_what_the_value_pass_found_before_giving_up_stands(self, ctx):
+        """Deep enough that the value pass itself gives up, after it has
+        already found the NUL in the name. That finding is true on its own."""
+        value = "x"
+        for _ in range(5000):
+            value = [value]
+        record = conversation("deep", name="a\x00b", metadata={"a": value})
+        assert check([record], ctx) == [
+            (0, "nul_byte", "name"),
+            (0, "nesting_too_deep", "metadata"),
+        ]
+
     def test_a_missing_file_is_a_usage_error(self, tmp_path):
         assert run_cli([str(tmp_path / "nope.json")]) == 2
 
@@ -652,6 +717,27 @@ class TestCli:
         assert "  Hotel-Paris  (3)" in out
         assert "  hotel-madrid  (1)" in out
         assert "cannot be changed afterwards" in out
+
+    def test_non_ascii_keys_say_the_server_may_count_them_differently(
+        self, tmp_path, capsys
+    ):
+        """Python's case folding is not the server's. Beyond ASCII the two can
+        disagree, so the report says "may" rather than promising a count."""
+        path = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="İstanbul"),
+            conversation("b", data_entity="istanbul"),
+        ]})
+        assert run_cli([path]) == 0
+        out = capsys.readouterr().out
+        assert "2 distinct key(s)" in out
+        assert "it may merge keys listed separately here" in out
+
+    def test_ascii_keys_carry_no_such_note(self, tmp_path, capsys):
+        path = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="Hotel-Paris"),
+        ]})
+        run_cli([path])
+        assert "Some keys are not ASCII" not in capsys.readouterr().out
 
     def test_a_file_without_data_entities_has_no_entity_section(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
@@ -757,8 +843,8 @@ class TestCli:
 class TestSnapshot:
     """`contract/` is the only contract the validator ever reads."""
 
-    # The eleven keys `limits_payload()` publishes -- the same literal set
-    # data_imports/tests/test_limits_drift.py::LimitsPayloadKeyTests pins.
+    # The eleven keys the server publishes -- the same literal set its own
+    # tests pin.
     LIMIT_KEYS = {
         "schema_version",
         "max_conversations_per_run",

@@ -19,6 +19,8 @@ import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
+from agentsight._keys import refused_character
+
 #: Unbounded strings turn one pathological argument (a loaded DataFrame, a
 #: file blob) into a multi-megabyte export. Truncation is marked, not silent.
 MAX_ATTRIBUTE_LENGTH = 16_384
@@ -102,17 +104,58 @@ def clamp_field(name: str, value: Optional[str]) -> Optional[str]:
     return value[:MAX_FIELD_LENGTH]
 
 
-def data_entity_key(value: Any) -> Optional[str]:
+#: What a refused key's warning says, by where the key came from. Each has its
+#: own ``warn_once`` key: one shared key let an ``init`` refusal silence every
+#: later per-conversation one, and the four say different things because
+#: different things happen.
+_REFUSALS: Dict[str, Tuple[str, str]] = {
+    # A key named for one conversation, which is then left without one.
+    "conversation": (
+        "data_entity:unsendable",
+        "AgentSight: data_entity %r contains a character the API refuses (NUL "
+        "or an unpaired surrogate) and has been dropped. The conversation is "
+        "left without a data entity; the deployment default is not used in "
+        "its place.",
+    ),
+    # A key named on a turn, or echoed from the API client, for a conversation
+    # that already carries one: nothing changes.
+    "kept": (
+        "data_entity:unsendable:kept",
+        "AgentSight: data_entity %r contains a character the API refuses (NUL "
+        "or an unpaired surrogate) and has been ignored. The conversation's "
+        "data entity is left as it was.",
+    ),
+    "init": (
+        "data_entity:unsendable:init",
+        "AgentSight: init(data_entity=%r) contains a character the API refuses "
+        "(NUL or an unpaired surrogate) and has been dropped, so there is no "
+        "deployment default data entity. AGENTSIGHT_DATA_ENTITY is not read in "
+        "its place, because it may name a different tenant: conversations that "
+        "do not name their own key are recorded without one.",
+    ),
+    "environment": (
+        "data_entity:unsendable:environment",
+        "AgentSight: AGENTSIGHT_DATA_ENTITY %r contains a character the API "
+        "refuses (NUL or an unpaired surrogate) and has been ignored, so there "
+        "is no deployment default data entity: conversations that do not name "
+        "their own key are recorded without one.",
+    ),
+}
+
+
+def data_entity_key(value: Any, *, refusal: str = "conversation") -> Optional[str]:
     """A data entity key as ingest will take it, or ``None`` for no key.
 
     ``None`` covers both "no key" and "a key that cannot be sent". A caller that
     falls back to a default when there is no key must tell those apart, and
     uses :func:`parse_data_entity` instead.
     """
-    return parse_data_entity(value)[0]
+    return parse_data_entity(value, refusal=refusal)[0]
 
 
-def parse_data_entity(value: Any) -> Tuple[Optional[str], bool]:
+def parse_data_entity(
+    value: Any, *, refusal: str = "conversation"
+) -> Tuple[Optional[str], bool]:
     """``(key, refused)``: the key as ingest will take it, and whether one was
     given that cannot be sent.
 
@@ -133,6 +176,10 @@ def parse_data_entity(value: Any) -> Tuple[Optional[str], bool]:
     default must not stand in for it: the caller asked for a specific tenant,
     and filing the conversation under the default one instead would be
     permanent, because the backend keeps the first key a conversation receives.
+
+    ``refusal`` names where the key came from, which picks what the warning for
+    a refused one says: ``"conversation"``, ``"kept"`` (the conversation keeps
+    the key it has), ``"init"`` or ``"environment"``. See :data:`_REFUSALS`.
     """
     if value is None:
         return None, False
@@ -145,14 +192,9 @@ def parse_data_entity(value: Any) -> Tuple[Optional[str], bool]:
         return None, False
     # Never empty: the text was trimmed, so its first character is not a space.
     key = key.rstrip()
-    if any(char == "\x00" or "\ud800" <= char <= "\udfff" for char in key):
-        warn_once(
-            "data_entity:unsendable",
-            "AgentSight: data_entity %r contains a character the API refuses "
-            "(NUL or an unpaired surrogate) and has been dropped; this "
-            "conversation is recorded without a data entity.",
-            key,
-        )
+    if refused_character(key):
+        warn_key, message = _REFUSALS[refusal]
+        warn_once(warn_key, message, key)
         return None, True
     return key, False
 

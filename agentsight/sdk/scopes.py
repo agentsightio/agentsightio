@@ -278,7 +278,9 @@ class ConversationScope:
                 elif kwarg == "environment":
                     resolved = _resolve_environment(value)
                 elif kwarg == "data_entity":
-                    resolved = data_entity_key(value)
+                    # A refused key is skipped below, so whatever the scope
+                    # carries stays: "kept" is what its warning has to say.
+                    resolved = data_entity_key(value, refusal="kept")
                 else:
                     resolved = clamp_field(kwarg, str(value))
                 if resolved is None:
@@ -366,28 +368,45 @@ class ConversationScope:
         default as a side effect when the turn's key was refused and nothing has
         been recorded yet.
         """
-        key, refused = parse_data_entity(value)
+        current = self.attributes.get(ConversationAttributes.DATA_ENTITY)
+        replaceable = self._entity_is_default and not self._recorded
+        # Decided before parsing, so a refused key's warning says what really
+        # happens: the conversation either loses a default nothing has carried
+        # yet (or had no key at all), or keeps the key it already has.
+        keeps = current is not None and not replaceable
+        key, refused = parse_data_entity(
+            value, refusal="kept" if keeps else "conversation"
+        )
         if key is None:
-            if refused and self._entity_is_default and not self._recorded:
+            if refused and replaceable:
                 self.attributes.pop(ConversationAttributes.DATA_ENTITY, None)
                 self._entity_is_default = False
             return False
-        current = self.attributes.get(ConversationAttributes.DATA_ENTITY)
         if current is None:
             return True
+        # Python's case folding, not the server's: the server matches with its
+        # database's rules, which no port can reproduce. For ASCII keys the two
+        # agree; beyond ASCII the server may merge keys this sees as two.
         if key.lower() == str(current).lower():
             return False
-        if self._entity_is_default and not self._recorded:
+        if replaceable:
             return True
+        maybe_same = (
+            ""
+            if key.isascii() and str(current).isascii()
+            else " The server matches non-ASCII letters by its own case rules, "
+            "so the two keys may name the same data entity there."
+        )
         warn_once(
             "data_entity:kept",
             "AgentSight: conversation %r already has data entity %r%s; ignoring "
             "%r passed to a turn. A conversation keeps the first data entity "
-            "it is given.",
+            "it is given.%s",
             self.conversation_id,
             current,
             " (the deployment default)" if self._entity_is_default else "",
             key,
+            maybe_same,
         )
         return False
 

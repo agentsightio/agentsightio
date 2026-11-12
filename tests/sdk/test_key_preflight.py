@@ -706,3 +706,51 @@ def test_a_refused_argument_does_not_let_the_variable_in(monkeypatch, refused):
         assert core.default_data_entity() is None
     finally:
         ags.shutdown()
+
+
+def _messages(recorded, text):
+    return [r.getMessage() for r in recorded.records if text in r.getMessage()]
+
+
+@pytest.mark.parametrize("refused", ["hotel\x00paris", "hotel-\ud800"], ids=["nul", "surrogate"])
+def test_a_refused_argument_says_what_was_dropped(recorded, monkeypatch, refused):
+    """What init() drops is the deployment default, and the variable is ignored
+    on purpose; a per-conversation message would describe neither."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        for _ in range(2):
+            ags.init(data_entity=refused, span_exporter=_Nowhere(), auto_instrument=False)
+            ags.shutdown()
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "init(data_entity=")
+    assert "no deployment default data entity" in message
+    assert "AGENTSIGHT_DATA_ENTITY is not read in its place" in message
+    assert "left without a data entity" not in message
+
+
+def test_an_init_refusal_does_not_silence_a_conversation_refusal(recorded):
+    try:
+        ags.init(data_entity="a\x00b", span_exporter=_Nowhere(), auto_instrument=False)
+        ags.conversation("c-1", data_entity="c\x00d")
+    finally:
+        ags.shutdown()
+
+    assert len(_messages(recorded, "init(data_entity=")) == 1
+    assert len(_messages(recorded, "left without a data entity")) == 1
+
+
+def test_a_refused_variable_says_it_was_ignored(recorded, monkeypatch):
+    """A variable cannot hold a NUL, but it can hold a byte that is not UTF-8,
+    which Python reads back as a lone surrogate."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "hotel-\udcff")
+    try:
+        ags.init(span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "AGENTSIGHT_DATA_ENTITY 'hotel")
+    assert "has been ignored" in message
+    assert "no deployment default data entity" in message

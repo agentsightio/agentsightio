@@ -8,6 +8,7 @@ a filter that was not passed must be absent rather than sent as ``None``.
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from agentsight._keys import refused_character
 from agentsight.exceptions import ValidationError
 
 SENTIMENTS = ("positive", "neutral", "negative")
@@ -250,6 +251,16 @@ def build(
             "data_entity must not be blank: it would match every data entity. "
             "Pass a key, or data_entity_unassigned=True for the rows with none."
         )
+    # The backend refuses these in a key, and a lone surrogate cannot be put
+    # into a URL at all. Refused here, so the answer is the same for both and
+    # nothing is sent.
+    if isinstance(entity, str):
+        refused = refused_character(entity)
+        if refused:
+            raise ValidationError(
+                f"data_entity must not contain {refused}: no data entity key "
+                "can hold one, so the filter could not match anything."
+            )
 
     rename = ENV_ALIAS if rename is None else rename
     params: Dict[str, Any] = {}

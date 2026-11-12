@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, Optional
 
+from agentsight._keys import refused_character
 from agentsight.api._pagination import PageIterator
 from agentsight.api.resources._base import Resource
 from agentsight.exceptions import ValidationError
@@ -42,6 +43,9 @@ def _check_key(key: Any) -> str:
         raise ValidationError("key must not be empty")
     if len(trimmed) > _MAX_KEY:
         raise ValidationError(f"key must be at most {_MAX_KEY} characters")
+    refused = refused_character(trimmed)
+    if refused:
+        raise ValidationError(f"key must not contain {refused}")
     return trimmed
 
 
