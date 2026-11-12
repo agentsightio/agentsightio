@@ -227,7 +227,8 @@ ags.me(refresh=True)["data_entities"]               # limit, active_count, overf
   back to the key. `metadata` is replaced whole, and `None` clears it.
 - **`create` raises `ValidationError`** on a key that exists in any casing,
   including on a deleted row (keys stay reserved), or at 500 active entities.
-  `restore` raises at the cap too.
+  `restore` raises at the cap too. A key containing a NUL or an unpaired
+  surrogate is refused locally, as `ValidationError` with nothing sent.
 - **Conversations are not moved here.** The first key that reaches a conversation
   stays, and `conversations.update(data_entity=…)` raises.
 
@@ -236,8 +237,11 @@ ags.me(refresh=True)["data_entities"]               # limit, active_count, overf
 entity), `data_entity_unassigned=False` (any entity). Conversation, usage and
 feedback rows carry `data_entity`, the key or `None`, and so does a ticket's
 nested `conversation`. A blank `data_entity` is refused locally, because the
-server reads it as no filter; `None` means not filtered. Spans do not take the
-pair.
+server reads it as no filter, and so is one containing a NUL or an unpaired
+surrogate, because no key can hold one; `None` means not filtered. Spans do not
+take the pair. Keys match case-insensitively by the server's own case rules, so
+for non-ASCII keys Python's `lower()` can keep apart two keys the server treats
+as one.
 
 On a backend without the `data-entities` capability the client raises
 `ValidationError` when the list is read, and never requests the list: that backend
@@ -245,8 +249,10 @@ would ignore the filter and return every row. Each refusal costs one `GET /api/m
 (a cached "no" is read again before it is trusted). Do not catch it and retry
 unfiltered.
 
-**Never treat a filter as a tenant boundary.** A key sees its whole agent. Scoped
-embed tokens are the enforced boundary: [embed.md](embed.md).
+**Never treat a filter as a tenant boundary.** A key sees its whole agent. The
+server enforces two boundaries: scoped embed tokens ([embed.md](embed.md)), and
+dashboard Viewers restricted to a set of entities, invited under Settings → Team
+for a client's own staff.
 
 ## Usage and cost
 

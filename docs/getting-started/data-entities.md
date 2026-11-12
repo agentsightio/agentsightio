@@ -48,9 +48,19 @@ something stable, because it is permanent.
   code sends and your filters name. The display **name** is what you edit, and it
   starts out equal to the key.
 
-A key containing a NUL or an unpaired surrogate is dropped with one warning and the
-conversation is recorded without an entity. The API refuses those characters, and
-sending one would cost every conversation in its batch.
+A key containing a NUL or an unpaired surrogate is never sent. The API refuses those
+characters, and sending one would cost every conversation in its batch. The SDK
+drops the key and logs a warning, once for each of these cases:
+
+| Where the key was | What the warning means |
+|---|---|
+| On a conversation | The conversation is recorded without an entity. The [default](#a-default-for-the-whole-deployment) is not used in its place. |
+| On a turn of a conversation that already has an entity | Ignored. The conversation keeps the entity it had. |
+| In `init(data_entity=…)` | The deployment has no default, and `AGENTSIGHT_DATA_ENTITY` is not read in its place. |
+| In `AGENTSIGHT_DATA_ENTITY` | Ignored. The deployment has no default. |
+
+With no default, a conversation that does not name its own key is recorded without
+an entity.
 
 ## What happens to a conversation
 
@@ -60,7 +70,7 @@ sending one would cost every conversation in its batch.
 | A key seen for the first time | The entity is created, named after its key, and the conversation is linked. |
 | A known key, in any casing | Linked. |
 | The key of a deleted entity | Linked anyway. The entity shows as still receiving traffic. |
-| An unknown key, with the agent at its [cap](#the-cap-of-500) | Recorded as Unassigned, and the agent's overflow counter goes up. |
+| An unknown key, with the agent at its [cap](#the-cap-of-500) | Recorded as Unassigned, and counted once on the agent's overflow counter. |
 | A later key that differs from the one already set | Ignored, and the backend logs it. The conversation keeps the first. |
 | A later key on a conversation that has none yet | Linked now, and the usage already recorded for that conversation moves with it. |
 
@@ -129,6 +139,10 @@ AGENTSIGHT_DATA_ENTITY=hotel-paris
 A conversation that names its own key wins over the default, and an argument to
 `init()` wins over the variable.
 
+An argument the API would [refuse](#what-a-key-is) does not hand over to the
+variable. The deployment is left with no default, because the argument named one
+client and the variable may name another.
+
 A key named on a turn also wins over the default, but only until something has
 been recorded for that conversation. After its first span or upload the backend
 holds the default, and the conversation stays on it.
@@ -148,9 +162,10 @@ An agent can hold **500 active data entities**. Past that:
   carries a key when there is room, it is linked then.
 - Keys that already exist keep working, including deleted ones.
 - Creating or restoring an entity through the API answers `400`.
-- A counter records how many times a conversation went Unassigned this way, and
-  when the last one did. It appears on the Data entities settings page and from
-  the API:
+- A counter records how many conversations were created Unassigned this way, and
+  when the last one was. Each conversation counts once. One that began without a
+  key and is sent an unknown key later, at the cap, is not counted. The counter
+  appears on the Data entities settings page and from the API:
 
 ```python
 ags.me(refresh=True)["data_entities"]
@@ -223,7 +238,9 @@ them and return every row. Over raw REST nothing stops the request, so check
 :::danger A filter is not a tenant boundary
 An API key sees its whole agent, so these filters are a convenience for your own
 code, not isolation. Never rely on one to decide what a client is allowed to see.
-Use a scoped embed token, which the server enforces.
+The server enforces two boundaries, both described under
+[a dashboard for one client](#a-dashboard-for-one-client): a scoped embed token,
+and a dashboard Viewer restricted to their entities.
 :::
 
 ## A dashboard for one client

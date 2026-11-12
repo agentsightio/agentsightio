@@ -103,11 +103,18 @@ no longer have to discover the role that way: `ags.me()["role"]` reports it.
 
 :::info `ValidationError` is raised locally too
 An unknown filter name, a sentiment that is not one of the three, a `group_by`
-the summary does not offer — all of these raise before anything is sent. So does
-a [data entity filter](./data-entities.md#filtering-by-entity) on a backend that
-would ignore it. The message names the values that would have worked. You can
-tell the two apart: a locally-raised one has `status_code` of `None` and an
-empty `errors`.
+the summary does not offer — all of these raise before anything is sent, and the
+message names the values that would have worked. So does a string that cannot be
+sent: a data entity key containing a NUL or an unpaired surrogate, in a filter or
+in `data_entities.create()`, and an unpaired surrogate in any value that goes
+into the URL, such as a `search` text or a conversation id.
+
+A [data entity filter](./data-entities.md#filtering-by-entity) on a backend that
+would ignore it is raised locally too, as soon as the list is read. The list is
+never requested, but each refusal costs one `GET /api/me/`.
+
+You can tell a locally-raised one from the server's: it has `status_code` of
+`None` and an empty `errors`.
 
 ```python
 ags.conversations.list(started_after="2026-01-01")

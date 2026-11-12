@@ -52,7 +52,7 @@ Spans, grouped by conversation:
 
 ```json
 {
-  "sdk": { "name": "agentsight-python", "version": "0.1.0" },
+  "sdk": { "name": "agentsight-python", "version": "0.2.0" },
   "conversations": [
     {
       "conversation_id": "demo-plain",
@@ -249,11 +249,11 @@ Plus the OpenTelemetry envelope, under `otel`:
   "resource": {
     "telemetry.sdk.language": "python",
     "telemetry.sdk.name": "agentsight-python",
-    "telemetry.sdk.version": "0.1.0",
+    "telemetry.sdk.version": "0.2.0",
     "service.name": "agentsight-python",
     "service.instance.id": "234a6d31-e775-477b-9395-b7110f04a304"
   },
-  "scope": { "name": "agentsight", "version": "0.1.0", "schema_url": "" }
+  "scope": { "name": "agentsight", "version": "0.2.0", "schema_url": "" }
 }
 ```
 

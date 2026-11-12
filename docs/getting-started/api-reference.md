@@ -131,8 +131,9 @@ any slug, and each says so where it appears.
 `capabilities` names optional behaviours of this backend. `data-entities` means it
 supports [data entities](#data-entities); `data_entities` then holds the agent's
 standing against its cap: the limit, how many active entities sit under it, and how
-many times an unknown key arrived at the cap and its conversation went Unassigned,
-with when that last happened.
+many conversations were created Unassigned because their key arrived at the cap,
+with when that last happened. Each conversation counts once, and a key that first
+reaches an existing conversation at the cap is not counted.
 
 The payload is returned as it arrives, so a newer release may add keys this page
 does not list. Ignore what you do not recognise.
@@ -1756,7 +1757,8 @@ curl -X POST "https://api.agentsight.io/api/agents/20/data-entities/" \
   the row.
 
 `POST` answers `400` when the key already exists in any casing, including on a
-deleted row, or when the agent already has 500 active entities. `restore` answers
+deleted row, when the agent already has 500 active entities, or when the key
+contains a NUL or an unpaired surrogate. `restore` answers
 `400` at the cap too, because a restored row takes its slot back.
 
 ### Filtering by entity

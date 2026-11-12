@@ -48,6 +48,11 @@ ags.data_entities.update(entity["id"], name="Hotel Paris")
 The match is lowercased because keys match case-insensitively and the row holds the
 first spelling seen.
 
+`lower()` gives the server's answer for ASCII keys. For other letters the server
+matches by its own case rules, which can treat as one key a pair that `lower()`
+keeps apart, such as `İstanbul` and `istanbul`. If your keys are not ASCII, compare
+against the spelling the row holds.
+
 ## Listing
 
 ```python
@@ -104,6 +109,10 @@ The server answers `400`, raised as `ValidationError`, in two cases:
   key stays reserved so its history has one row;
 - the agent already has 500 active entities.
 
+A key containing a NUL or an unpaired surrogate is refused as well, because no key
+can hold one. The client raises that `ValidationError` itself and sends nothing.
+Over raw REST it is a `400`.
+
 ## Changing its label
 
 ```python
@@ -139,9 +148,12 @@ ags.me(refresh=True)["data_entities"]
 # {'limit': 500, 'active_count': 3, 'overflow_count': 0, 'overflow_at': None}
 ```
 
-`overflow_count` is how many times an unknown key arrived at the cap and its
-conversation went Unassigned, and `overflow_at` is when that last happened. `me()` is cached, and these counters move, so
-pass `refresh=True` for a current reading.
+`overflow_count` is how many conversations were created Unassigned because their
+key arrived at the cap, and `overflow_at` is when that last happened. Each
+conversation counts once, however many requests carried the key. A conversation
+that began without a key and was sent an unknown one later, at the cap, is not
+counted. `me()` is cached, and these counters move, so pass `refresh=True` for a
+current reading.
 
 ## Filtering by entity
 
@@ -156,7 +168,9 @@ ags.usage.summary(data_entity="hotel-paris")           # what one client cost
 
 A blank `data_entity` raises `ValidationError` instead of being sent, because the
 server reads a blank key as no filter, and an empty variable would return every
-client's rows. `None` means not filtered, as it does for every filter on this client.
+client's rows. A `data_entity` containing a NUL or an unpaired surrogate is refused
+the same way, because no key can hold one. `None` means not filtered, as it does
+for every filter on this client.
 
 Feedback and tickets follow their conversation, so agent-level feedback and tickets
 without a conversation appear under neither filter.
@@ -173,9 +187,11 @@ client that outlives a backend upgrade starts filtering.
 
 :::danger A filter is not a tenant boundary
 An API key sees its whole agent, so a filter only narrows what your own code
-reads. To show a client only its own data, use a
+reads. The server enforces two boundaries: a
 [scoped embed token](/getting-started/data-entities#a-dashboard-for-one-client),
-which the server enforces.
+and a dashboard login for the client's own staff as
+[Viewers restricted to their entities](/getting-started/data-entities#a-dashboard-for-one-client).
+To show a client only its own data, use one of those.
 :::
 
 ## Conversations are not moved here

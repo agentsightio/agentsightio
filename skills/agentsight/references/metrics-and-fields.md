@@ -124,7 +124,7 @@ with agentsight.conversation(session_id, data_entity=hotel_code):
 | Unknown key | entity created on first sight, named after its key |
 | Known key, any casing | linked; `"Hotel-Paris"` and `"hotel-paris"` are one entity, first spelling kept |
 | Key of a deleted entity | linked anyway; flagged as still receiving traffic, with Restore |
-| Unknown key, agent at 500 active | Unassigned, and the agent's overflow counter goes up; known keys keep working |
+| Unknown key, agent at 500 active | Unassigned, counted once per conversation on the agent's overflow counter (a late key reaching an existing Unassigned conversation at the cap is not counted); known keys keep working |
 | Later key, different from the one set | ignored; the first stays |
 | Later key, none set yet | linked now, and earlier usage moves with it |
 
@@ -136,7 +136,9 @@ with agentsight.conversation(session_id, data_entity=hotel_code):
   `AGENTSIGHT_DATA_ENTITY` means the deployment serves one client. A key named on
   the conversation, or on a turn before anything is recorded, beats the default.
   Anything recorded first goes out under the default and the first key sticks:
-  `open_conversation(cid)` without the key is the usual case.
+  `open_conversation(cid)` without the key is the usual case. A key containing a
+  NUL or an unpaired surrogate is dropped with a warning; in `init()` that leaves
+  no default at all, and `AGENTSIGHT_DATA_ENTITY` is not read in its place.
 - **Uploads.** `upload_attachments()` sends the key only inside the conversation's
   own scope. Elsewhere it sends none, and the next span supplies it.
 - **Independent of environments.** One entity list per agent, across environments,
@@ -144,10 +146,14 @@ with agentsight.conversation(session_id, data_entity=hotel_code):
   narrows that report. The Development Mode probe stays agent-wide.
 - **Filters are not isolation.** An API key sees its whole agent, so a filter only
   narrows what the developer's own code reads. To show a client only its own
-  data, use a scoped embed token: [embed.md](embed.md).
-- **Coverage.** Analytics report (including its cost card and token chart),
-  conversations, feedback, tickets, saved reports. Agent-level feedback and
-  tickets without a conversation appear only under All. Imported history carries
+  data, use a scoped embed token: [embed.md](embed.md). For the client's own
+  staff, the other enforced boundary is a dashboard login: invite them under
+  Settings → Team as Viewers restricted to their entities.
+- **Coverage, in the dashboard.** Analytics report (including its cost card and
+  token chart), conversations, feedback, tickets, saved reports. Over the API the
+  filter pair is on `conversations`, `feedbacks`, `tickets` and `usage` (both
+  `usage.list` and `usage.summary`): [data-plane.md](data-plane.md). Agent-level
+  feedback and tickets without a conversation appear only under All. Imported history carries
   an entity when its import file names one per conversation (`data_entity`,
   mapped by the migration skill's interview); imported without one, it is
   Unassigned.
