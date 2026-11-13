@@ -46,7 +46,7 @@ def test_filters_reach_the_wire(ags, requests_mock):
     query = requests_mock.last_request.qs
     assert query["model"] == ["gpt-4o"]
     assert query["turn_id"] == ["t-1"]
-    assert query["incomplete"] == ["false"]  # Django reads the lowercase string
+    assert query["incomplete"] == ["false"]  # the backend reads the lowercase string
 
 
 def test_an_unknown_filter_is_refused(ags):

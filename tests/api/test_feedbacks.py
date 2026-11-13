@@ -188,7 +188,7 @@ def test_include_tickets_reaches_the_wire(ags, requests_mock):
 
 def test_ticket_filters_pass_through_alongside_the_gate(ags, requests_mock):
     # ticket_status accepts a list and ORs it — sent as repeated keys, which
-    # is how django-filter's MultipleChoiceFilter reads it.
+    # is how a multi-value filter reads it.
     requests_mock.get(FEEDBACKS, json=envelope([]))
 
     list(ags.feedbacks.list(

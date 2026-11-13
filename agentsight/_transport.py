@@ -70,8 +70,8 @@ def retry_after(
     reason. Written once so the two cannot drift.
 
     RFC 9110 allows two spellings and both are in the wild: a count of seconds,
-    and an HTTP-date. DRF sends the first; a proxy in front of it may rewrite to
-    the second, so parsing only one is how this silently stops working.
+    and an HTTP-date. The backend sends the first; a proxy in front of it may
+    rewrite to the second, so parsing only one is how this silently stops working.
 
     Clamped into ``[0, cap]`` — a past date means "now", and an unparseable
     header means ``None`` rather than an exception, because every caller is
@@ -253,9 +253,9 @@ def _body(response: requests.Response) -> Any:
 def _detail(body: Any, response: requests.Response) -> str:
     """The backend's own words, wherever it chose to put them.
 
-    Three shapes are in use: DRF's ``detail``, the hand-rolled ``error`` that
-    the attachments and buttons views return, and a plain field map from
-    serializer validation. Anything else falls back to the raw text.
+    Three shapes are in use: a ``detail`` string, an ``error`` string that some
+    routes return, and a plain field map from validation. Anything else falls
+    back to the raw text.
     """
     if isinstance(body, dict):
         for key in ("detail", "error"):

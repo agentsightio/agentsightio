@@ -67,7 +67,7 @@ two different agents, means two clients in the same process:
 production = AgentSight(api_key=os.environ["AGENTSIGHT_KEY_PROD"])
 staging = AgentSight(
     api_key=os.environ["AGENTSIGHT_KEY_STAGING"],
-    endpoint="https://api-staging.agentsight.io",
+    endpoint="https://agentsight.example.com",
 )
 ```
 

@@ -1,6 +1,6 @@
 """Turning Python keyword arguments into query strings the backend accepts.
 
-Small, but it is where three recurring wire details live: Django reads booleans
+Small, but it is where three recurring wire details live: the backend reads booleans
 as the lowercase strings ``true``/``false``, datetimes have to be ISO-8601, and
 a filter that was not passed must be absent rather than sent as ``None``.
 """
@@ -216,7 +216,7 @@ def format_value(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, (list, tuple, set)):
-        # django-filter's multi-value fields repeat the key; requests does
+        # A multi-value filter repeats the key; requests does
         # that for a list, so preserve the sequence rather than joining it.
         return [format_value(item) for item in value]
     return value

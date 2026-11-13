@@ -73,7 +73,7 @@ class APIError(AgentSightError):
     """The backend answered, and the answer was an error.
 
     ``detail`` is the backend's own words where it gave any. Backend error
-    bodies are not uniform — some carry ``detail``, some ``error``, some a DRF
+    bodies are not uniform — some carry ``detail``, some ``error``, some a
     field map — so the transport normalises them into this one attribute and
     keeps the parsed body on ``response``.
     """
@@ -125,7 +125,7 @@ class NotFoundError(APIError):
 class ValidationError(APIError):
     """400. The request body or query was rejected.
 
-    ``errors`` holds the DRF field map when the backend sent one. Note that
+    ``errors`` holds the field map when the backend sent one. Note that
     this backend frequently raises ``ValidationError({"detail": ...})``, so a
     400 carrying only ``detail`` is still one of these — classification is by
     status code, never by the shape of the body.

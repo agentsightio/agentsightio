@@ -546,12 +546,11 @@ class AgentSightSpanExporter(SpanExporter):
                     # Client error: retrying cannot help, and a stuck batch
                     # would block every later batch behind it.
                     #
-                    # Note that a bad key shows up here as **403, not 401**:
-                    # this route pins itself to ApiKeyAuthentication, which
-                    # defines no authenticate_header(), so DRF downgrades the
-                    # status. Everywhere else in the API the same failure is a
-                    # 401 — which is why agentsight._transport does not try to
-                    # special-case it and this loop reports the raw status.
+                    # Note that a bad key shows up here as **403, not 401**,
+                    # on this route only. Everywhere else in the API the same
+                    # failure is a 401 — which is why agentsight._transport
+                    # does not try to special-case it and this loop reports
+                    # the raw status.
                     self._warn_dropped(
                         "ingest rejected batch (%s): %s"
                         % (response.status_code, _rejection_detail(response))

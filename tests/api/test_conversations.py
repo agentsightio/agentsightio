@@ -38,7 +38,7 @@ def test_list_full_asks_for_the_transcripts(ags, requests_mock):
     assert requests_mock.last_request.qs["full"] == ["true"]
 
 
-def test_booleans_are_sent_the_way_django_reads_them(ags, requests_mock):
+def test_booleans_are_sent_the_way_the_backend_reads_them(ags, requests_mock):
     requests_mock.get(CONVERSATIONS, json=envelope([]))
 
     list(ags.conversations.list(is_marked=True, has_feedback=False, has_action=True))
@@ -75,7 +75,7 @@ def test_unset_filters_are_omitted_rather_than_sent_as_none(ags, requests_mock):
     assert "device" not in requests_mock.last_request.qs
 
 
-def test_include_tickets_is_sent_the_way_django_reads_it(ags, requests_mock):
+def test_include_tickets_is_sent_the_way_the_backend_reads_it(ags, requests_mock):
     # include_tickets both filters (only ticketed conversations) and includes
     # (full-depth tickets on each row) — the wire shape is a plain boolean.
     requests_mock.get(CONVERSATIONS, json=envelope([]))
