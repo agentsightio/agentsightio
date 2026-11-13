@@ -1,6 +1,6 @@
 {
-  "source": "ags_backend",
-  "commit": "1143b9149adc8f8c4ec85e20d10aa7c390272478",
-  "exported_at": "2026-09-03T11:48:03+00:00",
-  "contract_sha256": "701b2baa28afca351de36a6b8a17ed8d3b0caa27dd9ddf3bdab9a75d55f49755"
+  "source": "backend",
+  "commit": "b47d34c04c093e1886ad313c5ffe437749d8fc58",
+  "exported_at": "2026-11-12T14:14:43+00:00",
+  "contract_sha256": "11b28c8bb47d41fd263ca72b313270fa029499a5772367abc07eb97612daa0ab"
 }

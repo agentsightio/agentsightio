@@ -8,6 +8,7 @@
       "customer_id": "cust-42",
       "language": "en",
       "device": "web",
+      "data_entity": "hotel-paris",
       "metadata": {
         "source": "intercom",
         "tags": ["billing", "refund"],

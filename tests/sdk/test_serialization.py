@@ -9,6 +9,8 @@ that do not match the signature.
 
 import inspect
 
+import pytest
+
 from agentsight.sdk import serialization
 from agentsight.sdk.serialization import bind_arguments
 
@@ -64,3 +66,35 @@ def test_mismatched_call_falls_back_instead_of_raising():
         "arg2": 3,
         "k": 4,
     }
+
+
+# -- what a data entity key may be ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("  hotel-paris ", ("hotel-paris", False)),
+        (42, ("42", False)),
+        (0, ("0", False)),
+        (-7, ("-7", False)),
+        (None, (None, False)),
+        ("   ", (None, False)),
+        ("a\x00b", (None, True)),
+        (["a"], (None, True)),
+        ([], (None, True)),
+        ({"a": 1}, (None, True)),
+        (("a",), (None, True)),
+        (b"a", (None, True)),
+        (1.0, (None, True)),
+        (True, (None, True)),
+        (False, (None, True)),
+    ],
+    ids=["str", "int", "zero", "negative", "none", "blank", "nul", "list",
+         "empty-list", "dict", "tuple", "bytes", "float", "true", "false"],
+)
+def test_parse_data_entity_takes_text_and_ints_only(value, expected):
+    """An empty list is a refusal, not "no key": it was passed as a key, and
+    the default must not stand in for it. So is a bool, which is an int to
+    Python but never a tenant id."""
+    assert serialization.parse_data_entity(value) == expected

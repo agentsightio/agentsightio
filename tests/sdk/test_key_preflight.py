@@ -458,3 +458,330 @@ def test_the_http_path_runs_it_with_the_resolved_credentials(monkeypatch):
         assert started == [(VALID_API_KEY, BASE)]
     finally:
         ags.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The data entity warning: only when configured, and only on a real answer
+# ---------------------------------------------------------------------------
+#
+# ``has_capability`` is False both when the backend lacks something and when
+# nobody has asked yet. Warning on the second would tell people their tenants
+# are being discarded every time a preflight is slow, unreachable or turned off.
+
+IGNORED = "does not support data entities"
+
+
+def _warnings(recorded):
+    return [m for m in recorded.messages(logging.WARNING) if IGNORED in m]
+
+
+def _identity(capabilities):
+    identity = _me_with_environments("production", "development")
+    if capabilities is not _ABSENT:
+        identity["capabilities"] = capabilities
+    return identity
+
+
+_ABSENT = object()
+
+
+@pytest.mark.parametrize(
+    "capabilities", [_ABSENT, None, [], ["gzip-ingest"], ["gzip-ingest", "something-new"]]
+)
+def test_a_backend_without_the_capability_gets_one_warning(
+    recorded, requests_mock, capabilities
+):
+    requests_mock.get(ME, json=_identity(capabilities))
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_a_backend_with_no_identity_route_counts_as_not_having_it(recorded, requests_mock):
+    # This route predates the capability list.
+    requests_mock.get(ME, status_code=404, json={"detail": "not found"})
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert len(_warnings(recorded)) == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"exc": requests.ConnectionError},
+        {"status_code": 500, "text": "<html>gateway</html>"},
+        {"status_code": 429, "json": {"detail": "slow down"}},
+        {"status_code": 401, "json": {"detail": "unknown key"}},
+        {"status_code": 403, "json": {"detail": "no"}},
+        {"status_code": 200, "text": ""},
+        {"status_code": 200, "json": {"detail": "not an identity"}},
+        {"status_code": 200, "json": ["not", "a", "dict"]},
+    ],
+)
+def test_a_preflight_that_did_not_answer_proves_nothing(recorded, requests_mock, response):
+    requests_mock.get(ME, **response)
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _warnings(recorded) == []
+
+
+@pytest.mark.parametrize(
+    "capabilities", [42, {"data-entities": True}, "gzip-ingest", [None, 42, ""]]
+)
+def test_a_malformed_capability_list_proves_nothing(recorded, requests_mock, capabilities):
+    requests_mock.get(ME, json=_identity(capabilities))
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _warnings(recorded) == []
+
+
+def test_a_backend_with_the_capability_says_nothing(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest", "data-entities"]))
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _warnings(recorded) == []
+
+
+def test_nothing_configured_means_no_warning(recorded, requests_mock):
+    # The integrations that never heard of the feature, on an old backend.
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    ags.conversation("c-1")
+
+    core._verify_key(VALID_API_KEY, BASE)
+    ags.conversation("c-2")
+
+    assert _warnings(recorded) == []
+
+
+def test_a_key_configured_after_the_answer_still_warns(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    core._verify_key(VALID_API_KEY, BASE)
+    assert _warnings(recorded) == []
+
+    ags.conversation("c-1", data_entity="hotel-paris")
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_it_warns_once_however_many_conversations_carry_a_key(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    ags.conversation("c-1", data_entity="hotel-paris")
+    core._verify_key(VALID_API_KEY, BASE)
+
+    ags.conversation("c-2", data_entity="hotel-rome")
+    ags.conversation("c-3", data_entity="hotel-oslo")
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_a_key_named_on_a_turn_counts_as_configured(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    core._verify_key(VALID_API_KEY, BASE)
+
+    with ags.conversation("c-1"):
+        with ags.turn(data_entity="hotel-paris"):
+            pass
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_a_blank_key_is_not_a_configured_one(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    ags.conversation("c-1", data_entity="   ")
+
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert _warnings(recorded) == []
+
+
+def test_a_key_on_a_decorator_counts_before_any_call(recorded, requests_mock):
+    # Decoration happens at import, before anything has answered.
+    @ags.conversation(data_entity="hotel-paris")
+    def handle():
+        pass
+
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    core._verify_key(VALID_API_KEY, BASE)
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_the_warning_fires_without_dropping_the_key(recorded, requests_mock):
+    # An older backend discards the field harmlessly, and a newer one reached
+    # through a stale answer must still receive it.
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    core._verify_key(VALID_API_KEY, BASE)
+
+    scope = ags.conversation("c-1", data_entity="hotel-paris")
+
+    assert len(_warnings(recorded)) == 1
+    assert scope.attributes["agentsight.conversation.data_entity"] == "hotel-paris"
+
+
+class _Nowhere:
+    def export(self, spans):
+        return None
+
+    def shutdown(self):
+        return None
+
+    def force_flush(self, timeout_millis=30_000):
+        return True
+
+
+def test_a_default_from_init_counts_as_configured(recorded, requests_mock):
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    try:
+        assert ags.init(data_entity="hotel-paris", span_exporter=_Nowhere(),
+                        auto_instrument=False) is True
+        core._verify_key(VALID_API_KEY, BASE)
+    finally:
+        ags.shutdown()
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_a_default_from_the_environment_counts_as_configured(
+    recorded, requests_mock, monkeypatch
+):
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "  hotel-paris ")
+    requests_mock.get(ME, json=_identity(["gzip-ingest"]))
+    try:
+        assert ags.init(span_exporter=_Nowhere(), auto_instrument=False) is True
+        assert core.default_data_entity() == "hotel-paris"
+        core._verify_key(VALID_API_KEY, BASE)
+    finally:
+        ags.shutdown()
+
+    assert len(_warnings(recorded)) == 1
+
+
+def test_no_preflight_means_no_warning(recorded, requests_mock):
+    # A custom exporter or the file exporter never asks, so nothing is known.
+    try:
+        ags.init(data_entity="hotel-paris", span_exporter=_Nowhere(),
+                 auto_instrument=False)
+        ags.conversation("c-1", data_entity="hotel-rome")
+    finally:
+        ags.shutdown()
+
+    assert _warnings(recorded) == []
+    assert requests_mock.request_history == []
+
+
+def test_an_argument_beats_the_variable_and_a_blank_one_does_not(monkeypatch):
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity="from-the-argument", span_exporter=_Nowhere(),
+                 auto_instrument=False)
+        assert core.default_data_entity() == "from-the-argument"
+    finally:
+        ags.shutdown()
+    try:
+        ags.init(data_entity="   ", span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() == "from-the-variable"
+    finally:
+        ags.shutdown()
+
+
+@pytest.mark.parametrize("refused", ["hotel\x00paris", "hotel-\ud800"], ids=["nul", "surrogate"])
+def test_a_refused_argument_does_not_let_the_variable_in(monkeypatch, refused):
+    """Blank means "not given"; refused means given and unusable. The argument
+    named a tenant, and the variable may name another one, which every
+    conversation without its own key would then be filed under for good."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=refused, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [["hotel-paris"], {"key": "hotel-paris"}, ("hotel-paris",), b"hotel-paris", 1.5, True],
+    ids=["list", "dict", "tuple", "bytes", "float", "bool"],
+)
+def test_an_argument_that_is_not_text_does_not_let_the_variable_in(
+    recorded, monkeypatch, value
+):
+    """Not a key, so not a default: dropped, as a refused one is, and the
+    variable is not read in its place."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=value, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "init(data_entity=")
+    assert f"of type {type(value).__name__} is not a string or an int" in message
+    assert "AGENTSIGHT_DATA_ENTITY is not read in its place" in message
+
+
+def test_an_int_argument_is_the_default_as_its_digits(monkeypatch):
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=42, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() == "42"
+    finally:
+        ags.shutdown()
+
+
+def _messages(recorded, text):
+    return [r.getMessage() for r in recorded.records if text in r.getMessage()]
+
+
+@pytest.mark.parametrize("refused", ["hotel\x00paris", "hotel-\ud800"], ids=["nul", "surrogate"])
+def test_a_refused_argument_says_what_was_dropped(recorded, monkeypatch, refused):
+    """What init() drops is the deployment default, and the variable is ignored
+    on purpose; a per-conversation message would describe neither."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        for _ in range(2):
+            ags.init(data_entity=refused, span_exporter=_Nowhere(), auto_instrument=False)
+            ags.shutdown()
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "init(data_entity=")
+    assert "no deployment default data entity" in message
+    assert "AGENTSIGHT_DATA_ENTITY is not read in its place" in message
+    assert "left without a data entity" not in message
+
+
+def test_an_init_refusal_does_not_silence_a_conversation_refusal(recorded):
+    try:
+        ags.init(data_entity="a\x00b", span_exporter=_Nowhere(), auto_instrument=False)
+        ags.conversation("c-1", data_entity="c\x00d")
+    finally:
+        ags.shutdown()
+
+    assert len(_messages(recorded, "init(data_entity=")) == 1
+    assert len(_messages(recorded, "left without a data entity")) == 1
+
+
+def test_a_refused_variable_says_it_was_ignored(recorded, monkeypatch):
+    """A variable cannot hold a NUL, but it can hold a byte that is not UTF-8,
+    which Python reads back as a lone surrogate."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "hotel-\udcff")
+    try:
+        ags.init(span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "AGENTSIGHT_DATA_ENTITY 'hotel")
+    assert "has been ignored" in message
+    assert "no deployment default data entity" in message

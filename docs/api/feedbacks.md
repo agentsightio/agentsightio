@@ -115,6 +115,7 @@ ags.feedbacks.page().count
 | `topic`, `reason` | your own slugs, matched exactly |
 | `agent`, `user` | who it is about, and who left it — `agent` only accepts your key's own agent id, so it never narrows |
 | `environment` (or `env`) | the environment it was left in |
+| `data_entity`, `data_entity_unassigned` | its conversation's [data entity](./data-entities.md#filtering-by-entity) — agent feedback has none, so it appears under neither |
 | `has_comment`, `comment_contains` | the free text |
 | `created_at_after`, `created_at_before` | when it was left |
 | `include_tickets` | the gate to the ticket surface — see below |
@@ -149,7 +150,7 @@ Do not add it "just to see tickets" on a listing you expect to stay complete;
 the page's `count` is the promoted count. Without it, payloads carry no
 `ticket` key, `counts` collapses to `{"all": N}`, and `has_ticket` /
 `ticket_status` answer 400 — same contract as
-[conversations](./conversations.md#tickets-include_tickets-narrows-as-it-includes).
+[conversations](./conversations.md#tickets-include-tickets-narrows-as-it-includes).
 :::
 
 `get()` needs no parameter: one feedback by id carries its `ticket`

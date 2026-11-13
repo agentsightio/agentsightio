@@ -44,20 +44,26 @@ findings per code.
 | 1 | Findings — the file has contract violations, or is not valid JSON |
 | 2 | Usage: bad arguments, or a file that cannot be read |
 | 3 | **No verdict.** `jsonschema` is missing, or the shipped `contract/` directory could not be read — a broken install. **Nothing was validated** |
+| 4 | **The validator crashed.** A bug in the script, not a verdict on the file. **Nothing was validated** |
 
 Exit 3 is not a pass and not a failure. Treat it as a blocked step: install
 `jsonschema`, or reinstall the skill so `contract/` is complete, and run
 again. Never report progress on the strength of a 3.
 
+Exit 4 is not a pass either, and running it again will crash the same way. Do
+not hand the file over. Stop, tell the user the validator failed, and paste
+what it printed to stderr: the traceback names the input it could not handle.
+
 ## Reading the report
 
-Findings are grouped by the server's own error code, most frequent first, with
-the exact total and up to ten examples each. Every example names the file, the
+Findings are grouped by error code, most frequent first, with the exact total
+and up to ten examples each. Every code but one is the server's own; the
+exception, `nesting_too_deep`, is the validator's (below). Every example names the file, the
 conversation index, its `conversation_id`, and the field path
 (`messages[4].timestamp`) so it can be found in the file directly.
 
-The codes are the same ones the dashboard's error glossary explains, so a code
-here is a code the user would have seen after uploading. The ones worth
+The server's codes are the same ones the dashboard's error glossary explains,
+so such a code is one the user would have seen after uploading. The ones worth
 recognising on sight:
 
 - `unknown_sender` — a sender outside the eight aliases. Almost always
@@ -73,6 +79,18 @@ recognising on sight:
   was, including which part file, so an overlapping export window is obvious.
 - `invalid_number` — `NaN` or `Infinity` reached the file. The exporter is
   missing `allow_nan=False`.
+- `surrogate_character` — a lone surrogate, usually a `\ud800`-style escape
+  left by text that was decoded or escaped wrongly upstream. The server cannot
+  store one anywhere in a record. Fix the export's decoding rather than
+  stripping the character, and re-export as UTF-8. The report prints such
+  characters as escapes, so it never crashes on them.
+- `nesting_too_deep` — the validator's own code, not the server's, so the
+  glossary does not list it. Arrays or objects nested too deeply to check here:
+  the record may not be importable, and when the nesting is too deep to parse at
+  all, nothing in the file was checked. Where the limit falls depends on the
+  Python running the script, so the finding claims no more than that. Flatten
+  the deeply nested values in the export and run again; it counts as a finding
+  (exit 1).
 
 **Warnings do not affect the exit code** and are not failures: unknown
 top-level keys, and any single conversation too large for the dashboard to pack
@@ -135,5 +153,11 @@ is gitignored, so nobody commits a transcript or deletes one as stray. Then:
   clock check was the only opportunity to catch it being wrong.
 - What is not migrated, repeated: no tool calls, tokens, cost, actions,
   feedback, attachments or geolocation, permanently.
+- When a data entity column was mapped: the validator's key list, and that
+  the dashboard shows the same keys on the Review step before anything is
+  written — with which are new — and reports, when the import is done, how
+  many entities it created and how many conversations landed Unassigned past
+  the cap or on a deleted entity. An undo does not remove the entities a run
+  created; they are deleted on the Data entities page.
 - That undo exists, is run-scoped, and frees the ids again — which is what
   makes uploading the first part a low-risk thing to do.

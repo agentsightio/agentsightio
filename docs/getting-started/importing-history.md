@@ -85,9 +85,20 @@ out of the data:
   them, shows you the table, and takes an answer per category rather than
   quietly dropping anything.
 
+And one more when a single agent serves several clients — one booking agent,
+many hotels:
+
+- **Which column names the client.** It becomes each conversation's
+  [data entity](./data-entities.md) key, the one live tracking passes as
+  `data_entity`. Keys are matched case-insensitively and an unknown key
+  creates an entity on import, so the skill shows you the distinct keys it
+  found before you upload, and the migrate page shows them again — with which
+  are new — before anything is written. A conversation's entity is permanent.
+
 ## What is not migrated
 
-Conversations and their messages. Nothing else.
+Conversations and their messages, each with its data entity if the file names
+one. Nothing else.
 
 No tool calls, no token usage or cost, no actions, no feedback, no attachments,
 no IP address and therefore no geolocation. **The token, cost and map charts

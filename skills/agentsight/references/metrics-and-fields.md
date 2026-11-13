@@ -104,3 +104,62 @@ Set once per deployment (`AGENTSIGHT_ENVIRONMENT` or `init(environment=…)`;
 for QA and load-test traffic (or `enabled=False` when it should not be
 recorded at all). An unrecognised slug errors in the logs at startup; on a
 conversation it costs the environment tag, never the data.
+
+## Data entities: one agent, many clients
+
+One central agent serving many clients, each with its own data: one
+hotel-booking agent, many hotels. This is the native shape for it. Each
+conversation carries a key the developer chooses, the dashboard filters by it,
+and an embed token can be pinned to one client. `metadata` gives none of that,
+and one agent per client multiplies agents and keys.
+
+```python
+with agentsight.conversation(session_id, data_entity=hotel_code):
+    ...
+```
+
+| Situation | Result |
+|---|---|
+| No key | Unassigned; nothing is created. Existing conversations are all here. |
+| Unknown key | entity created on first sight, named after its key |
+| Known key, any casing | linked; `"Hotel-Paris"` and `"hotel-paris"` are one entity, first spelling kept |
+| Key of a deleted entity | linked anyway; flagged as still receiving traffic, with Restore |
+| Unknown key, agent at 500 active | Unassigned, counted once per conversation on the agent's overflow counter (a late key reaching an existing Unassigned conversation at the cap is not counted); known keys keep working |
+| Later key, different from the one set | ignored; the first stays |
+| Later key, none set yet | linked now, and earlier usage moves with it |
+
+- **Choose the source carefully, because both the key and the link are permanent.**
+  A key cannot be renamed (its display `name` can), and a conversation cannot be
+  moved to another entity. Use a stable identifier, never a session or user id.
+  Ask the developer which one; do not guess.
+- **A default or per-conversation keys, not both.** `init(data_entity=…)` /
+  `AGENTSIGHT_DATA_ENTITY` means the deployment serves one client. A key named on
+  the conversation, or on a turn before anything is recorded, beats the default.
+  Anything recorded first goes out under the default and the first key sticks:
+  `open_conversation(cid)` without the key is the usual case. A key is a string
+  or an `int` (sent as its digits). A key containing a NUL or an unpaired
+  surrogate, or one of any other type (a list, dict, bytes, float or bool), is
+  dropped with a warning, logged once for each of four cases. On a conversation, or on a turn before anything is recorded,
+  the conversation is recorded Unassigned and the default is not used in its
+  place. On a turn of a conversation that already has its own key, or whose
+  default has been recorded, it keeps that key. In `init()` it leaves no default
+  at all, and `AGENTSIGHT_DATA_ENTITY` is not read in its place; in that
+  variable itself, it is ignored and there is no default.
+- **Uploads.** `upload_attachments()` sends the key only inside the conversation's
+  own scope. Elsewhere it sends none, and the next span supplies it.
+- **Independent of environments.** One entity list per agent, across environments,
+  and filters compose. Analytics stay production-only, and the entity filter
+  narrows that report. The Development Mode probe stays agent-wide.
+- **Filters are not isolation.** An API key sees its whole agent, so a filter only
+  narrows what the developer's own code reads. To show a client only its own
+  data, use a scoped embed token: [embed.md](embed.md). For the client's own
+  staff, the other enforced boundary is a dashboard login: invite them under
+  Settings → Team as Viewers restricted to their entities.
+- **Coverage, in the dashboard.** Analytics report (including its cost card and
+  token chart), conversations, feedback, tickets, saved reports. Over the API the
+  filter pair is on `conversations`, `feedbacks`, `tickets` and `usage` (both
+  `usage.list` and `usage.summary`): [data-plane.md](data-plane.md). Agent-level
+  feedback and tickets without a conversation appear only under All. Imported history carries
+  an entity when its import file names one per conversation (`data_entity`,
+  mapped by the migration skill's interview); imported without one, it is
+  Unassigned.

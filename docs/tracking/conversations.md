@@ -69,6 +69,7 @@ All optional, all keyword-only.
 | `language` | `str` | — |
 | `name` | `str` | — |
 | `environment` | `str` | from `init()` |
+| `data_entity` | `str` | from `init()` |
 | `metadata` | `dict` | — |
 | `enabled` | `bool` | `True` |
 
@@ -89,6 +90,12 @@ product uses. Free text, not an enum.
 agent has. Per-conversation always wins over the deployment-wide default, because
 a development conversation inside a production process is your statement, not the
 SDK's to override. See [Environments](/getting-started/environments).
+
+**`data_entity`** — which of your clients this conversation belongs to, when one
+agent serves several: one booking agent, many hotels. A key you choose, created
+the first time it is seen. The first key that reaches a conversation is the one
+it keeps, and it cannot be changed afterwards. Without one the conversation is
+Unassigned. See [Data entities](/getting-started/data-entities).
 
 **`metadata`** — a free-form dictionary for anything the fields above do not
 cover: plan, order id, experiment arm. Changeable afterwards, which is the next
@@ -193,3 +200,5 @@ nothing.
   are counted as
 - [Environments](/getting-started/environments) — how `environment` is resolved,
   and what happens to a slug your agent does not have
+- [Data entities](/getting-started/data-entities) — one agent serving many
+  clients, and what happens to each key

@@ -31,6 +31,7 @@ agentsight.init(
     api_key=None,            # else AGENTSIGHT_API_KEY
     endpoint=None,           # else AGENTSIGHT_API_ENDPOINT; default https://api.agentsight.io
     environment=None,        # else AGENTSIGHT_ENVIRONMENT; "production"/"development" (+ "prod"/"dev")
+    data_entity=None,        # else AGENTSIGHT_DATA_ENTITY; only for a deployment serving one client
     auto_instrument=True,    # True | False | list from: "openai", "anthropic", "langchain", "llama_index"
     export_interval_ms=5000, # batch send interval — size to worker count, see below
     max_queue_size=2048,
@@ -78,6 +79,7 @@ the only cost of a longer interval is freshness.
 | `AGENTSIGHT_API_KEY` | the key (`ags_…`), when not passed to `init()` |
 | `AGENTSIGHT_API_ENDPOINT` | base URL; default `https://api.agentsight.io` |
 | `AGENTSIGHT_ENVIRONMENT` | deployment-wide environment slug |
+| `AGENTSIGHT_DATA_ENTITY` | deployment-wide default data entity, for a deployment serving one client |
 | `AGENTSIGHT_FILE_EXPORTER` | a **directory** — spans are written there as JSON and **nothing is transmitted**; `init()` says so at INFO. The verification and debugging loop is built on this: see [debugging.md](debugging.md). Must be unset in production. |
 
 ## Conversations
@@ -108,9 +110,18 @@ Fields (all optional, keyword-only): `customer_id`, `customer_ip_address`
 (must parse as an IP or it is dropped), `device` (`"desktop"`, `"mobile"`,
 `"tablet"`, or the product's own vocabulary — free text), `source`,
 `language`, `name` (human-readable title), `environment` (per-conversation
-override, wins over the deployment default), `metadata` (free-form dict),
+override, wins over the deployment default), `data_entity` (which client this
+conversation belongs to, when one agent serves several; set once, see below),
+`metadata` (free-form dict),
 `enabled` (pass `False` and everything inside the scope is a no-op — for test
 and eval traffic that must not land in customer numbers).
+
+**Pass `data_entity` where the conversation is opened** — `conversation()`,
+`open_conversation()`, or a decorated `@agentsight.turn(id_from=…, data_entity=…)`.
+A turn inside a conversation already open can name it too, in either form: the key
+goes onto the conversation if it has none, and a different key named later is
+ignored with one warning. Rules and the cap:
+[metrics-and-fields.md](metrics-and-fields.md#data-entities-one-agent-many-clients).
 
 What each field powers on the dashboard: [metrics-and-fields.md](metrics-and-fields.md).
 Note there that `source` is recorded but not yet surfaced.
@@ -140,7 +151,11 @@ def handle(session_id: str, text: str) -> str: ...
   takes a callable over the bound arguments for ids nested in payloads:
   `id_from=lambda args: json.loads(args["data"])["conversation_id"]`. The
   decorator opens the conversation around the exchange; any conversation
-  field passed to it goes onto that conversation.
+  field passed to it goes onto that conversation. Inside a conversation
+  already open, a turn in either form adds its fields to that one — they
+  **fill what the conversation has not been given and never replace a
+  value it has** — and a decorated turn whose `id_from` names the open
+  conversation joins it instead of opening a second scope.
 - `infer=True` opts into inference: first string argument → user message,
   return value → agent message. **The exception, not the rule** — it is only
   right when the handler really is `(text) -> str` with the human's own words.
@@ -292,7 +307,11 @@ The full wire disclosure is the docs page "What the SDK sends"
 developer at it for the privacy conversation. The load-bearing facts:
 
 - Message content, tool arguments/results, and error strings are truncated at
-  16 384 characters. Conversation string fields are clamped at 255. Metadata
+  16 384 characters. Conversation string fields are clamped at 255, and a
+`data_entity` is also trimmed, with blank counting as absent and an `int`
+taken as its digits. A NUL or unpaired surrogate, or a value that is not a
+string or an `int` (a list, dict, bytes, float or bool), drops the key with a
+warning, logged once for each of four cases ([metrics-and-fields.md](metrics-and-fields.md#data-entities-one-agent-many-clients)). Metadata
   has a 16 KB JSON budget (oversized entries dropped largest-first, marked,
   always leaving valid JSON). Values are kept honest on the way out — nothing
   raises, nothing else in the batch is lost.

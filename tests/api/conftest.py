@@ -20,9 +20,11 @@ USAGE_SUMMARY = f"{USAGE}summary/"
 SPANS = f"{BASE}/api/spans/"
 TRACES = f"{BASE}/api/traces/"
 ME = f"{BASE}/api/me/"
+# IDENTITY's agent_id, below: the namespace reads it off /api/me/.
+DATA_ENTITIES = f"{BASE}/api/agents/7/data-entities/"
 
 def environment(slug, pk=1, is_production=False):
-    """One environment exactly as ``AgentEnvironmentSerializer`` sends it.
+    """One environment exactly as the API sends it.
 
     Spelled out rather than reduced to a slug string because that reduction is
     precisely the bug this fixture used to hide: the route serialises whole
@@ -47,6 +49,7 @@ IDENTITY = {
         environment("production", 1, is_production=True),
         environment("development", 2),
     ],
+    "capabilities": ["gzip-ingest", "data-entities"],
 }
 
 
@@ -80,7 +83,7 @@ def conversation(pk=1, conversation_id="wa-3859", **fields):
 
 
 def span(pk=1, span_id="aaaa0001", **fields):
-    """One span row exactly as ``IngestSpanSerializer`` sends it.
+    """One span row exactly as the API sends it.
 
     No ``payload`` key, because the list route never sends one — a fixture
     that carried it would let a test pass against a shape the server does not

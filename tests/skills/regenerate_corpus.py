@@ -2,13 +2,13 @@
 """Refresh the shipped contract snapshot and the golden agreement corpus.
 
 Two checked-in artifacts derive from the backend and go stale the moment its
-import contract moves. This script rewrites both from one `ags_backend`
+import contract moves. This script rewrites both from one backend
 checkout, so they can only ever move together.
 
     skills/agentsight-migration/contract/          what the SERVER publishes
         import_v1.schema.json                      copied byte-for-byte
         example_import.json                        copied byte-for-byte
-        limits.json                                limits_payload() -- no file in the backend
+        limits.json                                built per request there, not a file
         MANIFEST.json                              backend commit, export time, digest
 
     fixtures/import_contract/validator_corpus.json     the hostile inputs
@@ -18,28 +18,27 @@ The snapshot is the only contract `validate_import.py` reads -- the migration
 skill makes no network request -- so a stale copy is a file the validator
 accepts and the server rejects, or the reverse. The corpus guards the
 validator's hand-written half: it is a third implementation of rules that
-already exist twice (the backend's `data_imports/validation.py`, the
-dashboard's `lib/imports/pre-validate.ts`), and nothing at runtime reads two
-of them, so the only symptom of drift is a file this script accepts and the
-server rejects -- or, far worse, one it rejects and the server would have
-taken, which costs the user real rows.
+already exist twice (the server's own check and the dashboard's pre-check),
+and nothing at runtime reads two of them, so the only symptom of drift is a
+file this script accepts and the server rejects -- or, far worse, one it
+rejects and the server would have taken, which costs the user real rows.
 
-This is the guard, in the shape of `data_imports/tests/test_contract_drift.py`:
+This is the guard, in the same shape as the server's own contract-drift test:
 checked-in artifacts asserted against the code that produced them.
 `test_validate_import.py::TestAgreement` replays the corpus and asserts the
 same (index, code, field) triples; `TestSnapshot` pins the snapshot's digest.
 
-HOW TO RUN IT -- from an `ags_backend` checkout, with its virtualenv active:
+HOW TO RUN IT -- from a backend checkout, with its virtualenv active:
 
     DJANGO_SETTINGS_MODULE=AgentSight.settings \
-    PYTHONPATH=/path/to/ags_backend \
+    PYTHONPATH=/path/to/backend \
     python3 /path/to/agentsight/tests/skills/regenerate_corpus.py
 
 It prints the new contract digest; paste it into CORPUS_CONTRACT_SHA256 in
 test_validate_import.py and commit everything in one change.
 
-**No database is touched.** `validate_chunk`'s only queries are the two `IN`
-lookups in `_duplicate_errors`, and both model managers are stubbed out below,
+**No database is touched.** The server's chunk check makes only two queries,
+the `IN` lookups of its duplicate check, and both are stubbed out below,
 so the in-chunk duplicate logic still runs while the server-only halves
 (`conversation_already_exists`, cross-chunk staging) return empty -- which is
 exactly the subset a standalone validator can reproduce.
@@ -52,7 +51,7 @@ the repo. They are covered as ordinary unit tests instead. What is here is the
 hand-written half -- the rules JSON Schema cannot express -- which is where
 divergence is actually possible.
 
-Also not here: anything time-dependent. `validate_chunk` computes its future
+Also not here: anything time-dependent. The server's check computes its future
 ceiling as `now() + 5min`, so every timestamp below sits in 2016.
 """
 
@@ -175,6 +174,29 @@ def build_corpus():
     )
     case("earliest_timestamp", [_conversation("early", started_at="2000-01-01T00:00:00Z",
                                               messages=[_message(timestamp="2000-01-01T00:00:00Z")])])
+    # The data entity key is validated like the other optional text fields and
+    # NORMALISED unlike them: trimmed, and blank means no key (decision 8). The
+    # server stages "  hotel-paris  " as "hotel-paris" and all four blanks as
+    # None; none of that is a finding, and a validator that rejected a blank
+    # would be stricter than the server.
+    case("data_entity_key", [_conversation("de-key", data_entity="Hotel-Paris")])
+    case(
+        "data_entity_blank_means_no_key",
+        [
+            _conversation("de-null", data_entity=None),
+            _conversation("de-empty", data_entity=""),
+            _conversation("de-space", data_entity="   "),
+            _conversation("de-padded", data_entity="  hotel-paris  "),
+        ],
+    )
+    # A lone surrogate in the key (a "\ud800" escape in the file) is a record
+    # error, `surrogate_character`: the server looks the key up before it
+    # stores anything. Its validation is silent on one in the other fields, so
+    # those are no corpus case -- see validate_import.py's module docstring.
+    case(
+        "data_entity_lone_surrogate",
+        [_conversation("de-surrogate", data_entity="hotel-\ud800")],
+    )
 
     # ---- metadata rules --------------------------------------------------
     case("metadata_objects_11_deep", [_conversation("obj11", metadata=_nest_objects(11))])
@@ -201,7 +223,7 @@ def build_corpus():
         ],
     )
 
-    # ---- NUL, all five sites --------------------------------------------
+    # ---- NUL, all six sites ---------------------------------------------
     case(
         "nul_text_fields",
         [
@@ -211,6 +233,7 @@ def build_corpus():
                 customer_id="cu\x00st",
                 language="e\x00n",
                 device="io\x00s",
+                data_entity="ho\x00tel",
             )
         ],
     )
@@ -317,6 +340,7 @@ def build_corpus():
     )
     case("missing_field", [{"conversation_id": "nomsg", "started_at": BASE}])
     case("metadata_wrong_type", [_conversation("meta-list", metadata=[])])
+    case("data_entity_wrong_type", [_conversation("de-int", data_entity=42)])
     case("empty_content", [_conversation("empty", messages=[_message(content="   ")])])
     case("not_an_object", ["a string, not a conversation"])
 
@@ -324,7 +348,7 @@ def build_corpus():
 
 
 def _stub_managers():
-    """Neutralise the two ORM lookups in `_duplicate_errors`. No DB, no writes."""
+    """Neutralise the two lookups of the server's duplicate check. No DB, no writes."""
 
     class _Empty:
         def filter(self, *args, **kwargs):
@@ -370,8 +394,8 @@ def _write_contract_snapshot():
     """Copy the three contract documents out of the configured backend.
 
     The schema and the example are files there and are copied byte-for-byte.
-    The limits document is not: the server builds it per request from the
-    constants in `data_imports/limits.py`, so it is called here and dumped.
+    The limits document is not: the server builds it per request from its
+    own constants, so it is called here and dumped.
     """
     import data_imports
     from data_imports.schema.loader import EXAMPLE_PATH, SCHEMA_PATH
@@ -383,7 +407,7 @@ def _write_contract_snapshot():
     backend_dir = Path(data_imports.__file__).resolve().parent.parent
 
     manifest = {
-        "source": "ags_backend",
+        "source": "backend",
         "commit": _backend_commit(backend_dir),
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "contract_sha256": contract_digest(schema_bytes, example_bytes, limits),
@@ -401,12 +425,23 @@ def _write_contract_snapshot():
     return manifest
 
 
+def _write_fixture(path, document):
+    """Pretty, with non-ASCII text kept readable, and a lone surrogate written
+    as its JSON escape.
+
+    UTF-8 cannot encode a lone surrogate, so without the error handler the
+    surrogate case could not be written at all. `backslashreplace` turns one
+    into the six characters `\\ud800`, which inside a JSON string is exactly
+    the escape the case means; `json.loads` reads it back as the surrogate.
+    """
+    text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    path.write_bytes(text.encode("utf-8", "backslashreplace"))
+
+
 def main():
     corpus = build_corpus()
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    (FIXTURES / "validator_corpus.json").write_text(
-        json.dumps(corpus, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _write_fixture(FIXTURES / "validator_corpus.json", corpus)
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "AgentSight.settings")
     try:
@@ -418,7 +453,7 @@ def main():
     except Exception as exc:
         print(
             f"corpus written; expected NOT regenerated ({exc}).\n"
-            f"Run this from an ags_backend checkout -- see the module docstring.",
+            f"Run this from a backend checkout -- see the module docstring.",
             file=sys.stderr,
         )
         return 1
@@ -436,11 +471,9 @@ def main():
             [error["conversation_index"], str(error["code"]), error["field"]] for error in errors
         ]
 
-    (FIXTURES / "validator_expected.json").write_text(
-        json.dumps(expected, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _write_fixture(FIXTURES / "validator_expected.json", expected)
     print(f"wrote {len(corpus)} cases to {FIXTURES}")
-    print(f"wrote the contract snapshot to {CONTRACT_DIR} (ags_backend@{manifest['commit'][:12]})")
+    print(f"wrote the contract snapshot to {CONTRACT_DIR} (backend@{manifest['commit'][:12]})")
     print(f"contract_sha256 = {manifest['contract_sha256']}")
     print("  -> set CORPUS_CONTRACT_SHA256 in tests/skills/test_validate_import.py to this value")
     return 0

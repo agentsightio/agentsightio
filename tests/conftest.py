@@ -18,6 +18,7 @@ def isolated_env(monkeypatch):
     # which transport the suite exercises or which environment it stamps.
     monkeypatch.delenv("AGENTSIGHT_FILE_EXPORTER", raising=False)
     monkeypatch.delenv("AGENTSIGHT_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("AGENTSIGHT_DATA_ENTITY", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +45,30 @@ def fresh_learned_capabilities():
     _settings._reset_capabilities_for_tests()
     yield
     _settings._reset_capabilities_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def fresh_warnings():
+    """The warn-once cache is process-wide by design; tests are not."""
+    from agentsight.sdk import serialization
+
+    serialization._reset_warnings_for_tests()
+    yield
+    serialization._reset_warnings_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def fresh_default_data_entity():
+    """shutdown() leaves the default in place, and init() is what replaces it.
+
+    Unlike the environment, nothing re-validates it on read, so a test that ran
+    init(data_entity=...) would stamp its key onto every conversation after it.
+    """
+    from agentsight.sdk import core
+
+    core._state.data_entity = None
+    yield
+    core._state.data_entity = None
 
 
 @pytest.fixture

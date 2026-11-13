@@ -24,6 +24,48 @@ _MAX_CACHED_IDS = 1024
 ConversationRef = Union[int, str]
 
 
+def _encodes(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _unencodable(path: str, kwargs: Dict[str, Any]) -> Optional[str]:
+    """Which part of a request cannot be encoded, named for the error message.
+
+    Only the query string and the path can fail this way. A JSON body is
+    serialised with ASCII escapes, so a lone surrogate there travels as
+    ``\\udXXX`` and is the server's to judge.
+    """
+    params = kwargs.get("params") or {}
+    if isinstance(params, dict):
+        for name, value in params.items():
+            values = value if isinstance(value, (list, tuple, set)) else [value]
+            if any(isinstance(item, str) and not _encodes(item) for item in values):
+                return str(name)
+    if not _encodes(path):
+        return "the request path"
+    return None
+
+
+def _refuse_unencodable(path: str, kwargs: Dict[str, Any]) -> None:
+    """Raise for a URL-bound string holding an unpaired surrogate.
+
+    Such a string is not valid text. In a query value the HTTP library fails
+    on it from deep inside, with an error this package does not own; in a path
+    it is sent in a form no id can match. Checked before anything else a call
+    does, so the error can say that nothing was sent and be right.
+    """
+    name = _unencodable(path, kwargs)
+    if name is not None:
+        raise ValidationError(
+            f"{name} contains an unpaired surrogate character, which is not "
+            "valid text and cannot be sent. Nothing was sent."
+        )
+
+
 class AgentSight:
     """Read and manage what the tracking SDK recorded.
 
@@ -45,9 +87,10 @@ class AgentSight:
     on a message that already exists is the one message field it edits —
     ``messages.update_metadata()`` — because what an application learns about
     a message after the turn is not something tracking could have observed.)
-    The three things it does create are not records of a run: feedback, which no span
+    The four things it does create are not records of a run: feedback, which no span
     could ever observe; an action *definition*, which declares a capability
-    tracking then adopts by name; and tickets, which are workflow items a
+    tracking then adopts by name; a data entity, which declares a tenant
+    tracking then adopts by key; and tickets, which are workflow items a
     team (or the agent itself) files rather than telemetry.
 
     There is deliberately no ``buttons`` namespace. ``agentsight.button()``
@@ -85,6 +128,7 @@ class AgentSight:
         # module for its type, and doing it at the top would be a cycle.
         from agentsight.api.resources.actions import Actions
         from agentsight.api.resources.conversations import Conversations
+        from agentsight.api.resources.data_entities import DataEntities
         from agentsight.api.resources.feedbacks import Feedbacks
         from agentsight.api.resources.messages import Messages
         from agentsight.api.resources.spans import Spans
@@ -98,6 +142,7 @@ class AgentSight:
         self.actions = Actions(self)
         self.usage = Usage(self)
         self.spans = Spans(self)
+        self.data_entities = DataEntities(self)
 
         self._identity: Optional[Dict[str, Any]] = None
         self._identity_lock = threading.Lock()
@@ -120,7 +165,18 @@ class AgentSight:
     # -- requests ----------------------------------------------------------
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
-        return self._transport.request(method, path, **kwargs)
+        _refuse_unencodable(path, kwargs)
+        try:
+            return self._transport.request(method, path, **kwargs)
+        except UnicodeEncodeError as exc:
+            # What the check above cannot see: a value that is not a string
+            # but whose text holds an unpaired surrogate. This request did not
+            # go out. An earlier one of the same call may have, so the message
+            # does not say otherwise.
+            raise ValidationError(
+                "a value in the request contains an unpaired surrogate "
+                "character, which is not valid text and cannot be sent."
+            ) from exc
 
     # -- identity ----------------------------------------------------------
 
@@ -132,11 +188,20 @@ class AgentSight:
             {"agent_id": 12, "agent_name": "Support bot", "role": "read",
              "environments": [{"id": 1, "slug": "production",
                                "name": "Production", "is_production": True,
-                               "created_at": ..., "updated_at": ...}, ...]}
+                               "created_at": ..., "updated_at": ...}, ...],
+             "capabilities": ["gzip-ingest", "data-entities"],
+             "data_entities": {"limit": 500, "active_count": 3,
+                               "overflow_count": 0, "overflow_at": None}}
 
         ``environments`` is a list of objects, not of slugs — use
         :meth:`environments` for the flat list, which is what every caller
         actually wants.
+
+        ``data_entities`` is the agent's standing against its cap: the limit,
+        how many active entities sit under it, and how many times an unknown
+        key arrived at the cap and its conversation went unassigned, with when
+        that last happened. A backend without the ``data-entities``
+        capability has no such key.
 
         This is the preflight the SDK had no way to perform. It answers three
         questions that previously had only indirect answers: the agent's
@@ -146,8 +211,10 @@ class AgentSight:
         write and catching the 403), and the environment slugs ingest will
         accept — which the tracking side otherwise assumes.
 
-        Cached, because none of it changes for the life of a key. Pass
-        ``refresh=True`` after adding an environment server-side.
+        Cached, because who the key is does not change for its life. The
+        ``data_entities`` counters do move, so they are as old as this call;
+        pass ``refresh=True`` to read them now, or after adding an environment
+        server-side.
 
         API keys only. A JWT session gets 403 here by design and should use
         the dashboard's own route instead.
@@ -184,6 +251,43 @@ class AgentSight:
             elif isinstance(entry, str) and entry:
                 slugs.append(entry)
         return slugs
+
+    # -- capabilities ------------------------------------------------------
+
+    def _supports(self, capability: str) -> bool:
+        """Whether the backend advertises an optional behaviour.
+
+        A cached identity that lacks it is read once more before the answer is
+        no. A client can outlive a backend upgrade, and refusing a filter the
+        backend has since learned would be wrong for as long as the client
+        lived. A backend with no ``/api/me/`` route at all predates the
+        capability list, so it supports none of them.
+        """
+        with self._identity_lock:
+            cached = self._identity is not None
+        for refresh in (False, True) if cached else (False,):
+            try:
+                capabilities = self.me(refresh=refresh).get("capabilities")
+            except NotFoundError:
+                return False
+            if isinstance(capabilities, (list, tuple)) and capability in capabilities:
+                return True
+        return False
+
+    def _require_data_entities(self) -> None:
+        """Refuse a data entity filter the backend would not apply.
+
+        Same reasoning as an unknown filter name: a filter the server ignores
+        returns more rows than were asked for, and here "more" means every
+        other client's.
+        """
+        if not self._supports(_settings.DATA_ENTITIES):
+            raise ValidationError(
+                "this backend does not support data entities, so it would "
+                "ignore a data_entity filter and return every row. Check "
+                "ags.me()['capabilities'] for 'data-entities' before filtering "
+                "by one."
+            )
 
     # -- conversation id resolution ---------------------------------------
 

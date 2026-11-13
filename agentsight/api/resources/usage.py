@@ -56,8 +56,9 @@ class Usage(Resource):
         all of them, still gets exactly one.
 
         Filters: ``conversation`` (pk), ``conversation_id`` (string),
-        ``cost_source``, ``environment``, ``incomplete``, ``model``,
-        ``ordering``, ``started_at_after``, ``started_at_before``, ``turn_id``.
+        ``cost_source``, ``data_entity``, ``data_entity_unassigned``,
+        ``environment``, ``incomplete``, ``model``, ``ordering``,
+        ``started_at_after``, ``started_at_before``, ``turn_id``.
 
         ``incomplete`` is about the **turn**, not the tokens: true when the
         exchange ended in an error, was abandoned mid-stream, hit its deadline

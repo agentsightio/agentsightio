@@ -58,6 +58,9 @@ class ConversationAttributes:
     LANGUAGE = "agentsight.conversation.language"
     NAME = "agentsight.conversation.name"
     ENVIRONMENT = "agentsight.conversation.environment"
+    #: Which of the agent's tenants this conversation belongs to. Not under
+    #: ``agentsight.entity.*``: that prefix names tool and task spans.
+    DATA_ENTITY = "agentsight.conversation.data_entity"
     METADATA = "agentsight.conversation.metadata"
 
     #: Public ``conversation()`` keyword -> attribute name. Ingest reverses
@@ -71,6 +74,7 @@ class ConversationAttributes:
         "language": LANGUAGE,
         "name": NAME,
         "environment": ENVIRONMENT,
+        "data_entity": DATA_ENTITY,
     }
 
 

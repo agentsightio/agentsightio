@@ -1,6 +1,6 @@
 """Turning Python keyword arguments into query strings the backend accepts.
 
-Small, but it is where three recurring wire details live: Django reads booleans
+Small, but it is where three recurring wire details live: the backend reads booleans
 as the lowercase strings ``true``/``false``, datetimes have to be ISO-8601, and
 a filter that was not passed must be absent rather than sent as ``None``.
 """
@@ -8,6 +8,7 @@ a filter that was not passed must be absent rather than sent as ``None``.
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from agentsight._keys import refused_character
 from agentsight.exceptions import ValidationError
 
 SENTIMENTS = ("positive", "neutral", "negative")
@@ -33,6 +34,11 @@ CONVERSATION_FILTERS = frozenset(
         "customer_id",
         "customer_id__icontains",
         "customer_ip_address",
+        # A key, matched case-insensitively. The second names the rows with no
+        # entity (True) or the rows with any entity (False). Same pair on the
+        # feedback, ticket and usage routes.
+        "data_entity",
+        "data_entity_unassigned",
         "device",
         "env",
         "environment",
@@ -68,6 +74,8 @@ FEEDBACK_FILTERS = frozenset(
         "conversation_id",
         "created_at_after",
         "created_at_before",
+        "data_entity",
+        "data_entity_unassigned",
         "env",
         "environment",
         "has_comment",
@@ -108,6 +116,8 @@ TICKET_FILTERS = frozenset(
         "conversation_id",
         "created_at_after",
         "created_at_before",
+        "data_entity",
+        "data_entity_unassigned",
         "has_conversation",
         "has_feedback",
         "ordering",
@@ -153,6 +163,8 @@ USAGE_FILTERS = frozenset(
         "conversation",
         "conversation_id",
         "cost_source",
+        "data_entity",
+        "data_entity_unassigned",
         "environment",
         "incomplete",
         "model",
@@ -204,7 +216,7 @@ def format_value(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, (list, tuple, set)):
-        # django-filter's multi-value fields repeat the key; requests does
+        # A multi-value filter repeats the key; requests does
         # that for a list, so preserve the sequence rather than joining it.
         return [format_value(item) for item in value]
     return value
@@ -229,6 +241,47 @@ def build(
         raise ValidationError(
             f"unknown {what} filter(s): {', '.join(unknown)}. "
             f"Supported: {', '.join(sorted(allowed))}"
+        )
+
+    entity = filters.get("data_entity")
+    if entity is not None:
+        # One key, as text. Anything else would slip past the two checks
+        # below: an empty list sends no filter at all, and a list holding a
+        # blank sends one the backend reads as none, so either would answer
+        # with every tenant's rows.
+        if not isinstance(entity, str):
+            raise ValidationError(
+                "data_entity takes one key as a string, got "
+                f"{type(entity).__name__}. To read several data entities, "
+                "make one call per key."
+            )
+        # The backend reads a blank key as no filter at all, so an empty
+        # variable would answer with every tenant's rows.
+        if not entity.strip():
+            raise ValidationError(
+                "data_entity must not be blank: it would match every data entity. "
+                "Pass a key, or data_entity_unassigned=True for the rows with none."
+            )
+        # The backend refuses these in a key, and a lone surrogate cannot be
+        # put into a URL at all. Refused here, so the answer is the same for
+        # both and nothing is sent.
+        refused = refused_character(entity)
+        if refused:
+            raise ValidationError(
+                f"data_entity must not contain {refused}: no data entity key "
+                "can hold one, so the filter could not match anything."
+            )
+
+    unassigned = filters.get("data_entity_unassigned")
+    if unassigned is not None and not isinstance(unassigned, bool):
+        # The entity filter's other half, with the same way to go quiet: an
+        # empty list sends nothing and an empty string sends a blank, and the
+        # backend reads both as no filter. A real bool is the only value whose
+        # meaning cannot be lost on the way.
+        raise ValidationError(
+            "data_entity_unassigned takes True or False, got "
+            f"{type(unassigned).__name__}. Anything else could be read as no "
+            "filter at all and match every data entity."
         )
 
     rename = ENV_ALIAS if rename is None else rename

@@ -9,13 +9,13 @@ description: >
   touches it in any form: writing or changing tracking code (conversations,
   turns, messages, tools, streaming handlers), reading or managing recorded
   data via the API client or REST (feedback, actions, message metadata
-  after the turn, usage and cost, spans), embedding the client dashboard,
-  debugging why a metric or chart is empty, or answering any question about
-  the SDK or API surface. For a
-  codebase not yet integrated, or bringing a new service online, use the
-  agentsight-integration skill instead; for loading conversations that
-  already happened in a previous system into AgentSight — backfill, bulk
-  import, historical migration — use the agentsight-migration skill.
+  after the turn, usage and cost, spans, data entities), embedding the
+  client dashboard, debugging why a metric or chart is empty, or any
+  question about the SDK or API. For a codebase not yet integrated, or
+  bringing a new service online, use the
+  agentsight-integration skill instead; for loading conversations from a
+  previous system into AgentSight — backfill, bulk import, historical
+  migration — use the agentsight-migration skill.
 ---
 
 # AgentSight: the SDK and API
@@ -76,6 +76,13 @@ These hold for every line of tracking code, not just the first integration:
   recorded then would land after whatever the user said since, and the
   conversation's metadata is not where the dashboard's templates look.
   [references/data-plane.md](references/data-plane.md#messages-metadata-after-the-turn).
+- **One agent serving several clients passes `data_entity`.** One booking
+  agent, many hotels: `agentsight.conversation(id, data_entity="hotel-paris")`,
+  not one agent per client and not a tenant tag in `metadata`, which gives no
+  filter, badge or scoped embed. A conversation keeps the first key that reaches
+  it and a wrong one cannot be corrected, so the key has to be right on the first
+  span.
+  [references/metrics-and-fields.md](references/metrics-and-fields.md#data-entities-one-agent-many-clients).
 - **The escalation metric is name-keyed**: only actions named exactly
   `fallback_to_human`, `open_ticket`, `ticket`, or `contact_human` count.
 - **A wrong environment fails silently**: `development` is excluded from
@@ -103,7 +110,7 @@ Read them when their subject enters the work — not all up front:
 | [references/sdk-tracking.md](references/sdk-tracking.md) | writing or reviewing any tracking code — init(), conversations, turns, messages, tools, attachments, limits |
 | [references/streaming-and-lifetime.md](references/streaming-and-lifetime.md) | any handler streams, defers, queues, uses websockets or thread pools — and for `shutdown()`/`flush()` wiring |
 | [references/frameworks.md](references/frameworks.md) | the app calls any LLM — coverage tables, stand-down rules, `model_hint()`, the not-captured list |
-| [references/metrics-and-fields.md](references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments — what powers what on the dashboard |
-| [references/data-plane.md](references/data-plane.md) | wiring feedback, labelling actions, enriching a message's metadata after the turn, reading data back, non-Python services, REST details |
-| [references/embed.md](references/embed.md) | the client-facing dashboard embedded in the developer's own product |
+| [references/metrics-and-fields.md](references/metrics-and-fields.md) | choosing conversation fields, naming the handoff tool, environments, data entities — what powers what on the dashboard |
+| [references/data-plane.md](references/data-plane.md) | wiring feedback, labelling actions, enriching a message's metadata after the turn, managing data entities, reading data back, non-Python services, REST details |
+| [references/embed.md](references/embed.md) | the client-facing dashboard embedded in the developer's own product, including pinning one to a single client |
 | [references/debugging.md](references/debugging.md) | any "why is this empty/wrong?" question, and after any change to tracking code — the file-exporter loop and the symptom table |

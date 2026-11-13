@@ -55,6 +55,24 @@ because the snippet cannot work until the first two exist:
 - Serve the host page from a real HTTP origin — the origin check cannot pass
   from a `file://` page.
 
+## Pinning a token to one client
+
+When one agent serves several clients as [data entities](metrics-and-fields.md#data-entities-one-agent-many-clients),
+an embed token can be pinned to one of them **when it is created in the
+dashboard**. The server then applies that scope to everything the embed reads,
+whatever the page asks for. One token per hotel gives each hotel its own dashboard.
+
+- **There is no snippet attribute for this, and do not invent one.** Anyone can
+  edit a page's markup, so a scope in the snippet would be no boundary. The
+  snippet is identical for every token, and the scope lives on the token.
+- A scoped embed hides the entity selector and shows the entity's name in its
+  header. An unscoped embed shows a selector beside the environment selector.
+- A scoped embed sees only saved reports stamped with its entity; older reports
+  hold numbers across all entities.
+- A token's scope cannot be changed. Revoke it and create another.
+- If the entity is soft-deleted, its tokens stop opening until it is restored.
+  The dashboard warns before the delete.
+
 ## Tokens are not API keys
 
 | | `ags_…` API key | `agse_…` embed token |
@@ -75,6 +93,7 @@ credential leak — if found anywhere in the codebase, flag it.
 | "This dashboard is no longer available. Contact your provider." (401) | token revoked, expired, or wrong |
 | Empty/invisible container, no error | container has no height |
 | Works locally, fails deployed | the deployed origin was never allow-listed |
+| A token that worked now refuses to open (403 `data_entity_deleted`) | the entity it is pinned to was soft-deleted; restore the entity |
 
 Removing an origin or revoking a token takes effect immediately, including on
 already-open pages — that is the kill switch.

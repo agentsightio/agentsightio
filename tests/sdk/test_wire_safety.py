@@ -41,14 +41,6 @@ def spans():
         core._state.enabled, core._state.provider, core._state.tracer = previous
 
 
-@pytest.fixture(autouse=True)
-def fresh_warnings():
-    """The warn-once cache is process-wide by design; tests are not."""
-    serialization._reset_warnings_for_tests()
-    yield
-    serialization._reset_warnings_for_tests()
-
-
 def blocks(spans):
     payload = build_payload(spans.get_finished_spans())
     return {block["conversation_id"]: block for block in payload["conversations"]}
@@ -59,7 +51,9 @@ def blocks(spans):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("field", ["customer_id", "device", "source", "language", "name"])
+@pytest.mark.parametrize(
+    "field", ["customer_id", "device", "source", "language", "name", "data_entity"]
+)
 def test_an_over_length_field_is_clamped_rather_than_rejecting_the_batch(spans, field):
     """255 is the API's limit on every one of these, and it validates the
     whole payload at once — so an unclamped field costs the conversations
@@ -203,6 +197,102 @@ def test_init_refuses_an_unknown_environment_loudly(caplog, valid_api_key):
         assert any("staging" in r.getMessage() for r in caplog.records)
     finally:
         ags.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The data entity key: clean, or not sent at all
+# ---------------------------------------------------------------------------
+
+
+def _record(**fields):
+    with ags.conversation("c-key", **fields):
+        with ags.turn():
+            ags.user_message("hi")
+
+
+def test_a_data_entity_key_is_trimmed_on_the_wire(spans):
+    """The key is matched after trimming, so a stray space must not read as a
+    different tenant here while the backend reads it as the same one."""
+    _record(data_entity="  hotel-paris\t")
+
+    assert blocks(spans)["c-key"]["data_entity"] == "hotel-paris"
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\t\n", None])
+def test_an_empty_data_entity_key_is_absent(spans, empty):
+    """Passing the argument is the opt-in; a blank value has opted into nothing.
+    Absent has to mean absent rather than an empty string on the wire."""
+    _record(data_entity=empty)
+
+    assert "data_entity" not in blocks(spans)["c-key"]
+
+
+@pytest.mark.parametrize(
+    "unsendable", ["hotel\x00paris", "hotel\ud800paris", "\udfff"]
+)
+def test_an_unsendable_data_entity_key_is_dropped_not_sent(spans, caplog, unsendable):
+    """Ingest refuses these characters, and one such key would cost every
+    conversation in its batch. Stripping the character instead could merge the
+    key into another tenant's."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        _record(data_entity=unsendable)
+
+    assert "data_entity" not in blocks(spans)["c-key"]
+    assert any("data_entity" in r.getMessage() for r in caplog.records)
+
+
+def test_a_refused_character_past_the_clamp_still_drops_the_key(spans, caplog):
+    """Checked before the clamp. Clamping first cut the NUL away and sent the
+    first 255 characters as if they had been the key, where the API client
+    refuses the same string."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        _record(data_entity="k" * 255 + "\x00tail")
+
+    assert "data_entity" not in blocks(spans)["c-key"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("character the API refuses" in m for m in messages)
+    assert not any("clamped" in m for m in messages)
+
+
+def test_an_unsendable_data_entity_key_warns_only_once(spans, caplog):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        _record(data_entity="a\x00")
+        _record(data_entity="b\x00")
+
+    assert len([r for r in caplog.records if "data_entity" in r.getMessage()]) == 1
+
+
+def test_a_key_clamped_just_after_a_space_is_trimmed_again(spans, caplog):
+    """The backend trims what it is sent, so the clamp's trailing space would
+    make the SDK's key and the stored key two spellings, and the SDK's own
+    same-key comparison would then report the stored one as a different key."""
+    long_key = "x" * 254 + " " + "y"  # 256 characters; the 255th is a space
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-key", data_entity=long_key):
+            with ags.turn(data_entity="x" * 254):
+                ags.user_message("hi")
+
+    assert blocks(spans)["c-key"]["data_entity"] == "x" * 254
+    assert not [r for r in caplog.records if "keeps the first" in r.getMessage()]
+
+
+def test_a_non_string_data_entity_key_travels_as_text(spans):
+    _record(data_entity=42)
+
+    assert blocks(spans)["c-key"]["data_entity"] == "42"
+
+
+def test_set_fields_cleans_a_data_entity_the_same_way(spans):
+    with ags.conversation("c-key") as scope:
+        assert scope.set_fields({"data_entity": "  hotel-paris "}) == {
+            "data_entity": "hotel-paris"
+        }
+        assert scope.set_fields({"data_entity": "   "}) == {}
+        with ags.turn():
+            ags.user_message("hi")
+
+    assert blocks(spans)["c-key"]["data_entity"] == "hotel-paris"
 
 
 # ---------------------------------------------------------------------------

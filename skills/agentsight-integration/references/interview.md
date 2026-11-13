@@ -107,16 +107,32 @@ lookup by the id they know. Their call, made explicitly.
 *No default.* An integration with the wrong id is not a smaller integration;
 it is wrong data.
 
-### 3. One AgentSight agent, or one per end client?
+### 3. Does this agent serve several end clients — and which value identifies one?
 
 An API key belongs to exactly one agent, and tracking is initialised once per
-process. If each of the developer's customers should get their own dashboard,
-that is either separate deployments (one key each) or one agent with a tenant
-tag in `metadata` — decided now, because it shapes `init()` and every
-conversation call. Metadata filters can slice one agent's data by tenant;
-separate agents keep the data (and the embed dashboards) fully apart.
+process. When one system serves several clients (one booking agent, many hotels),
+the native shape is **one agent with data entities**: every conversation carries a
+key, the dashboard filters by it, and an embed token can be pinned to one client so
+they see only their own data. Propose that, and ask the key-source question in the
+same breath, with the candidates pre-flight found (`hotel_code`, `tenant_id`, …):
 
-*No default.*
+- **Which value identifies the client, and is it available everywhere a
+  conversation is opened?** The key is permanent and a conversation keeps the first
+  one it receives, so a wrong source cannot be repaired afterwards. Never a session
+  or user id: 500 active entities per agent is a hard cap, and past it new keys land
+  Unassigned.
+- **Does each deployment serve one client?** Then the key goes in
+  `AGENTSIGHT_DATA_ENTITY` per deployment rather than on every call. It is one or
+  the other, never both.
+
+Reach for **separate agents** only when clients need separate API keys, or their
+data kept fully apart on the data plane: an API key sees its whole agent, and
+entity-scoped keys do not exist. Do not offer a tenant tag in `metadata`: it gives
+no filter on analytics, no badge and no scoped embed. Details:
+[metrics-and-fields.md](../../agentsight/references/metrics-and-fields.md#data-entities-one-agent-many-clients).
+
+*No default when several clients are in play. One client: no data entity, nothing to
+wire.*
 
 ### 4. Do you accept what leaves the process?
 
@@ -302,7 +318,8 @@ re-runs: update this file rather than re-answering.
 ## Identity
 - Adoption: <add-on alongside <what> | primary store>; existing stack: <what pre-flight found, or none>
 - Conversation id: `<variable>` — <why it is the durable thread id>; PII: <no / hashed with …>
-- Topology: <one agent | one agent per end client via …>; tenant tag: <metadata key or n/a>
+- Topology: <one agent | one agent per end client via …>
+- Data entity key source: <`variable` at <call sites> | `AGENTSIGHT_DATA_ENTITY` per deployment: <mapping> | none, one client>
 - Environments: production = <deploy target>, key lives in <secret store / env file>
   - `AGENTSIGHT_ENVIRONMENT` per deployment: <mapping>
 

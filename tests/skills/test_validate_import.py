@@ -5,13 +5,14 @@ rejects a file the server would have accepted**. A validator stricter than the
 server makes the user drop real rows, which is worse than having no validator
 at all. So the interesting half of this suite is `TestFalseRejections`, and the
 authority for everything is `TestAgreement`, which replays a corpus generated
-by the backend's own `validate_chunk` (see `regenerate_corpus.py`).
+by the server's own check (see `regenerate_corpus.py`).
 
 Everything runs offline, as the validator itself does: it reads the skill's
 shipped `contract/` directory and never touches the network.
 """
 
 import importlib.util
+import io
 import json
 import shutil
 from datetime import datetime, timezone
@@ -28,9 +29,9 @@ BASE = "2016-06-01T10:00:00Z"
 
 # The contract digest the golden corpus was last regenerated against. When it
 # stops matching the shipped snapshot, the contract moved: re-run
-# regenerate_corpus.py from an ags_backend checkout and paste the digest it
+# regenerate_corpus.py from a backend checkout and paste the digest it
 # prints here, in the same commit as the refreshed snapshot and corpus.
-CORPUS_CONTRACT_SHA256 = "701b2baa28afca351de36a6b8a17ed8d3b0caa27dd9ddf3bdab9a75d55f49755"
+CORPUS_CONTRACT_SHA256 = "11b28c8bb47d41fd263ca72b313270fa029499a5772367abc07eb97612daa0ab"
 
 
 def _load(name, path):
@@ -106,7 +107,7 @@ def sized_metadata(target):
 # ---------------------------------------------------------------------------
 
 # The one place the validator deliberately reports a different NAME for the
-# same rejection. `refinePattern` (pre-validate.ts:235-239) turns an
+# same rejection. The dashboard's pre-check turns an
 # all-whitespace value into `too_short` / "This value is empty."; the server
 # reports the raw `pattern` failure as `invalid_format`. Both reject the
 # record, the dashboard already shows the refined code for exactly this input,
@@ -117,7 +118,7 @@ EQUIVALENT_CODES = {("too_short", "invalid_format")}
 
 
 class TestAgreement:
-    """The same hostile fixture through this script and through validate_chunk."""
+    """The same hostile fixture through this script and through the server's check."""
 
     corpus = json.loads((FIXTURES / "validator_corpus.json").read_text(encoding="utf-8"))
     expected = json.loads((FIXTURES / "validator_expected.json").read_text(encoding="utf-8"))
@@ -149,6 +150,7 @@ class TestAgreement:
             "timestamp_out_of_range",
             "before_started_at",
             "duplicate_conversation_id",
+            "surrogate_character",
         ):
             assert code in seen, f"{code} has no corpus case"
 
@@ -284,6 +286,8 @@ class TestFalseRejections:
     def test_boundary_lengths_are_legal(self, ctx):
         assert codes([conversation("x" * 255)], ctx) == []
         assert codes([conversation("x" * 256)], ctx) == ["too_long"]
+        assert codes([conversation(data_entity="k" * 255)], ctx) == []
+        assert codes([conversation(data_entity="k" * 256)], ctx) == ["too_long"]
         assert codes([conversation(messages=[message(content="c" * 100_000)])], ctx) == []
         assert codes([conversation(messages=[message(content="c" * 100_001)])], ctx) == [
             "too_long"
@@ -301,9 +305,16 @@ class TestFalseRejections:
 
     def test_optional_fields_may_be_null_or_absent(self, ctx):
         record = conversation(name=None, customer_id=None, language=None, device=None,
-                              metadata=None)
+                              data_entity=None, metadata=None)
         assert codes([record], ctx) == []
         assert codes([conversation()], ctx) == []
+
+    @pytest.mark.parametrize("key", ["", "   ", "\t", "  hotel-paris  ", "Hotel-Paris"])
+    def test_a_blank_or_padded_data_entity_is_not_a_finding(self, key, ctx):
+        """The server trims the key and reads a blank as "no entity" (design
+        decision 8), exactly as the SDK does. A validator that rejected a blank
+        column would be stricter than the server — the one thing it may not be."""
+        assert codes([conversation(data_entity=key)], ctx) == []
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +324,7 @@ class TestFalseRejections:
 
 class TestValueRules:
     @pytest.mark.parametrize(
-        "field", ["conversation_id", "name", "customer_id", "language", "device"]
+        "field", ["conversation_id", "name", "customer_id", "language", "device", "data_entity"]
     )
     def test_nul_in_every_conversation_text_field(self, field, ctx):
         assert check([conversation(**{field: "a\x00b"})], ctx)[0][1:] == ("nul_byte", field)
@@ -335,6 +346,66 @@ class TestValueRules:
     def test_a_nul_sender_is_never_reported_as_an_unknown_sender(self, ctx):
         record = conversation(messages=[message(sender="us\x00er")])
         assert codes([record], ctx) == ["nul_byte"]
+
+    def test_a_lone_surrogate_in_the_data_entity_key(self, ctx):
+        """A port of the server's own rule: it looks the key up before storing
+        anything, so a "\\ud800" escape there is a record error. A finding, and
+        the record is not handed to the schema."""
+        assert check([conversation(data_entity="hotel-\ud800")], ctx) == [
+            (0, "surrogate_character", "data_entity")
+        ]
+
+    @pytest.mark.parametrize(
+        "field", ["conversation_id", "name", "customer_id", "language", "device", "data_entity"]
+    )
+    @pytest.mark.parametrize("surrogate", ["\ud800", "\udfff"], ids=["high", "low"])
+    def test_a_lone_surrogate_in_every_conversation_text_field(self, field, surrogate, ctx):
+        found = check([conversation(**{field: f"a{surrogate}b"})], ctx)
+        assert found[0][1:] == ("surrogate_character", field)
+
+    def test_a_lone_surrogate_in_message_content_and_metadata(self, ctx):
+        """The server's check does not name these, and the server then rejects
+        the chunk as a whole. No record carrying one can be imported."""
+        record = conversation(
+            metadata={"ke\ud800y": "ok", "v": "ba\udc00d", "list": ["ba\ud800d"]},
+            messages=[message(content="he\udfffllo")],
+        )
+        found = check([record], ctx)
+        assert [c for _, c, _ in found] == ["surrogate_character"] * 4
+        assert [f for _, _, f in found] == [
+            "metadata.ke\ud800y",
+            "metadata.v",
+            "metadata.list[0]",
+            "messages[0].content",
+        ]
+
+    def test_a_real_astral_character_is_not_a_surrogate(self, ctx):
+        """Python holds one as a single code point; only a lone escape is a
+        surrogate."""
+        record = conversation(
+            name="smile \U0001F600",
+            data_entity="hotel-\U0001F3E8",
+            metadata={"e": "\U0001F600"},
+            messages=[message(content="\U0001F600")],
+        )
+        assert codes([record], ctx) == []
+
+    def test_a_nul_is_reported_instead_of_a_surrogate_in_the_same_value(self, ctx):
+        """The server's order: NUL first, and one finding per value."""
+        record = conversation(
+            data_entity="a\x00\ud800",
+            metadata={"v": "a\x00\ud800"},
+            messages=[message(content="a\x00\ud800")],
+        )
+        assert codes([record], ctx) == ["nul_byte"] * 3
+
+    def test_a_surrogate_sender_is_an_unknown_sender(self, ctx):
+        """What the server says about it, and it never stores the record."""
+        found = check([conversation(messages=[message(sender="us\ud800er")])], ctx)
+        assert found == [(0, "unknown_sender", "messages[0].sender")]
+
+    def test_a_surrogate_in_metadata_does_not_crash_the_size_measure(self, ctx):
+        assert codes([conversation(metadata={"a": "x\udc00"})], ctx) == ["surrogate_character"]
 
     @pytest.mark.parametrize("sender", ["system", "tool", "function", "user2"])
     def test_unimportable_senders(self, sender, ctx):
@@ -381,11 +452,14 @@ class TestSchemaRules:
     def test_metadata_as_a_list_is_a_wrong_type_not_a_schema_violation(self, ctx):
         assert codes([conversation(metadata=[])], ctx) == ["wrong_type"]
 
+    def test_a_non_string_data_entity_is_a_wrong_type(self, ctx):
+        assert check([conversation(data_entity=42)], ctx) == [(0, "wrong_type", "data_entity")]
+
     def test_a_non_object_conversation(self, ctx):
         assert check(["nope"], ctx) == [(0, "not_an_object", None)]
 
     def test_the_value_pass_short_circuits_the_schema_pass(self, ctx):
-        """Mirrors validation.py:783-786 — one record, one pass."""
+        """As the server does it — one record, one pass."""
         record = conversation(messages=[message(sender="system")])
         record["converstaion_id"] = "typo"
         assert codes([record], ctx) == ["unknown_sender"]
@@ -486,6 +560,81 @@ class TestEnvelope:
         assert run_cli([path]) == 1
         assert "invalid_json" in capsys.readouterr().out
 
+    @staticmethod
+    def deep_record(cid, depth):
+        """A conversation whose metadata holds `depth` nested arrays, as raw JSON
+        text: building it as Python objects would need the recursion it tests."""
+        return (
+            '{"conversation_id": "%s", "started_at": "%s", "metadata": {"a": %s1%s}, '
+            '"messages": [{"sender": "user", "content": "hi", "timestamp": "%s"}]}'
+            % (cid, BASE, "[" * depth, "]" * depth, BASE)
+        )
+
+    def test_a_deeply_nested_array_is_a_finding_not_a_crash(self, tmp_path, capsys):
+        """Legal by the depth rule, which counts objects only, but too deep for
+        this script or the server to check. It used to exit 4, "a bug in the
+        validator"."""
+        body = '{"schema_version": 1, "conversations": [%s]}' % self.deep_record("deep", 1000)
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        captured = capsys.readouterr()
+        assert "nesting_too_deep" in captured.out
+        assert "bug in the validator" not in captured.err
+
+    @pytest.mark.parametrize("depth", [200, 500, 950, 5000])
+    def test_no_depth_of_nesting_exits_4(self, depth, tmp_path, capsys):
+        body = '{"schema_version": 1, "conversations": [%s]}' % self.deep_record("deep", depth)
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        assert "nesting_too_deep" in capsys.readouterr().out
+
+    def test_the_finding_names_the_record_and_the_rest_are_still_checked(
+        self, tmp_path, capsys
+    ):
+        records = ", ".join([
+            self.deep_record("deep", 500),
+            json.dumps(conversation("after", messages=[message(sender="system")])),
+        ])
+        path = write(tmp_path, ('{"schema_version": 1, "conversations": [%s]}' % records).encode())
+
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "#0  deep  [metadata]" in out
+        assert "501 levels deep" in out
+        assert "#1  after  [messages[0].sender]" in out
+        assert "unknown_sender" in out
+
+    def test_the_nesting_message_claims_only_what_this_script_knows(self):
+        """Where the recursion limit falls depends on the local Python (150
+        nested arrays pass on one version and not on another), and the server's
+        on its own runtime. So the record "may not be importable", never
+        "cannot be imported"."""
+        for detail in (vi.nesting_detail(151), vi.NESTING_FILE_DETAIL):
+            assert "may not be importable" in detail
+            assert "cannot be imported" not in detail
+            assert "server" not in detail
+
+    def test_a_record_too_deep_to_check_is_one_finding(self, ctx):
+        value = "x"
+        for _ in range(500):
+            value = [value]
+        found = check([conversation("deep", metadata={"a": value}), conversation("ok")], ctx)
+        assert found == [(0, "nesting_too_deep", "metadata")]
+
+    def test_what_the_value_pass_found_before_giving_up_stands(self, ctx):
+        """Deep enough that the value pass itself gives up, after it has
+        already found the NUL in the name. That finding is true on its own."""
+        value = "x"
+        for _ in range(5000):
+            value = [value]
+        record = conversation("deep", name="a\x00b", metadata={"a": value})
+        assert check([record], ctx) == [
+            (0, "nul_byte", "name"),
+            (0, "nesting_too_deep", "metadata"),
+        ]
+
     def test_a_missing_file_is_a_usage_error(self, tmp_path):
         assert run_cli([str(tmp_path / "nope.json")]) == 2
 
@@ -553,7 +702,145 @@ class TestCli:
     def test_the_report_always_names_what_it_cannot_check(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
         run_cli([path])
-        assert "conversation_already_exists" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "conversation_already_exists" in out
+        assert "data entity keys" in out
+
+    def test_the_report_lists_the_data_entity_keys_the_file_names(self, tmp_path, capsys):
+        """The keys are what the user must confirm before uploading: an unknown
+        key becomes an entity, and a conversation's entity is permanent. Counted
+        the way the server matches them — trimmed, case-insensitively, first
+        spelling kept — across every part file."""
+        first = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="Hotel-Paris"),
+            conversation("b", data_entity="  hotel-paris "),
+            conversation("c", data_entity="hotel-madrid"),
+            conversation("d", data_entity=""),
+            conversation("e"),
+        ]}, name="part-01.json")
+        second = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("f", data_entity="HOTEL-PARIS"),
+        ]}, name="part-02.json")
+        assert run_cli([first, second]) == 0
+        out = capsys.readouterr().out
+        assert "DATA ENTITIES -- 2 distinct key(s) on 4 conversation(s); 2 without a key" in out
+        assert "  Hotel-Paris  (3)" in out
+        assert "  hotel-madrid  (1)" in out
+        assert "cannot be changed afterwards" in out
+
+    def test_non_ascii_keys_say_the_server_may_count_them_differently(
+        self, tmp_path, capsys
+    ):
+        """Python's case folding is not the server's. Beyond ASCII the two can
+        disagree, so the report says "may" rather than promising a count."""
+        path = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="İstanbul"),
+            conversation("b", data_entity="istanbul"),
+        ]})
+        assert run_cli([path]) == 0
+        out = capsys.readouterr().out
+        assert "2 distinct key(s)" in out
+        assert "it may merge keys listed separately here" in out
+
+    def test_ascii_keys_carry_no_such_note(self, tmp_path, capsys):
+        path = write(tmp_path, {"schema_version": 1, "conversations": [
+            conversation("a", data_entity="Hotel-Paris"),
+        ]})
+        run_cli([path])
+        assert "Some keys are not ASCII" not in capsys.readouterr().out
+
+    def test_a_file_without_data_entities_has_no_entity_section(self, tmp_path, capsys):
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+        run_cli([path])
+        assert "DATA ENTITIES" not in capsys.readouterr().out
+
+    def test_the_data_entity_list_is_capped_like_the_findings(self, tmp_path, capsys):
+        records = [conversation(f"c{i}", data_entity=f"hotel-{i}") for i in range(12)]
+        path = write(tmp_path, {"schema_version": 1, "conversations": records})
+        run_cli([path, "--max-examples", "3"])
+        out = capsys.readouterr().out
+        assert "12 distinct key(s)" in out
+        assert "9 more not shown" in out
+
+    def test_a_lone_surrogate_key_is_a_finding_not_a_traceback(self, tmp_path, capsys):
+        """It used to crash the print: the traceback replaced the whole report
+        and exited 1, which reads as "findings". Written the way a real export
+        carries one, as a JSON escape."""
+        body = (
+            '{"schema_version": 1, "conversations": [{"conversation_id": "legacy-1", '
+            '"started_at": "2016-06-01T10:00:00Z", "data_entity": "hotel-\\ud800", '
+            '"messages": [{"sender": "user", "content": "hi", '
+            '"timestamp": "2016-06-01T10:00:00Z"}]}]}'
+        )
+        path = write(tmp_path, body.encode("ascii"))
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "surrogate_character" in out
+        # Refused on import, so it is no entity: counted apart, never listed.
+        assert "DATA ENTITIES -- 0 distinct key(s) on 0 conversation(s)" in out
+        assert "1 more conversation(s) name a key the server refuses" in out
+        assert "hotel-\\ud800" not in out
+        assert "NOT CHECKED HERE" in out
+
+    def test_refused_keys_are_left_out_of_the_data_entity_summary(self, tmp_path, capsys):
+        """A NUL or lone-surrogate key never becomes an entity, so it is not a
+        distinct key to confirm, and a NUL must never reach the console raw."""
+        body = (
+            '{"schema_version": 1, "conversations": ['
+            + json.dumps(conversation("a", data_entity="hotel-paris")) + ", "
+            + json.dumps(conversation("b", data_entity="hotel\x00paris")) + ", "
+            + '{"conversation_id": "c", "started_at": "2016-06-01T10:00:00Z", '
+            '"data_entity": "hotel-\\udc00", "messages": [{"sender": "user", '
+            '"content": "hi", "timestamp": "2016-06-01T10:00:00Z"}]}'
+            + "]}"
+        )
+        path = write(tmp_path, body.encode("ascii"))
+
+        assert run_cli([path]) == 1
+        out = capsys.readouterr().out
+        assert "DATA ENTITIES -- 1 distinct key(s) on 1 conversation(s)" in out
+        assert "  hotel-paris  (1)" in out
+        assert "2 more conversation(s) name a key the server refuses" in out
+        assert "\x00" not in out
+        assert "nul_byte" in out
+        assert "surrogate_character" in out
+
+    def test_the_report_prints_on_a_console_that_is_not_utf8(self, tmp_path, monkeypatch):
+        """Every character the console cannot show is printed as its escape:
+        a lone surrogate anywhere in the report, and ordinary non-ASCII text."""
+        record = conversation("legacy-\ud83d", data_entity="hôtel-日本",
+                              messages=[message(content="hi \udc00")])
+        payload = {"schema_version": 1, "conversations": [record], "extra\udfff": 1}
+        path = write(tmp_path, json.dumps(payload).encode("ascii"))
+        buffer = io.BytesIO()
+        console = io.TextIOWrapper(buffer, encoding="ascii", errors="strict")
+        monkeypatch.setattr(vi.sys, "stdout", console)
+
+        assert run_cli([path]) == 1
+        console.flush()
+        out = buffer.getvalue().decode("ascii")
+        assert "legacy-\\ud83d" in out
+        assert "extra\\udfff" in out
+        assert "h\\xf4tel-\\u65e5\\u672c" in out
+
+    def test_a_crash_exits_4_and_says_nothing_was_validated(self, tmp_path, monkeypatch, capsys):
+        """Never 1: a crash is not a finding, and an agent reading the code must
+        not hand over a file because of one."""
+        path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(vi, "render", broken)
+        assert run_cli([path]) == 4
+        err = capsys.readouterr().err
+        assert "RuntimeError: boom" in err
+        assert "bug in the validator" in err and "Nothing was validated" in err
+
+    def test_a_usage_error_is_still_2_not_a_crash(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            vi.main(["--max-examples", "many", "f.json"])
+        assert excinfo.value.code == 2
 
     def test_the_banner_names_the_snapshot_commit_and_version(self, tmp_path, capsys):
         path = write(tmp_path, {"schema_version": 1, "conversations": [conversation()]})
@@ -592,8 +879,8 @@ class TestCli:
 class TestSnapshot:
     """`contract/` is the only contract the validator ever reads."""
 
-    # The eleven keys `limits_payload()` publishes -- the same literal set
-    # data_imports/tests/test_limits_drift.py::LimitsPayloadKeyTests pins.
+    # The eleven keys the server publishes -- the same literal set its own
+    # tests pin.
     LIMIT_KEYS = {
         "schema_version",
         "max_conversations_per_run",
@@ -633,11 +920,11 @@ class TestSnapshot:
 
     def test_the_manifest_names_its_origin(self):
         assert set(MANIFEST) >= {"source", "commit", "exported_at", "contract_sha256"}
-        assert MANIFEST["source"] == "ags_backend"
+        assert MANIFEST["source"] == "backend"
 
     def test_the_snapshot_digest_matches_the_corpus_pin(self):
-        """If this fails, the contract moved: re-run regenerate_corpus.py from an
-        ags_backend checkout and update CORPUS_CONTRACT_SHA256."""
+        """If this fails, the contract moved: re-run regenerate_corpus.py from a
+        backend checkout and update CORPUS_CONTRACT_SHA256."""
         digest = rc.contract_digest(
             (CONTRACT_DIR / "import_v1.schema.json").read_bytes(),
             (CONTRACT_DIR / "example_import.json").read_bytes(),
@@ -645,6 +932,6 @@ class TestSnapshot:
         )
         assert digest == MANIFEST["contract_sha256"], "MANIFEST.json does not describe these files"
         assert digest == CORPUS_CONTRACT_SHA256, (
-            "the snapshot moved: re-run tests/skills/regenerate_corpus.py from an "
-            "ags_backend checkout and update CORPUS_CONTRACT_SHA256"
+            "the snapshot moved: re-run tests/skills/regenerate_corpus.py from a "
+            "backend checkout and update CORPUS_CONTRACT_SHA256"
         )

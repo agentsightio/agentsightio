@@ -134,6 +134,7 @@ double-count.
 | `conversation` (pk), `conversation_id` (string) | one conversation's spend |
 | `turn_id` | one exchange |
 | `environment` | the environment slug |
+| `data_entity`, `data_entity_unassigned` | one client's spend, or the spend with no [data entity](./data-entities.md#filtering-by-entity) |
 | `cost_source` | `backend`, `unpriced` or `reported` |
 | `incomplete` | turns that did not finish |
 | `started_at_after`, `started_at_before` | when the spend happened |

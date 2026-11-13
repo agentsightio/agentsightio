@@ -2,9 +2,9 @@
 
 This backend answers list requests two different ways. Most routes return a
 seven-key envelope — ``count``, ``page_size``, ``total_pages``,
-``current_page``, ``next``, ``previous``, ``results`` — which is DRF's four
-plus three. A handful (``buttons/stats/``, ``actions/{pk}/logs/``, and every
-view with ``pagination_class = None``) return a bare JSON array instead.
+``current_page``, ``next``, ``previous``, ``results``. A handful
+(``buttons/stats/``, ``actions/{pk}/logs/``, and a few other unpaged routes)
+return a bare JSON array instead.
 
 :class:`Page` flattens that difference so no call site has to know which kind
 of endpoint it is talking to, and :class:`PageIterator` turns the paged form

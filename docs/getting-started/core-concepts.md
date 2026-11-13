@@ -45,6 +45,10 @@ fields — customer, device, language, metadata — are stamped onto
 everything recorded inside it, which is what makes them filterable later without
 you passing context down your call stack.
 
+When one agent serves several clients, a conversation can also say which one it
+belongs to, with a [data entity](./data-entities.md). That makes the clients
+filterable and keeps them apart in embedded dashboards.
+
 The scope works as a context manager, an async context manager, or a decorator:
 
 ```python

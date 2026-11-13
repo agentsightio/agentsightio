@@ -20,7 +20,7 @@ def test_the_seven_key_envelope_is_unpacked():
 
 
 def test_a_bare_array_becomes_a_single_page():
-    # buttons/stats/, actions/{pk}/logs/ and every pagination_class = None view.
+    # buttons/stats/, actions/{pk}/logs/ and a few other unpaged routes.
     page = Page.from_response([{"button_event": "cta", "count": 4}])
 
     assert len(page) == 1

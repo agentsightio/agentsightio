@@ -94,6 +94,32 @@ def test_an_export_writes_the_payload_the_wire_would_carry(tmp_path, logger):
     assert on_disk["conversations"][0]["conversation_id"] == "c-file"
 
 
+def test_a_data_entity_is_visible_in_the_file(tmp_path, logger):
+    """The file is how an integration proves the key reaches the wire."""
+    memory = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(TurnBufferingProcessor(SimpleSpanProcessor(memory)))
+    previous = (core._state.enabled, core._state.provider, core._state.tracer)
+    core._state.provider = provider
+    core._state.tracer = provider.get_tracer("agentsight-test")
+    core._state.enabled = True
+    try:
+        with ags.conversation("c-file", data_entity="hotel-paris"):
+            with ags.turn("ask"):
+                ags.user_message("hello")
+    finally:
+        core._state.enabled, core._state.provider, core._state.tracer = previous
+
+    exporter = FileSpanExporter(str(tmp_path / "traces"), logger)
+    assert exporter.export(memory.get_finished_spans()) is SpanExportResult.SUCCESS
+
+    with open(exporter.last_path, encoding="utf-8") as handle:
+        (block,) = json.load(handle)["conversations"]
+    assert block["data_entity"] == "hotel-paris"
+    for span in block["spans"]:
+        assert span["attributes"]["agentsight.conversation.data_entity"] == "hotel-paris"
+
+
 def test_the_destination_directory_is_created(tmp_path, logger):
     destination = tmp_path / "nested" / "traces"
     assert not destination.exists()

@@ -64,9 +64,12 @@ problem was observed, and `update()` refuses it locally.
 
 `conversation` takes the business `conversation_id` string or the integer pk
 — strings cost one resolving request the first time, then the client's id
-cache answers. A ticket created from conversation feedback inherits that
-feedback's conversation unless you anchor one explicitly; product feedback
-is rejected.
+cache answers. `feedback_id` records the feedback that prompted the ticket,
+and product feedback is rejected. Given alone, feedback on a conversation
+lends the ticket that conversation. Given with `conversation`, it must be
+feedback on that same conversation, or the server answers `400`, raised as
+`ValidationError`; so agent feedback cannot go on a ticket that names a
+conversation.
 
 `delete()` exists, but takes the discussion thread with it — prefer
 `update(id, status="closed")` for anything a human might still want to read.
@@ -81,10 +84,13 @@ ags.tickets.get(57)                # one ticket, thread included
 ```
 
 Filters: `status` (a list ORs), `priority`, `conversation` (pk),
-`conversation_id` (business string), `has_conversation`, `has_feedback`,
+`conversation_id` (business string), `data_entity`, `data_entity_unassigned`,
+`has_conversation`, `has_feedback`,
 `tags` (comma-separated, matches any), `created_at_after/_before`,
 `updated_at_after/_before`, `search` (title), `ordering`. There is no
-`environment` filter — the route does not select on it.
+`environment` filter — the route does not select on it. The
+[data entity](./data-entities.md#filtering-by-entity) pair follows the ticket's
+conversation, so a ticket without one appears under neither.
 
 Every ticket payload embeds its full `comments` thread and the nested
 `conversation`/`feedback` summaries; there is no summary depth on this
