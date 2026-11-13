@@ -172,8 +172,11 @@ client's rows. A `data_entity` containing a NUL or an unpaired surrogate is refu
 the same way, because no key can hold one. The filter takes one key as a string: a
 list, tuple, set, bytes or number raises `ValidationError` too, with nothing sent,
 because an empty list would send no filter and return every client's rows. To read
-several entities, make one call per key. `None` means not filtered, as it does for
-every filter on this client.
+several entities, make one call per key. `data_entity_unassigned` takes `True` or
+`False`. Anything else, such as `[]`, `""`, `"true"` or `1`, raises
+`ValidationError` with nothing sent, because the server reads an empty or blank
+value as no filter. `None` means not filtered, as it does for every filter on this
+client.
 
 Feedback and tickets follow their conversation, so agent-level feedback and tickets
 without a conversation appear under neither filter.

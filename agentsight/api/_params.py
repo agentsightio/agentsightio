@@ -272,6 +272,18 @@ def build(
                 "can hold one, so the filter could not match anything."
             )
 
+    unassigned = filters.get("data_entity_unassigned")
+    if unassigned is not None and not isinstance(unassigned, bool):
+        # The entity filter's other half, with the same way to go quiet: an
+        # empty list sends nothing and an empty string sends a blank, and the
+        # backend reads both as no filter. A real bool is the only value whose
+        # meaning cannot be lost on the way.
+        raise ValidationError(
+            "data_entity_unassigned takes True or False, got "
+            f"{type(unassigned).__name__}. Anything else could be read as no "
+            "filter at all and match every data entity."
+        )
+
     rename = ENV_ALIAS if rename is None else rename
     params: Dict[str, Any] = {}
     for key, value in filters.items():

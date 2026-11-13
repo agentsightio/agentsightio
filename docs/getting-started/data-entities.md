@@ -44,13 +44,19 @@ something stable, because it is permanent.
   are one entity, and the first spelling seen is the one kept.
 - **Up to 255 characters of any printable text.** The SDK clamps a longer key and
   warns once. A blank key counts as no key.
+- **A string, or an integer.** An `int` is sent as its digits, so `42` and `"42"`
+  are one key. Anything else, such as a list, a dict, bytes, a float or a bool, is
+  dropped as described below. Sent as text, `["hotel-paris"]` would become a new
+  entity called `['hotel-paris']`, and that entity would be permanent.
 - **Permanent.** A key cannot be changed once it exists. It is what your tracking
   code sends and your filters name. The display **name** is what you edit, and it
   starts out equal to the key.
 
 A key containing a NUL or an unpaired surrogate is never sent. The API refuses those
-characters, and sending one would cost every conversation in its batch. The SDK
-drops the key and logs a warning, once for each of these cases:
+characters, and sending one would cost every conversation in its batch. Neither is
+a key that is not a string or an integer. The SDK drops either kind and logs a
+warning, once for each of these cases and each kind. The warning for the wrong type
+names the type, not the value:
 
 | Where the key was | What the warning means |
 |---|---|

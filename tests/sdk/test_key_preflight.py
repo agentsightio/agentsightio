@@ -708,6 +708,37 @@ def test_a_refused_argument_does_not_let_the_variable_in(monkeypatch, refused):
         ags.shutdown()
 
 
+@pytest.mark.parametrize(
+    "value",
+    [["hotel-paris"], {"key": "hotel-paris"}, ("hotel-paris",), b"hotel-paris", 1.5, True],
+    ids=["list", "dict", "tuple", "bytes", "float", "bool"],
+)
+def test_an_argument_that_is_not_text_does_not_let_the_variable_in(
+    recorded, monkeypatch, value
+):
+    """Not a key, so not a default: dropped, as a refused one is, and the
+    variable is not read in its place."""
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=value, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() is None
+    finally:
+        ags.shutdown()
+
+    (message,) = _messages(recorded, "init(data_entity=")
+    assert f"of type {type(value).__name__} is not a string or an int" in message
+    assert "AGENTSIGHT_DATA_ENTITY is not read in its place" in message
+
+
+def test_an_int_argument_is_the_default_as_its_digits(monkeypatch):
+    monkeypatch.setenv("AGENTSIGHT_DATA_ENTITY", "from-the-variable")
+    try:
+        ags.init(data_entity=42, span_exporter=_Nowhere(), auto_instrument=False)
+        assert core.default_data_entity() == "42"
+    finally:
+        ags.shutdown()
+
+
 def _messages(recorded, text):
     return [r.getMessage() for r in recorded.records if text in r.getMessage()]
 

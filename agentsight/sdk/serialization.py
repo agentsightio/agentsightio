@@ -104,43 +104,74 @@ def clamp_field(name: str, value: Optional[str]) -> Optional[str]:
     return value[:MAX_FIELD_LENGTH]
 
 
-#: What a refused key's warning says, by where the key came from. Each has its
-#: own ``warn_once`` key: one shared key let an ``init`` refusal silence every
-#: later per-conversation one, and the four say different things because
-#: different things happen.
-_REFUSALS: Dict[str, Tuple[str, str]] = {
+#: Why a key was refused. Each reason has its own ``warn_once`` key, so one
+#: kind of refusal never silences the other.
+_REFUSED_CHARACTER = "unsendable"
+_REFUSED_TYPE = "not-text"
+
+_REFUSAL_REASONS: Dict[str, str] = {
+    _REFUSED_CHARACTER: (
+        "contains a character the API refuses (NUL or an unpaired surrogate)"
+    ),
+    _REFUSED_TYPE: "is not a string or an int",
+}
+
+#: What a refused key's warning says, by where the key came from: the
+#: ``warn_once`` suffix, the subject for a text key (``%r``, its start), the
+#: subject for a value of another type (``%s``, the type's name: the value is
+#: not printed, because a dict or bytes value can be large and is not ours to
+#: put in a log), and what happens. Each source has its own ``warn_once`` key:
+#: one shared key let an ``init`` refusal silence every later per-conversation
+#: one, and the four say different things because different things happen.
+_REFUSALS: Dict[str, Tuple[str, str, str, str]] = {
     # A key named for one conversation, which is then left without one.
     "conversation": (
-        "data_entity:unsendable",
-        "AgentSight: data_entity %r contains a character the API refuses (NUL "
-        "or an unpaired surrogate) and has been dropped. The conversation is "
-        "left without a data entity; the deployment default is not used in "
-        "its place.",
+        "",
+        "data_entity %r",
+        "data_entity of type %s",
+        "dropped. The conversation is left without a data entity; the "
+        "deployment default is not used in its place.",
     ),
     # A key named on a turn, or echoed from the API client, for a conversation
     # that already carries one: nothing changes.
     "kept": (
-        "data_entity:unsendable:kept",
-        "AgentSight: data_entity %r contains a character the API refuses (NUL "
-        "or an unpaired surrogate) and has been ignored. The conversation's "
-        "data entity is left as it was.",
+        ":kept",
+        "data_entity %r",
+        "data_entity of type %s",
+        "ignored. The conversation's data entity is left as it was.",
     ),
     "init": (
-        "data_entity:unsendable:init",
-        "AgentSight: init(data_entity=%r) contains a character the API refuses "
-        "(NUL or an unpaired surrogate) and has been dropped, so there is no "
-        "deployment default data entity. AGENTSIGHT_DATA_ENTITY is not read in "
-        "its place, because it may name a different tenant: conversations that "
-        "do not name their own key are recorded without one.",
+        ":init",
+        "init(data_entity=%r)",
+        "init(data_entity=...) of type %s",
+        "dropped, so there is no deployment default data entity. "
+        "AGENTSIGHT_DATA_ENTITY is not read in its place, because it may name a "
+        "different tenant: conversations that do not name their own key are "
+        "recorded without one.",
     ),
+    # Always text, so only the character refusal reaches it.
     "environment": (
-        "data_entity:unsendable:environment",
-        "AgentSight: AGENTSIGHT_DATA_ENTITY %r contains a character the API "
-        "refuses (NUL or an unpaired surrogate) and has been ignored, so there "
-        "is no deployment default data entity: conversations that do not name "
-        "their own key are recorded without one.",
+        ":environment",
+        "AGENTSIGHT_DATA_ENTITY %r",
+        "AGENTSIGHT_DATA_ENTITY of type %s",
+        "ignored, so there is no deployment default data entity: "
+        "conversations that do not name their own key are recorded without one.",
     ),
 }
+
+
+def _warn_refused(refusal: str, reason: str, shown: str) -> None:
+    """One warning for a refused key, once per source and per reason.
+
+    ``shown`` is the start of a text key, or the name of the type passed
+    instead of one.
+    """
+    suffix, text_subject, type_subject, outcome = _REFUSALS[refusal]
+    subject = type_subject if reason == _REFUSED_TYPE else text_subject
+    message = (
+        f"AgentSight: {subject} {_REFUSAL_REASONS[reason]} and has been {outcome}"
+    )
+    warn_once(f"data_entity:{reason}{suffix}", message, shown)
 
 
 def data_entity_key(value: Any, *, refusal: str = "conversation") -> Optional[str]:
@@ -173,6 +204,11 @@ def parse_data_entity(
     the conversation going unassigned. They are looked for in the whole value,
     before the clamp, so one past the cut still drops the key.
 
+    A key is a ``str``, or an ``int`` (not a ``bool``), taken as its decimal
+    text. Anything else is dropped the same way, with a warning that names its
+    type: turned into text it would be recorded under its repr (``"['a']"``),
+    as an entity nobody meant, and for good.
+
     A dropped key is reported as ``(None, True)``, never as plain ``None``. A
     default must not stand in for it: the caller asked for a specific tenant,
     and filing the conversation under the default one instead would be
@@ -184,7 +220,17 @@ def parse_data_entity(
     """
     if value is None:
         return None, False
-    text = value if isinstance(value, str) else to_text(value)
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, int) and not isinstance(value, bool):
+        # An integer tenant id is a plausible key, and its digits are the key
+        # its owner would expect.
+        text = str(int(value))
+    else:
+        # Anything else has no text that is its key: a list would be recorded
+        # under its repr, as an entity nobody meant, and for good.
+        _warn_refused(refusal, _REFUSED_TYPE, type(value).__name__)
+        return None, True
     text = text.strip()
     if not text:
         return None, False
@@ -193,8 +239,7 @@ def parse_data_entity(
     # a good one. The warning shows the start of the value, which is enough to
     # find it and keeps a very long one out of the log.
     if refused_character(text):
-        warn_key, message = _REFUSALS[refusal]
-        warn_once(warn_key, message, text[:MAX_FIELD_LENGTH])
+        _warn_refused(refusal, _REFUSED_CHARACTER, text[:MAX_FIELD_LENGTH])
         return None, True
     key = clamp_field("data_entity", text)
     if key is None:  # pragma: no cover - clamp_field only returns None for None

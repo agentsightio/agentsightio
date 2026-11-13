@@ -438,6 +438,65 @@ def test_the_usage_rollup_refuses_a_key_filter_that_is_not_one_string(
     assert requests_mock.request_history == []
 
 
+NOT_A_BOOL = pytest.mark.parametrize(
+    "value",
+    [[], "", "true", "false", 0, 1, [True], "  "],
+    ids=["empty-list", "empty-string", "true-text", "false-text", "zero", "one",
+         "list-of-true", "blank"],
+)
+
+
+@pytest.mark.parametrize("url, namespace, method", ROUTES)
+@NOT_A_BOOL
+def test_an_unassigned_filter_that_is_not_a_bool_is_refused(
+    ags, requests_mock, url, namespace, method, value
+):
+    """An empty list sent nothing and an empty string a blank, and the backend
+    reads both as no filter: every tenant's rows. Only a real bool is sent."""
+    requests_mock.get(url, json=envelope([]))
+
+    with pytest.raises(ValidationError, match="takes True or False") as raised:
+        list(getattr(namespace(ags), method)(data_entity_unassigned=value))
+
+    assert type(value).__name__ in str(raised.value)
+    assert raised.value.status_code is None
+    assert requests_mock.request_history == []
+
+
+@NOT_A_BOOL
+def test_the_usage_rollup_refuses_an_unassigned_filter_that_is_not_a_bool(
+    ags, requests_mock, value
+):
+    with pytest.raises(ValidationError, match="takes True or False"):
+        ags.usage.summary(data_entity_unassigned=value)
+
+    assert requests_mock.request_history == []
+
+
+@pytest.mark.parametrize("value, sent", [(True, "true"), (False, "false")])
+def test_the_usage_rollup_sends_the_unassigned_filter(
+    ags, me, requests_mock, value, sent
+):
+    requests_mock.get(USAGE_SUMMARY, json={"group_by": "model", "results": []})
+
+    ags.usage.summary(data_entity_unassigned=value)
+
+    assert requests_mock.last_request.qs["data_entity_unassigned"] == [sent]
+
+
+@pytest.mark.parametrize("url, namespace, method", ROUTES)
+def test_an_unassigned_filter_of_none_is_no_filter(
+    ags, requests_mock, url, namespace, method
+):
+    """None means not filtered, as for every filter: no refusal, and no
+    capability read either, since nothing entity-shaped is sent."""
+    requests_mock.get(url, json=envelope([]))
+
+    list(getattr(namespace(ags), method)(data_entity_unassigned=None))
+
+    assert "data_entity_unassigned" not in requests_mock.last_request.qs
+
+
 @pytest.mark.parametrize("url, namespace, method", ROUTES)
 def test_a_value_that_cannot_be_sent_is_refused_before_the_capability_check(
     ags, requests_mock, url, namespace, method

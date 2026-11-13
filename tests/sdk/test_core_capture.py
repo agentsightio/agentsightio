@@ -1353,6 +1353,142 @@ def test_each_refusal_warns_once_and_neither_silences_the_other(spans, caplog):
     assert len(_ignored_warnings(caplog)) == 1
 
 
+# -- a key that is not text --------------------------------------------------
+#
+# A key is a str, or an int taken as its digits. Anything else used to be
+# turned into text, so data_entity=["a"] was recorded under "['a']": a junk
+# entity, and a permanent one, because the backend keeps the first key a
+# conversation receives. It is dropped like a refused key instead, and the
+# default does not stand in for it.
+
+NOT_KEYS = pytest.mark.parametrize(
+    "value",
+    [["hotel-paris"], {"key": "hotel-paris"}, ("hotel-paris",), b"hotel-paris", 1.5, True, False],
+    ids=["list", "dict", "tuple", "bytes", "float", "true", "false"],
+)
+
+
+def _type_warnings(caplog):
+    return [r for r in caplog.records if "is not a string or an int" in r.getMessage()]
+
+
+@NOT_KEYS
+def test_a_key_that_is_not_text_is_dropped_and_the_default_stays_out(
+    spans, monkeypatch, caplog, value
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-typed", data_entity=value):
+            with ags.turn():
+                ags.user_message("hi")
+
+    _no_key_anywhere(spans, "c-typed")
+    (warning,) = _type_warnings(caplog)
+    message = warning.getMessage()
+    assert f"of type {type(value).__name__} " in message
+    assert "left without a data entity" in message
+    # The type is named, never the value: it is not text, and may be large.
+    assert "hotel-paris" not in message
+
+
+@NOT_KEYS
+def test_every_way_of_opening_a_conversation_drops_a_key_that_is_not_text(
+    spans, monkeypatch, value
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    @ags.conversation(data_entity=value)
+    def decorated():
+        with ags.turn():
+            ags.user_message("hi")
+
+    @ags.turn(id_from="session", data_entity=value)
+    def turn_opens_it(session):
+        ags.user_message("hi")
+
+    decorated()
+    ags.open_conversation("c-visit", data_entity=value)
+    turn_opens_it("c-turn")
+
+    blocks = build_payload(spans.get_finished_spans())["conversations"]
+    assert len(blocks) == 3
+    assert all("data_entity" not in block for block in blocks)
+
+
+@NOT_KEYS
+def test_a_key_that_is_not_text_on_the_first_turn_takes_the_default_away(
+    spans, monkeypatch, caplog, value
+):
+    monkeypatch.setattr(core._state, "data_entity", "the-default")
+
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-fill"):
+            with ags.turn(data_entity=value):
+                ags.user_message("hi")
+            with ags.turn():
+                ags.user_message("again")
+
+    _no_key_anywhere(spans, "c-fill")
+    (warning,) = _type_warnings(caplog)
+    assert "left without a data entity" in warning.getMessage()
+
+
+@NOT_KEYS
+def test_a_key_that_is_not_text_on_a_turn_leaves_the_conversations_own(
+    spans, caplog, value
+):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-own", data_entity="hotel-paris"):
+            with ags.turn(data_entity=value):
+                ags.user_message("hi")
+
+    assert _block(spans, "c-own")["data_entity"] == "hotel-paris"
+    (warning,) = _type_warnings(caplog)
+    assert "left as it was" in warning.getMessage()
+
+
+@pytest.mark.parametrize("value, key", [(42, "42"), (-7, "-7"), (10**20, "1" + "0" * 20)])
+def test_an_int_key_is_recorded_as_its_digits(spans, caplog, value, key):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-int", data_entity=value):
+            with ags.turn():
+                ags.user_message("hi")
+        with ags.conversation("c-int-turn"):
+            with ags.turn(data_entity=value):
+                ags.user_message("hi")
+
+    assert _block(spans, "c-int")["data_entity"] == key
+    assert _block(spans, "c-int-turn")["data_entity"] == key
+    assert _type_warnings(caplog) == []
+
+
+def test_an_int_key_and_its_text_are_one_key(spans, caplog):
+    """The same tenant, named once as 42 and once as "42", is not a second key."""
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-same", data_entity=42):
+            with ags.turn(data_entity="42"):
+                ags.user_message("hi")
+
+    assert _block(spans, "c-same")["data_entity"] == "42"
+    assert not [r for r in caplog.records if "data_entity" in r.getMessage()]
+
+
+def test_a_type_refusal_and_a_character_refusal_do_not_silence_each_other(
+    spans, caplog
+):
+    with caplog.at_level("WARNING", logger="agentsight"):
+        with ags.conversation("c-chars", data_entity="a\x00b"):
+            with ags.turn():
+                ags.user_message("hi")
+        with ags.conversation("c-type", data_entity=["a"]):
+            with ags.turn():
+                ags.user_message("hi")
+
+    assert len(_unsendable_warnings(caplog)) == 2  # one of each reason
+    assert len(_type_warnings(caplog)) == 1
+
+
 def test_a_non_ascii_pair_is_reported_as_possibly_the_same_entity(spans, caplog):
     """Python folds case its own way, and the server folds with its database's
     rules. Beyond ASCII the two can disagree, so the warning says "may"."""

@@ -308,9 +308,10 @@ developer at it for the privacy conversation. The load-bearing facts:
 
 - Message content, tool arguments/results, and error strings are truncated at
   16 384 characters. Conversation string fields are clamped at 255, and a
-`data_entity` is also trimmed, with blank counting as absent and a NUL or
-unpaired surrogate dropping the key with a warning, logged once for each of
-four cases ([metrics-and-fields.md](metrics-and-fields.md#data-entities-one-agent-many-clients)). Metadata
+`data_entity` is also trimmed, with blank counting as absent and an `int`
+taken as its digits. A NUL or unpaired surrogate, or a value that is not a
+string or an `int` (a list, dict, bytes, float or bool), drops the key with a
+warning, logged once for each of four cases ([metrics-and-fields.md](metrics-and-fields.md#data-entities-one-agent-many-clients)). Metadata
   has a 16 KB JSON budget (oversized entries dropped largest-first, marked,
   always leaving valid JSON). Values are kept honest on the way out — nothing
   raises, nothing else in the batch is lost.
